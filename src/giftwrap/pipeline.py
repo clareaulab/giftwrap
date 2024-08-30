@@ -12,7 +12,7 @@ def streaming_subprocess_run(args: list, **kwargs):
     """
     print(">", " ".join(args), flush=True)
     stream = True
-    process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True, **kwargs)
+    process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True, bufsize=1, **kwargs)
     while stream:
         stream = process.poll() is None
         for line in process.stdout:
