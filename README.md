@@ -29,25 +29,25 @@ Most basic command
 This will process the fastq files in `fastqs/` with the prefix `fastq_prefix` and the probes in `path/to/probes.xlsx`. The outputs
 will be saved in `output_dir/`.
 
-Note that the probes file should be either in '.tsv', '.csv', or '.xlsx' format. The following columns can be included:
+Note that the probes file should be either in `.tsv`, `.csv`, or `.xlsx` format. The following columns can be included:
 
-- 'name' (required): By convention: "gene_name HGSVc", example: "TP53 c.215G>A".
-- 'lhs_probe' (required): The left-hand side probe sequence.
-- 'rhs_probe' (required): The right-hand side probe sequence.
-- 'gap_probe_sequence' (optional): The expected gapfill sequence.
-- 'original_gap_probe_sequence' (optional): If targeting an SNV, the wild-type expected gapfill sequence.
-- 'gene' (optional): The gene name the probe targets. If not specified, we assume the first word in 'name' is the gene name.
+- `name` (required): By convention: "gene_name HGSVc", example: "TP53 c.215G>A".
+- `lhs_probe` (required): The left-hand side probe sequence.
+- `rhs_probe` (required): The right-hand side probe sequence.
+- `gap_probe_sequence` (optional): The expected gapfill sequence.
+- `original_gap_probe_sequence` (optional): If targeting an SNV, the wild-type expected gapfill sequence.
+- `gene` (optional): The gene name the probe targets. If not specified, we assume the first word in `name` is the gene name.
 
 ## Advanced options
 The pipeline can also be run with the following arguments:
-- '--cores': The number of cores to use for processing.
-- '-wta': The path to either the filtered_feature_bc_matrix.h5 or the sample_filtered_feature_bc_matrix folder from CellRanger for the WTA panel.
-- '-f': If passed, overwrite files instead of exiting if they already exist.
-- '--technology': The technology. I.e. Flex/VisiumHD. Default is Flex.
-- '--tech_def': Custom technology definition path. See below for more details.
-- '-r1' / '-r2': Instead of specifying a fastq prefix to search with `--project`, provide the specific R1 and R2 files.
-- '--multiplex': If the fastq files are multiplexed, this flag should be set with the number of expected samples.
-- '--barcode': Similar to '--multiplex', but only the provided barcode is processed (remaining ignored).
+- `--cores`: The number of cores to use for processing.
+- `-wta`: The path to either the filtered_feature_bc_matrix.h5 or the sample_filtered_feature_bc_matrix folder from CellRanger for the WTA panel.
+- `-f`: If passed, overwrite files instead of exiting if they already exist.
+- `--technology`: The technology. I.e. Flex/VisiumHD. Default is Flex.
+- `--tech_def`: Custom technology definition path. See below for more details.
+- `-r1` / `-r2`: Instead of specifying a fastq prefix to search with `--project`, provide the specific R1 and R2 files.
+- `--multiplex`: If the fastq files are multiplexed, this flag should be set with the number of expected samples.
+- `--barcode`: Similar to `--multiplex`, but only the provided barcode is processed (remaining ignored).
 
 Additionally each step can be run individually with the following commands:
 - `giftwrap-count`
