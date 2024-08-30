@@ -1,0 +1,71 @@
+[project]
+name = "giftwrap-sc"
+version = "0.1.0"
+description = "Tools to quantify GIFT-seq datasets."
+readme = "README.md"
+authors = [
+    {name = "Austin A. Varela", email = "aav4003@med.cornell.edu"},
+]
+license = {text = "MIT License"}
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+keywords = ["GIFT-seq", "gapfill"]
+
+requires-python = ">=3.10"
+dependencies = [
+    "biopython>=1.84",
+    "scipy>=1.14.1",
+    "numpy>=2.1.0",
+    "pandas>=2.2.2",
+    "rapidfuzz>=3.9.6",
+    "fuzzysearch>=0.7.3",
+    "tqdm>=4.66.5",
+    "h5py>=3.11.0",
+    "anndata>=0.10.9",
+    "matplotlib>=3.9.2",
+    "openpyxl>=3.1.5",
+]
+
+[project.urls]
+# TODO
+#Homepage = ""
+#Documentation = ""
+#Repository = ""
+#Issues = ""
+
+[project.optional-dependencies]
+# Need protobuf for VisiumHD cell barcode parsing
+spatial = [
+    "protobuf>=5.28.0",
+]
+analysis = [
+    "scanpy>=1.9.8",
+    "igraph>=0.11.6",
+]
+all = [
+    "protobuf>=5.28.0",
+    "scanpy>=1.9.8",
+    "igraph>=0.11.6",
+]
+
+[project.scripts]
+giftwrap = "giftwrap.pipeline:main"
+giftwrap-count = "giftwrap.01_count_gapfills:main"
+giftwrap-correct-umis = "giftwrap.02_correct_umis:main"
+giftwrap-correct-gapfill = "giftwrap.03_correct_gapfill:main"
+giftwrap-collect = "giftwrap.04_collect_counts:main"
+giftwrap-summarize = "giftwrap.05_summarize_counts:main"
+giftwrap-generate-r = "giftwrap.print_scripts:print_R"
+giftwrap-generate-tech = "giftwrap.print_scripts:print_tech"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/giftwrap"]
