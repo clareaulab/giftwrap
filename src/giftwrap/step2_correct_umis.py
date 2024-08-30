@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 from tqdm import tqdm
 
-from utils import maybe_multiprocess, batched, maybe_gzip, GzipNamedTemporaryFile, read_manifest, phred_string_to_probs, \
+from .utils import maybe_multiprocess, batched, maybe_gzip, GzipNamedTemporaryFile, read_manifest, phred_string_to_probs, \
     permute_bases
 
 

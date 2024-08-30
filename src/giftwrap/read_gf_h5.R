@@ -103,5 +103,5 @@ read_seurat <- function(file) {
   return(obj)
 }
 
-#read("~/Downloads/counts.1.h5")
+#read("../data/counts.1.h5")
 #read_seurat(file ="../data/counts.1.h5")

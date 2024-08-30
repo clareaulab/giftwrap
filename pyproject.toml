@@ -56,11 +56,11 @@ all = [
 
 [project.scripts]
 giftwrap = "giftwrap.pipeline:main"
-giftwrap-count = "giftwrap.01_count_gapfills:main"
-giftwrap-correct-umis = "giftwrap.02_correct_umis:main"
-giftwrap-correct-gapfill = "giftwrap.03_correct_gapfill:main"
-giftwrap-collect = "giftwrap.04_collect_counts:main"
-giftwrap-summarize = "giftwrap.05_summarize_counts:main"
+giftwrap-count = "giftwrap.step1_count_gapfills:main"
+giftwrap-correct-umis = "giftwrap.step2_correct_umis:main"
+giftwrap-correct-gapfill = "giftwrap.step3_correct_gapfill:main"
+giftwrap-collect = "giftwrap.step4_collect_counts:main"
+giftwrap-summarize = "giftwrap.step5_summarize_counts:main"
 giftwrap-generate-r = "giftwrap.print_scripts:print_R"
 giftwrap-generate-tech = "giftwrap.print_scripts:print_tech"
 

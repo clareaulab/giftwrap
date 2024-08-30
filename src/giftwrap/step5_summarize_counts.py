@@ -5,7 +5,7 @@ from typing import Optional
 import numpy as np
 from scipy.stats import spearmanr, gaussian_kde
 
-from utils import filter_h5_file, read_h5_file
+from .utils import filter_h5_file, read_h5_file
 
 
 def density(x, y):

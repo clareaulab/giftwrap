@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 try:
     import scanpy as sc
 except ImportError:
-    raise ImportError("Please install scanpy to use this module.")
+    sc = None
 
 
 def _check_genotypes(adata: ad.AnnData):

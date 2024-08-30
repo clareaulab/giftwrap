@@ -1,5 +1,3 @@
-import preprocess
-import plots
-import tools
+from . import preprocess, plots, tools
 
 __all__ = ['preprocess', 'plots', 'tools']

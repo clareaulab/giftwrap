@@ -231,11 +231,16 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+all = [
+    { name = "igraph" },
+    { name = "protobuf" },
+    { name = "scanpy" },
+]
 analysis = [
     { name = "igraph" },
     { name = "scanpy" },
 ]
-visiumhd = [
+spatial = [
     { name = "protobuf" },
 ]
 
@@ -245,13 +250,16 @@ requires-dist = [
     { name = "biopython", specifier = ">=1.84" },
     { name = "fuzzysearch", specifier = ">=0.7.3" },
     { name = "h5py", specifier = ">=3.11.0" },
+    { name = "igraph", marker = "extra == 'all'", specifier = ">=0.11.6" },
     { name = "igraph", marker = "extra == 'analysis'", specifier = ">=0.11.6" },
     { name = "matplotlib", specifier = ">=3.9.2" },
     { name = "numpy", specifier = ">=2.1.0" },
     { name = "openpyxl", specifier = ">=3.1.5" },
     { name = "pandas", specifier = ">=2.2.2" },
-    { name = "protobuf", marker = "extra == 'visiumhd'", specifier = ">=5.28.0" },
+    { name = "protobuf", marker = "extra == 'all'", specifier = ">=5.28.0" },
+    { name = "protobuf", marker = "extra == 'spatial'", specifier = ">=5.28.0" },
     { name = "rapidfuzz", specifier = ">=3.9.6" },
+    { name = "scanpy", marker = "extra == 'all'", specifier = ">=1.9.8" },
     { name = "scanpy", marker = "extra == 'analysis'", specifier = ">=1.9.8" },
     { name = "scipy", specifier = ">=1.14.1" },
     { name = "tqdm", specifier = ">=4.66.5" },

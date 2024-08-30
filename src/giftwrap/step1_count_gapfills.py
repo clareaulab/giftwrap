@@ -17,7 +17,7 @@ from tqdm import tqdm
 import fuzzysearch
 import rapidfuzz
 
-from utils import maybe_multiprocess, batched, read_manifest, sort_tsv_file, FlexFormatInfo, VisiumHDFormatInfo, \
+from .utils import maybe_multiprocess, batched, read_manifest, sort_tsv_file, FlexFormatInfo, VisiumHDFormatInfo, \
     VisiumFormatInfo, TechnologyFormatInfo, permute_bases, phred_string_to_probs
 
 

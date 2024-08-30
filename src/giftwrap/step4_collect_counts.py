@@ -8,7 +8,7 @@ import pandas as pd
 import scipy
 from tqdm import tqdm
 
-from utils import read_manifest, read_barcodes, maybe_multiprocess, maybe_gzip, write_sparse_matrix
+from .utils import read_manifest, read_barcodes, maybe_multiprocess, maybe_gzip, write_sparse_matrix
 
 
 def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_df: pd.DataFrame, overwrite: bool, plex: int = 1):
