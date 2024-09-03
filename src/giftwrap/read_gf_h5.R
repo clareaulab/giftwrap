@@ -97,7 +97,7 @@ read_seurat <- function(file) {
   ## add cell metadata
   obj <- AddMetaData(obj, metadata = data[["barcodes_df"]])
 
-  ## put unstructured data in misc???
+  ## put unstructured data in misc
   obj@misc <- data[["metadata"]]
 
   return(obj)

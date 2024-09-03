@@ -180,7 +180,7 @@ with the `read_seurat()` function.
 
 First, install uv: https://github.com/astral-sh/uv
 
-Then set up the environment with: `uv sync`
+Then set up the environment with: `uv sync --all-extras`
 
 Build the package with: `uvx --from build pyproject-build --installer uv`
 

@@ -680,7 +680,7 @@ def filter_h5_file(input_file: Path, output_file: Path, barcodes_list: list[str]
         # Filter the data
         del f['matrix']['barcode']
         f['matrix'].create_dataset("barcode",
-                                  data=np.concatenate([barcodes[barcode_indices], np.array(padded_barcodes, dtype='S')]),
+                                  data=np.concatenate([barcodes[barcode_indices].astype('S'), np.array(padded_barcodes, dtype='S')]),
                                   compression='gzip')
 
         for layer_name in ['data', 'total_reads', 'percent_supporting']:
@@ -696,15 +696,17 @@ def filter_h5_file(input_file: Path, output_file: Path, barcodes_list: list[str]
         obs_meta_df = pd.DataFrame({
             col: (f['cell_metadata'][col][:].astype(str) if col == 'barcode' else f['cell_metadata'][col][:].astype(int)) for col in obs_meta_columns
         }).set_index('barcode')
-        obs_meta_df = obs_meta_df.loc[barcodes_list]
+        obs_meta_df = obs_meta_df.loc[barcodes[barcode_indices]]
+        # Move the index back to a column
+        obs_meta_df = obs_meta_df.reset_index()
         # Add padding
         if len(padded_barcodes) > 0:
-            obs_meta_df = obs_meta_df.append(pd.DataFrame({col: [pd.NA] * len(padded_barcodes) for col in obs_meta_df.columns}, index=padded_barcodes))
+            obs_meta_df = pd.concat([obs_meta_df, pd.DataFrame({col: (([pd.NA] * len(padded_barcodes)) if col != "barcode" else padded_barcodes) for col in obs_meta_df.columns})])
         del f['cell_metadata']
         cell_metadata_grp = f.create_group('cell_metadata')
         cell_metadata_grp.create_dataset('columns', data=np.array(obs_meta_df.columns, dtype='S'), compression='gzip')
         for col in obs_meta_df.columns:
-            values = cell_metadata_grp[col].values
+            values = obs_meta_df[col].values
             cell_metadata_grp.create_dataset(col, data=values, compression='gzip')
 
         del f.attrs['n_cells']
