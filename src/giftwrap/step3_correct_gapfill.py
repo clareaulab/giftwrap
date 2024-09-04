@@ -100,7 +100,7 @@ def process_lines(lines: list[str]) -> tuple[str, bool]:
             n_total =  sum([len(quals) for quals in probs.values()])
             # most_likely_nuc = min(probs.keys(), key=lambda x: np.mean(probs[x]) * (1 - (len(probs[x])/n_total)))  # Lower the error rate, the better
             # FIXME: Include error probs?
-            most_likely_nuc = max(probs.keys(), lambda k: len(probs[k]))
+            most_likely_nuc = max(probs.keys(), key=lambda k: len(probs[k]))
             most_likely_seq += most_likely_nuc
             supporting += (len(probs[most_likely_nuc]) / n_total) / len(seq_probs)
 
