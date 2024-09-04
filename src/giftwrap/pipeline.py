@@ -140,8 +140,8 @@ def main():
         print("Step 1: Counting gapfills.", file=sys.stderr)
         start = datetime.now()
         returncode = streaming_subprocess_run([
-            sys.executable,
-            sys.path[0] + "/01_count_gapfills.py",
+            # sys.executable,
+            sys.path[0] + "/giftwrap-count",
             "-p", probes,
             "-o", str(output),
             "-c", str(cores),
@@ -169,8 +169,8 @@ def main():
         print("Step 2: Correcting UMIs.", file=sys.stderr, flush=True)
         start = datetime.now()
         returncode = streaming_subprocess_run([
-            sys.executable,
-            sys.path[0] + "/02_correct_umis.py",
+            # sys.executable,
+            sys.path[0] + "/giftwrap-correct-umis",
             "-o", str(output),
             "-c", str(cores)
             ])# + (['--overwrite'] if overwrite else []))
@@ -188,8 +188,8 @@ def main():
         print("Step 3: Correcting gapfills.", file=sys.stderr, flush=True)
         start = datetime.now()
         returncode = streaming_subprocess_run([
-            sys.executable,
-            sys.path[0] + "/03_correct_gapfill.py",
+            # sys.executable,
+            sys.path[0] + "/giftwrap-correct-gapfill",
             "-o", str(output),
             "-c", str(cores)
         ])# + (['--overwrite'] if overwrite else []))
@@ -207,8 +207,8 @@ def main():
         print("Step 4: Collecting counts.", file=sys.stderr, flush=True)
         start = datetime.now()
         returncode = streaming_subprocess_run([
-            sys.executable,
-            sys.path[0] + "/04_collect_counts.py",
+            # sys.executable,
+            sys.path[0] + "/giftwrap-collect",
             "-o", str(output),
             "-c", str(cores)
         ] + (['--overwrite'] if overwrite else []))
@@ -232,8 +232,8 @@ def main():
                 wta_args += ["-wta", wta]
         start = datetime.now()
         returncode = streaming_subprocess_run([
-            sys.executable,
-            sys.path[0] + "/05_analysis.py",
+            # sys.executable,
+            sys.path[0] + "/giftwrap-summarize",
             "-o", str(output),
         ] + (['--overwrite'] if overwrite else [])
           + wta_args)
