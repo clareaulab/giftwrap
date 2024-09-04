@@ -13,6 +13,8 @@ def _check_genotypes(adata: ad.AnnData):
 
 # Gapfill-adata plots
 
+# def motif_plot()
+
 def dendrogram(gapfill_adata: ad.AnnData, groupby: str, **kwargs):
     """
     Generate a dendrogram of the gapfills. Similar to dendrograms in sc.pl.dendrogram.

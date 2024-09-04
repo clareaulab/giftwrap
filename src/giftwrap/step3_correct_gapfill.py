@@ -34,17 +34,26 @@ def process_lines(lines: list[str]) -> tuple[str, bool]:
     if len(set(map(len, gapfill_seqs))) != 1:
         # There is a length mismatch.
         # Group by length and then compute the most likely length
-        length_counts = dict()
+        length2count = dict()
         for seq, prob in zip(gapfill_seqs, gapfill_probs):
-            # Compute the expected number of errors in the sequence
-            errors = sum(prob)
-            if len(seq) not in length_counts:
-                length_counts[len(seq)] = []
-            length_counts[len(seq)].append(errors)
-        # Compute the distribution of length counts
-        length_dist = {x: (len(length_counts[x]) / count) for x in length_counts.keys()}
-        # Compute the most likely length as having the least expected errors and most abundant length
-        most_likely_length = max(length_counts.keys(), key=lambda x: np.mean(length_counts[x]) * (1 - length_dist[x]))   # Lower the error rate, the better
+            if len(seq) not in length2count:
+                length2count[len(seq)] = 1
+            else:
+                length2count[len(seq)] += 1
+        most_likely_length = max(length2count.keys(), key=lambda k: length2count[k])
+
+        # FIXME: Re-incorporate errors?
+        # length_counts = dict()
+        # for seq, prob in zip(gapfill_seqs, gapfill_probs):
+        #     # Compute the expected number of errors in the sequence
+        #     errors = sum(prob)
+        #     if len(seq) not in length_counts:
+        #         length_counts[len(seq)] = []
+        #     length_counts[len(seq)].append(errors)
+        # # Compute the distribution of length counts
+        # length_dist = {x: (len(length_counts[x]) / count) for x in length_counts.keys()}
+        # # Compute the most likely length as having the least expected errors and most abundant length
+        # most_likely_length = max(length_counts.keys(), key=lambda x: np.mean(length_counts[x]) * (1 - length_dist[x]))   # Lower the error rate, the better
         # Filter out the sequences that are not the most likely length
         gapfill_seqs = [seq for seq in gapfill_seqs if len(seq) == most_likely_length]
         gapfill_probs = [probs for probs in gapfill_probs if len(probs) == most_likely_length]
@@ -89,12 +98,14 @@ def process_lines(lines: list[str]) -> tuple[str, bool]:
             # Remove keys with no values
             probs = {nuc: quals for nuc, quals in probs.items() if len(quals) > 0}
             n_total =  sum([len(quals) for quals in probs.values()])
-            most_likely_nuc = min(probs.keys(), key=lambda x: np.mean(probs[x]) * (1 - (len(probs[x])/n_total)))  # Lower the error rate, the better
+            # most_likely_nuc = min(probs.keys(), key=lambda x: np.mean(probs[x]) * (1 - (len(probs[x])/n_total)))  # Lower the error rate, the better
+            # FIXME: Include error probs?
+            most_likely_nuc = max(probs.keys(), lambda k: len(probs[k]))
             most_likely_seq += most_likely_nuc
             supporting += (len(probs[most_likely_nuc]) / n_total) / len(seq_probs)
 
-    # Write the most likely sequence
-    return f"{cell_barcode_idx}\t{probe_idx}\t{probe_bc_idx}\t{most_likely_seq}\t{count}\t{supporting/count}\n", True
+    # Compute the number of reads that contain the gapfill
+    return f"{cell_barcode_idx}\t{probe_idx}\t{probe_bc_idx}\t{most_likely_seq}\t{count}\t{gapfill_seqs.count(most_likely_seq)/count}\n", True
 
 
 def barcode_umi_name_lines_generator(input_file_handle) -> tuple[list[str]]:

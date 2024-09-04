@@ -132,6 +132,7 @@ def run(output: str, threshold: int, cores: int, n_cells_per_batch: int):
                 nonlocal total
                 for final_lines, corrected in results:
                     f.write("\n".join(final_lines))
+                    f.write("\n")
                     total_corrected += corrected
                     total += len(final_lines)
 
