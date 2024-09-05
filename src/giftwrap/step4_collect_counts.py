@@ -28,6 +28,9 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
     elif final_output.exists():
         final_output.unlink()
 
+    # Replace the barcode -plex with -1 to match cellranger output
+    barcodes_df.barcode = barcodes_df.barcode.str.replace(f"-{plex}", "-1")
+
     probe_idx2name = {idx: name for idx, name in enumerate(manifest['name'])}
 
     # Get metadata cols
@@ -62,7 +65,7 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
         matrix_grp = output_file.create_group("matrix")
         # List of barcodes
         matrix_grp.create_dataset("barcode",
-                                  data=np.array(list(barcode2h5_idx.keys()), dtype='S'),
+                                  data=np.array([barcode2h5_idx.keys()], dtype='S'),
                                   compression='gzip')
         # List of probes
         matrix_grp.create_dataset("probe",

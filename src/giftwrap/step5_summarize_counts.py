@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
+import pandas as pd
 from scipy.stats import spearmanr, gaussian_kde
 
 from .utils import filter_h5_file, read_h5_file
@@ -344,6 +345,8 @@ def summarize_counts(input: Path, summary_output: Path, summary_pdf_output: Path
     stats["value"].append(cells_per_gapfill.min())
     stats["statistic"].append("CELLS_PER_GAPFILL_MAX")
     stats["value"].append(cells_per_gapfill.max())
+
+    pd.DataFrame(stats).to_csv(summary_output, index=False)
 
     # Generate a PDF report
     make_pdf_report(summary_pdf_output, gapfill_adata, adata)
