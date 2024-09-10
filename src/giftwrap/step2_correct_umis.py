@@ -33,10 +33,10 @@ def process_lines(lines: list[str], threshold: int) -> tuple[list[str], int]:
     for (probe, probe_bc, umi), lines in sorted(probe_umi_to_lines.items(), key=lambda x: (int(x[0][0]), len(x[1])), reverse=True):
         if len(all_valid_umis[probe_bc]) == 0:  # We have no umis yet, so we have to assume the first one is a real umi
             all_valid_umis[probe_bc].add(umi)
-            final_lines.extend(["\t".join(line[:6]) for line in lines])
+            final_lines.extend([line[:6] for line in lines])
             continue
         elif umi in all_valid_umis[probe_bc]:  # Exact match, so we don't need to do anything
-            final_lines.extend(["\t".join(line[:6]) for line in lines])
+            final_lines.extend([line[:6] for line in lines])
             continue
         else:  # Now we need to see if there is a fuzzy match
             # match = rapidfuzz.process.extractOne(
@@ -59,14 +59,14 @@ def process_lines(lines: list[str], threshold: int) -> tuple[list[str], int]:
             for i in range(1, threshold + 1):
                 for permuted_umi in generate_permuted_seqs(umi, probs, i):
                     if permuted_umi in all_valid_umis[probe_bc]:  # Found a match!
-                        final_lines.extend(["\t".join(line[:5] + [permuted_umi]) for line in lines])
+                        final_lines.extend([line[:5] + [permuted_umi] for line in lines])
                         corrected += len(lines)
                         found_existing = True
                         break
 
             if not found_existing:  # Still no match, so add to the list if there are no Ns
                 all_valid_umis[probe_bc].add(umi)  # No match, so add to the list
-                final_lines.extend(["\t".join(line[:6]) for line in lines])
+                final_lines.extend([line[:6] for line in lines])
             # else:  # There is a fuzzy match
             #     match_umi, score, match_umi_index = match
             #     for line in lines:
@@ -74,13 +74,17 @@ def process_lines(lines: list[str], threshold: int) -> tuple[list[str], int]:
             #     final_lines.extend(["\t".join(line[:6]) for line in lines])
             #     corrected += len(lines)
 
-    return final_lines, corrected
+    # With UMIs corrected, we will now re-sort this chunk according to probe bc, cell bc, umi
+    final_lines = sorted(final_lines, key=lambda x: (x[2], x[0], x[5]))
+
+    return ["\t".join(line) for line in final_lines], corrected
 
 
 def barcode_lines_generator(input_file_handle) -> tuple[list[str]]:
-    # By assuming the lines are sorted by barcode, we can naively group them by just iterating through the file
+    # By assuming the lines are sorted by probe_bc/cell barcode/probe id, we can naively group them by just iterating through the file
     curr_barcode = None
     lines = []
+    # Iterate cell-by-cell
     for line in input_file_handle:
         barcode = line.split("\t")[0]
         if barcode != curr_barcode:
