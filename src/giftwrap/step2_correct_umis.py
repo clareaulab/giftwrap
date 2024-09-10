@@ -8,8 +8,8 @@ from pathlib import Path
 import numpy as np
 from tqdm import tqdm
 
-from .utils import maybe_multiprocess, batched, maybe_gzip, GzipNamedTemporaryFile, read_manifest, phred_string_to_probs, \
-    permute_bases
+from .utils import maybe_multiprocess, batched, maybe_gzip, GzipNamedTemporaryFile, phred_string_to_probs, \
+    permute_bases, generate_permuted_seqs
 
 
 def process_lines(lines: list[str], threshold: int) -> tuple[list[str], int]:
@@ -30,7 +30,7 @@ def process_lines(lines: list[str], threshold: int) -> tuple[list[str], int]:
     corrected = 0
 
     # Next we sort by count and iterate. Note that we remove the quality scores
-    for (probe, probe_bc, umi), lines in sorted(probe_umi_to_lines.items(), key=lambda x: len(x[1]), reverse=True):
+    for (probe, probe_bc, umi), lines in sorted(probe_umi_to_lines.items(), key=lambda x: (int(x[0][0]), len(x[1])), reverse=True):
         if len(all_valid_umis[probe_bc]) == 0:  # We have no umis yet, so we have to assume the first one is a real umi
             all_valid_umis[probe_bc].add(umi)
             final_lines.extend(["\t".join(line[:6]) for line in lines])
@@ -54,12 +54,10 @@ def process_lines(lines: list[str], threshold: int) -> tuple[list[str], int]:
             probs = np.prod(qualities, axis=0)
             # Set all N positions to 100% error
             probs = np.where(np.array([base == 'N' for base in umi]), 1.0, probs)
-            worst_to_best_indices = np.argsort(-probs)
             # Edit up to threshold positions to try finding an exact match
             found_existing = False
             for i in range(1, threshold + 1):
-                indices_to_permute = worst_to_best_indices[:i].tolist()
-                for permuted_umi in permute_bases(umi, indices_to_permute):
+                for permuted_umi in generate_permuted_seqs(umi, probs, i):
                     if permuted_umi in all_valid_umis[probe_bc]:  # Found a match!
                         final_lines.extend(["\t".join(line[:5] + [permuted_umi]) for line in lines])
                         corrected += len(lines)

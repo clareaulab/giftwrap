@@ -18,7 +18,7 @@ import fuzzysearch
 import rapidfuzz
 
 from .utils import maybe_multiprocess, batched, read_manifest, sort_tsv_file, FlexFormatInfo, VisiumHDFormatInfo, \
-    VisiumFormatInfo, TechnologyFormatInfo, permute_bases, phred_string_to_probs
+    VisiumFormatInfo, TechnologyFormatInfo, phred_string_to_probs
 
 
 # Enum for possible states
@@ -32,9 +32,23 @@ class ReadProcessState(Enum):
     CORRECTED_LHS = 6
     CORRECTED_BARCODE = 7
     EXACT = 8
+    TOTAL_READS = 9  # Placeholder so that we can count the total number of reads
 
 
 ReadData = namedtuple("ReadData", ["probe_id", "probe_barcode", "gapfill", "gapfill_quality", "cell_barcode", "umi", "umi_quality", "coordinate_x", "coordinate_y"])
+
+
+def process_reads(reads,
+                 rhs_seqs, lhs_seqs,
+                 lhs_seq2potential_rhs_seqs,
+                 tech_info: TechnologyFormatInfo, names,
+                 max_distance,
+                 min_lhs_probe_size, min_rhs_probe_size,
+                 max_lhs_probe_size, max_rhs_probe_size,
+                 multiplex, barcode) -> list[tuple[list[ReadProcessState], Optional[ReadData]]]:
+    return [process_read(r1, r2, rhs_seqs, lhs_seqs, lhs_seq2potential_rhs_seqs, tech_info, names, max_distance,
+                         min_lhs_probe_size, min_rhs_probe_size, max_lhs_probe_size, max_rhs_probe_size, multiplex, barcode)
+            for (r1, r2) in reads]
 
 
 def process_read(r1, r2,
@@ -49,7 +63,7 @@ def process_read(r1, r2,
     r1_len = len(r1_seq)
     r2_len = len(r2_seq)
 
-    states = []
+    states = [ReadProcessState.TOTAL_READS]
 
     lhs_probes_sizes_differ = min_lhs_probe_size != max_lhs_probe_size
     rhs_probes_sizes_differ = min_rhs_probe_size != max_rhs_probe_size
@@ -87,7 +101,7 @@ def process_read(r1, r2,
         )
 
     if match is None:  # No match found
-        return [ReadProcessState.FILTERED_NO_LHS], None
+        return [ReadProcessState.TOTAL_READS, ReadProcessState.FILTERED_NO_LHS], None
 
     match_size = len(match_query)
     lhs_probe_idx = match[2]
@@ -114,7 +128,7 @@ def process_read(r1, r2,
                     constant_seq_match = potential_constant_seq_match
 
         if constant_seq_match is None:  # No matches, short circuit
-            return [ReadProcessState.FILTERED_NO_CONSTANT], None
+            return [ReadProcessState.TOTAL_READS, ReadProcessState.FILTERED_NO_CONSTANT], None
 
         # If the gap is too long, the constant seq may be cut off. So we will fuzzy match the first N bases of the
         # constant seq against the match to get the final distance
@@ -126,12 +140,12 @@ def process_read(r1, r2,
         if tech_info.has_probe_barcode and (multiplex > 1 or barcode > 0):
             probe_bc_search_space = r2_seq[constant_end + tech_info.probe_barcode_start:constant_end + tech_info.probe_barcode_start + tech_info.probe_barcode_length]
             if len(probe_bc_search_space) == 0:  # Short circuit
-                return [ReadProcessState.FILTERED_NO_PROBE_BARCODE], None
+                return [ReadProcessState.TOTAL_READS, ReadProcessState.FILTERED_NO_PROBE_BARCODE], None
 
             if multiplex <= 1:  # Singleplex, so we search for the specified barcode
                 probe_barcode = tech_info.probe_barcodes[barcode-1]
                 if rapidfuzz.distance.Levenshtein.distance(probe_bc_search_space, probe_barcode) > max_distance:
-                    return [ReadProcessState.FILTERED_NO_PROBE_BARCODE], None
+                    return [ReadProcessState.TOTAL_READS, ReadProcessState.FILTERED_NO_PROBE_BARCODE], None
             else:  # Multiplexed, so we need to search for the barcode
                 probe_barcode_match = rapidfuzz.process.extractOne(
                     probe_bc_search_space,
@@ -140,7 +154,7 @@ def process_read(r1, r2,
                     score_cutoff=max_distance
                 )
                 if probe_barcode_match is None:
-                    return [ReadProcessState.FILTERED_NO_PROBE_BARCODE], None
+                    return [ReadProcessState.TOTAL_READS, ReadProcessState.FILTERED_NO_PROBE_BARCODE], None
                 probe_barcode = probe_barcode_match[0]
         # Else don't verify since we don't need to demultiplex
         else:
@@ -192,7 +206,7 @@ def process_read(r1, r2,
         rhs_match = find_rhs_match(r2_seq, potential_rhs_probe_seq)
 
         if rhs_match is None:  # Short circuit
-            return [ReadProcessState.FILTERED_NO_RHS], None
+            return [ReadProcessState.TOTAL_READS, ReadProcessState.FILTERED_NO_RHS], None
 
         rhs_idx = potential_rhs_probe_idx
     else:  # Multiple possible RHS
@@ -210,7 +224,7 @@ def process_read(r1, r2,
                 rhs_match = potential_rhs_match
                 rhs_idx = potential_rhs_probe_idx
         if rhs_match is None:  # Short circuit
-            return [ReadProcessState.FILTERED_NO_RHS], None
+            return [ReadProcessState.TOTAL_READS, ReadProcessState.FILTERED_NO_RHS], None
 
     if rhs_seqs[rhs_idx] != r2_seq[rhs_match.start:rhs_match.end]:
         states.append(ReadProcessState.CORRECTED_RHS)
@@ -242,7 +256,7 @@ def process_read(r1, r2,
     was_corrected, cell_barcode = correct_barcode(cell_barcode, np.array(phred_string_to_probs(cell_barcode_quality)), tech_info, max_distance)
 
     if cell_barcode is None:
-        return [ReadProcessState.FILTERED_NO_CELL_BARCODE], None
+        return [ReadProcessState.TOTAL_READS, ReadProcessState.FILTERED_NO_CELL_BARCODE], None
 
     if was_corrected:
         states.append(ReadProcessState.CORRECTED_BARCODE)
@@ -300,7 +314,9 @@ def search_files(read1s, read2s, output_dir, tech_info, cores=1, n_reads_per_bat
     read1_iterator = itertools.chain(*r1_to_chain)
     read2_iterator = itertools.chain(*r2_to_chain)
 
-    batched_reads = batched(zip(read1_iterator, read2_iterator), n_reads_per_batch)
+    # Note we have to map to tuple because starmap expects tuple inputs
+    n_jobs = max(cores, 1)
+    batched_reads = batched(map(lambda x: (x,), batched(zip(read1_iterator, read2_iterator), n_reads_per_batch // n_jobs)), n_jobs)
 
     mp = maybe_multiprocess(cores)
 
@@ -309,7 +325,6 @@ def search_files(read1s, read2s, output_dir, tech_info, cores=1, n_reads_per_bat
     barcodes_encountered = dict()
 
     # Metrics
-    total_reads = 0  # Total number of reads encountered
     total = 0  # Total number of probes
     probe_ids_encountered = set()
     with mp as pool:
@@ -326,36 +341,36 @@ def search_files(read1s, read2s, output_dir, tech_info, cores=1, n_reads_per_bat
             def process_data(results):
                 nonlocal total
                 # Returns a tuple of outputs to write
-                for (states, data) in results:
-                    result_reason_counter.update(states)
-                    if data is None:
-                        continue
-                    total += 1
-                    probe_ids_encountered.add(data.probe_id)
-                    if tech_info.has_probe_barcode:
-                        probe_bc = tech_info.probe_barcode_index(data.probe_barcode)
-                    else:
-                        probe_bc = 1
-                    complete_cell_barcode = tech_info.make_barcode_string(data.cell_barcode, probe_bc, data.coordinate_x, data.coordinate_y)
-                    if complete_cell_barcode not in barcodes_encountered:
-                        barcode_id = len(barcodes_encountered)
-                        barcodes_encountered[complete_cell_barcode] = barcode_id
-                        f2.write(f"{complete_cell_barcode}")  # Record the barcode
-                        if tech_info.is_spatial:
-                            f2.write(f"\t1\t{data.coordinate_x}\t{data.coordinate_y}")
-                        f2.write("\n")
-                    cell_id = barcodes_encountered[complete_cell_barcode]
-                    # Record the read
-                    f.write(f"{cell_id}\t{data.probe_id}\t{probe_bc}\t{data.gapfill}\t{data.gapfill_quality}\t{data.umi}\t{data.umi_quality}\n")
+                for results_batch in results:
+                    for (states, data) in results_batch:
+                        result_reason_counter.update(states)
+                        if data is None:
+                            continue
+                        total += 1
+                        probe_ids_encountered.add(data.probe_id)
+                        if tech_info.has_probe_barcode:
+                            probe_bc = tech_info.probe_barcode_index(data.probe_barcode)
+                        else:
+                            probe_bc = 1
+                        complete_cell_barcode = tech_info.make_barcode_string(data.cell_barcode, probe_bc, data.coordinate_x, data.coordinate_y)
+                        if complete_cell_barcode not in barcodes_encountered:
+                            barcode_id = len(barcodes_encountered)
+                            barcodes_encountered[complete_cell_barcode] = barcode_id
+                            f2.write(f"{complete_cell_barcode}")  # Record the barcode
+                            if tech_info.is_spatial:
+                                f2.write(f"\t1\t{data.coordinate_x}\t{data.coordinate_y}")
+                            f2.write("\n")
+                        cell_id = barcodes_encountered[complete_cell_barcode]
+                        # Record the read
+                        f.write(f"{cell_id}\t{data.probe_id}\t{probe_bc}\t{data.gapfill}\t{data.gapfill_quality}\t{data.umi}\t{data.umi_quality}\n")
 
             # Note we parallelize the processing of reads
             # We first process a batch of reads while the next batch is being read
             for i, batch in (pbar := tqdm(enumerate(batched_reads), desc="Processing reads", unit="batches")):
                 if job is not None:
                     last_job = job
-                total_reads += len(batch)
                 job = pool.starmap_async(
-                    functools.partial(process_read,
+                    functools.partial(process_reads,
                                       rhs_seqs=rhs_seqs,
                                       lhs_seqs=lhs_seqs,
                                       lhs_seq2potential_rhs_seqs=lhs_seq2potential_rhs_seqs,
@@ -383,7 +398,6 @@ def search_files(read1s, read2s, output_dir, tech_info, cores=1, n_reads_per_bat
     print("Writing statistics...", end="")
     with open(output_dir / "fastq_metrics.tsv", 'w') as f:
         f.write("metric\tvalue\n")
-        f.write(f"TOTAL_READS\t{total_reads}\n")
         f.write(f"PROBE_CONTAINING_READS\t{total}\n")
         f.write(f"POSSIBLE_PROBES\t{probes.shape[0]}\n")
         f.write(f"PROBES_ENCOUNTERED\t{len(probe_ids_encountered)}\n")
@@ -398,16 +412,6 @@ def search_files(read1s, read2s, output_dir, tech_info, cores=1, n_reads_per_bat
     print(f"{total} reads extracted.")
 
 
-def generate_permuted_seqs(seq: str, quality: np.array, max_distance: int) -> str:
-    # Generate all possible sequences with a maximum edit distance
-    # We will prioritize the positions by the quality of the base
-    # Sort by making the worst quality be first
-    quality_indices = np.argsort(-quality)
-
-    for base_positions in itertools.permutations(quality_indices, max_distance):
-        yield from permute_bases(seq, base_positions)
-
-
 @functools.lru_cache(maxsize=1_000)
 def find_exact_match(barcode: str, tech_info: TechnologyFormatInfo) -> Optional[str]:
     for length, bcs in tech_info.length2barcodes().items():  # We assume this is sorted from largest -> smallest
@@ -417,7 +421,6 @@ def find_exact_match(barcode: str, tech_info: TechnologyFormatInfo) -> Optional[
     return None
 
 
-# based on: https://github.com/caleblareau/errorcorrect_10xatac_barcodes/blob/main/process_10x_barcodes.py#L115
 def correct_barcode(barcode: str, barcode_quality: np.array, tech_info: TechnologyFormatInfo, max_dist: int) -> tuple[bool, Optional[str]]:
     """
     Correct a barcode by permuting the barcode by max_dist and checking if it is in the set of barcodes.
@@ -427,48 +430,52 @@ def correct_barcode(barcode: str, barcode_quality: np.array, tech_info: Technolo
     :param max_dist: The maximum edit distance to search for.
     :return: The corrected barcode, or None if no barcode was found.
     """
-    match = find_exact_match(barcode, tech_info)
-    if match:
-        return False, match
-    elif max_dist <= 0:
-        return False, None  # The max_dist requires an exact match
+    match, corrected = tech_info.correct_barcode(barcode, max_dist)  # TODO: Replace rapidfuzz entirely with the trie?
+    return corrected, match
 
-    # If more Ns than max_dist, return None
-    N_indices = [i for i, base in enumerate(barcode) if base == "N"]
-    if len(N_indices) > max_dist:
-        return False, None
-
-    # Set the N positions to high error to prioritize their correction
-    barcode_quality[N_indices] = 1.0
-
-    # Try to correct the barcode
-    for edits in range(1, max_dist + 1):
-        # Generate all possible edits
-        # First try to edit just positions with N
-        if len(N_indices) > edits:  # Not possible to correct fully
-            continue
-        elif len(N_indices) > 0:
-            # all_edits_N = len(N_indices) == edits
-            # Replace the Ns with all possible bases
-            for possible_seq in permute_bases(barcode, N_indices):
-                # match = find_exact_match(possible_seq, tech_info)
-                # if match:  # Found a base
-                #     return True, match
-                # elif not all_edits_N:  # Additional edits must be made
-                is_corrected, corrected_barcode = correct_barcode(possible_seq, barcode_quality, tech_info, max_dist - edits)
-                if corrected_barcode is not None:
-                    return True, corrected_barcode
-            # If we are here, we failed to correct the Ns so iterate over the loop
-            continue
-
-        # At this point, there are no Ns so we have to do naive correction
-        for possible_seq in generate_permuted_seqs(barcode, barcode_quality, edits):
-            match = find_exact_match(possible_seq, tech_info)
-            if match:
-                return True, match
-
-    # If we are here, nothing worked
-    return False, None
+    # # based on: https://github.com/caleblareau/errorcorrect_10xatac_barcodes/blob/main/process_10x_barcodes.py#L115
+    # match = find_exact_match(barcode, tech_info)
+    # if match:
+    #     return False, match
+    # elif max_dist <= 0:
+    #     return False, None  # The max_dist requires an exact match
+    #
+    # # If more Ns than max_dist, return None
+    # N_indices = [i for i, base in enumerate(barcode) if base == "N"]
+    # if len(N_indices) > max_dist:
+    #     return False, None
+    #
+    # # Set the N positions to high error to prioritize their correction
+    # barcode_quality[N_indices] = 1.0
+    #
+    # # Try to correct the barcode
+    # for edits in range(1, max_dist + 1):
+    #     # Generate all possible edits
+    #     # First try to edit just positions with N
+    #     if len(N_indices) > edits:  # Not possible to correct fully
+    #         continue
+    #     elif len(N_indices) > 0:
+    #         # all_edits_N = len(N_indices) == edits
+    #         # Replace the Ns with all possible bases
+    #         for possible_seq in permute_bases(barcode, N_indices):
+    #             # match = find_exact_match(possible_seq, tech_info)
+    #             # if match:  # Found a base
+    #             #     return True, match
+    #             # elif not all_edits_N:  # Additional edits must be made
+    #             is_corrected, corrected_barcode = correct_barcode(possible_seq, barcode_quality, tech_info, max_dist - edits)
+    #             if corrected_barcode is not None:
+    #                 return True, corrected_barcode
+    #         # If we are here, we failed to correct the Ns so iterate over the loop
+    #         continue
+    #
+    #     # At this point, there are no Ns so we have to do naive correction
+    #     for possible_seq in generate_permuted_seqs(barcode, barcode_quality, edits):
+    #         match = find_exact_match(possible_seq, tech_info)
+    #         if match:
+    #             return True, match
+    #
+    # # If we are here, nothing worked
+    # return False, None
 
 
 def build_manifest(probes, output: Path, overwrite):
@@ -548,8 +555,7 @@ def run(probes, read1, read2, project, output, cores, n_reads_per_batch, max_dis
         read1s = []
         read2s = []
         for r1 in sorted(Path(project).parent.glob(Path(project).name + "*_R1*")):
-            # Ensure its a fastq
-            if r1.suffix not in {".fastq", ".gz", '.fq',}:
+            if r1.suffix not in {".fastq", ".gz", '.fq',}: # Skip non-fastq files
                 continue
             read1s.append(str(r1))
             possible_r2 = Path(str(r1).replace("R1", "R2"))

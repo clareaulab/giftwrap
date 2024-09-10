@@ -5,18 +5,145 @@ import os
 import shutil
 import subprocess
 from abc import ABC, abstractmethod
+from collections import defaultdict
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 import itertools
 import contextlib
-import multiprocessing
 from typing import Literal, Optional
+import multiprocessing
 
 import numpy as np
 import pandas as pd
 import h5py
 import anndata as ad
 import scipy
+
+
+class PrefixTree:
+    """
+    Dynamically expanding tree (up to N mismatches) of strings based on prefixes.
+    This is based on the trie data structure.
+    """
+
+    def __init__(self, contents: list[str]):
+        self.root = dict()
+        for content in contents:
+            self.add(content)
+
+    def add(self, content: str):
+        """
+        Add a content to the tree.
+        """
+        node = self.root
+        for char in content:
+            if char not in node:
+                node[char] = dict()
+            node = node[char]
+        node['$'] = content  # Store the full content at the end as a short cut
+
+    # Recursive function to find the best match as fast as possible
+    # Note that we do not allow for insertions and deletions, only substitutions
+    def _search(self,
+                full_content: str,
+                curr_node: dict,
+                content_index: int,
+                max_mismatches: int,
+                curr_mismatches: int,
+                visited: dict) -> Optional[tuple[str, int]]:
+        if id(curr_node) in visited:  # Already visited this node
+            if curr_mismatches >= visited[id(curr_node)]:  # Skip if we have already visited this node with a better score than is possible
+                return None
+        # Check for end cases
+        if content_index > len(full_content):
+            return None
+        if curr_mismatches > max_mismatches:
+            return None
+        remaining_mismatches = max_mismatches - curr_mismatches
+
+        if content_index == len(full_content):  # We reached the end of the content, is there an end of word here?
+            if '$' in curr_node:  # This will always be the best match
+                # Add to visited
+                self._insert_if_better(visited, id(curr_node), curr_mismatches)
+                return curr_node['$'], curr_mismatches
+            else:
+                return None  # We have reached the end of the content and have no more mismatches to spare
+
+        # See if a match exists
+        if full_content[content_index] in curr_node:
+            # Continue the search
+            res = self._search(full_content, curr_node[full_content[content_index]], content_index + 1, max_mismatches, curr_mismatches, visited)
+            if res is not None:
+                self._insert_if_better(visited, id(curr_node), res[1])
+                return res
+
+        # No match, try mismatches
+        best = None
+        best_score = None
+        for char in curr_node:
+            if char == full_content[content_index]:  # Ignore already scanned characters
+                continue
+            elif char == '$':  # End of word, but not end of the query. Continue to see if there are other matches
+                continue
+            # Continue the search, but with a mismatch
+            res = self._search(full_content, curr_node[char], content_index + 1, max_mismatches, curr_mismatches + 1, visited)
+            if res is not None:
+                if best is None or res[1] < best_score:
+                    best = res
+                    best_score = res[1]
+                    # Break early if we have a perfect match with this substitution
+                    if best_score == curr_mismatches+1:
+                        break
+
+        if best_score is not None:
+            self._insert_if_better(visited, id(curr_node), best_score)
+
+        return best
+
+    @functools.lru_cache(maxsize=1024)
+    def search(self, content: str, max_mismatches: int) -> Optional[tuple[str, int]]:
+        """
+        Search the tree for a content with a maximum number of mismatches.
+        """
+        res = self._search(content, self.root, 0, max_mismatches, 0, dict())
+        if res is not None:
+            return res
+        return None
+
+    def _insert_if_better(self, dictionary, key, value):
+        if key not in dictionary:
+            dictionary[key] = value
+        elif value < dictionary[key]:
+            dictionary[key] = value
+    def __contains__(self, content: str) -> bool:
+        """
+        Check if exact content is in the tree.
+        """
+        node = self.root
+        for char in content:
+            if char not in node:
+                return False
+            node = node[char]
+        return '$' in node
+
+    def values(self) -> list[str]:
+        """
+        Return all values in the tree.
+        """
+        vals = []
+        self._values(self.root, vals)
+        return vals
+
+    def _values(self, node: dict, vals: list[str]):
+        """
+        Recursively extract all values from the tree.
+        """
+        if '$' in node:
+            vals.append(node['$'])
+        for char in node:
+            if char == '$':
+                continue
+            self._values(node[char], vals)
 
 
 #Based on: https://docs.python.org/3/library/itertools.html#itertools.batched
@@ -155,25 +282,12 @@ class TechnologyFormatInfo(ABC):
         """
         raise NotImplementedError()
 
-    @functools.lru_cache(maxsize=1)
-    def length2barcodes(self) -> dict[int, set[str]]:
-        """
-        Returns a dictionary mapping barcode lengths to the list of potential barcodes. Should be sorted by largest to
-            smallest.
-        """
-        l2bc = dict()
-        for bc in sorted(self.cell_barcodes, key=len, reverse=True):
-            if len(bc) not in l2bc:
-                l2bc[len(bc)] = set()
-            l2bc[len(bc)].add(bc)
-        return l2bc
-
     @property
     def max_cell_barcode_length(self) -> int:
         """
         Returns the maximum length of a cell barcode.
         """
-        return max(self.length2barcodes().keys())
+        return max(map(len, self.cell_barcodes))
 
     @functools.lru_cache(maxsize=1000)
     def barcode2coordinates(self, barcode: str) -> tuple[int, int]:
@@ -181,7 +295,7 @@ class TechnologyFormatInfo(ABC):
         Returns the X and Y coordinates of a barcode.
         :param barcode: The barcode.
         """
-        return self.barcode_coordinates[self.cell_barcodes.index(barcode)]
+        return self.barcode_coordinates[barcode]
 
     @property
     @abstractmethod
@@ -193,7 +307,7 @@ class TechnologyFormatInfo(ABC):
 
     @property
     @abstractmethod
-    def barcode_coordinates(self) -> list[tuple[int, int]]:
+    def barcode_coordinates(self) -> dict[str, tuple[int, int]]:
         """
         The x and y coordinates of the barcode in the read.
         """
@@ -274,6 +388,27 @@ class TechnologyFormatInfo(ABC):
         """
         return f"{cell_barcode}-{plex}"
 
+    @property
+    @functools.lru_cache(maxsize=1)
+    def barcode_tree(self) -> PrefixTree:
+        """
+        Return a prefix tree (trie) of the cell barcodes for fast mismatch searches.
+        :return: The tree.
+        """
+        return PrefixTree(self.cell_barcodes)
+
+    def correct_barcode(self, barcode: str, max_mismatches: int) -> tuple[Optional[str], bool]:
+        """
+        Given a probable barcode string, attempt to correct the sequence.
+        :param barcode: The barcode sequence.
+        :param max_mismatches: The maximum number of mismatches to allow.
+        :return: The corrected barcode, or None if no match was found.
+        """
+        res = self.barcode_tree.search(barcode, max_mismatches)
+        if res is not None:
+            return res[0], res[1] > 0
+        return None, False
+
 
 class FlexFormatInfo(TechnologyFormatInfo):
     """
@@ -291,7 +426,7 @@ class FlexFormatInfo(TechnologyFormatInfo):
         # Strip the -Number from the barcode
         barcodes["barcode"] = barcodes["barcode"].str.split("-").str[0]
         # Collect the universe of barcodes
-        self._barcodes = list(barcodes["barcode"].unique())
+        self._barcodes = PrefixTree(list(barcodes["barcode"].unique()))
 
         self._probe_barcodes = {s: (i+1) for i, s in enumerate([
                 "ACTTTAGG",
@@ -323,7 +458,7 @@ class FlexFormatInfo(TechnologyFormatInfo):
 
     @property
     def cell_barcodes(self) -> list[str]:
-        return self._barcodes
+        return self._barcodes.values()
 
     @property
     def cell_barcode_start(self) -> int:
@@ -366,8 +501,12 @@ class FlexFormatInfo(TechnologyFormatInfo):
         return self._probe_barcodes[bc]
 
     @property
-    def barcode_coordinates(self) -> list[tuple[int, int]]:
+    def barcode_coordinates(self) -> dict[str, tuple[int, int]]:
         raise NotImplementedError()
+
+    @property
+    def barcode_tree(self) -> PrefixTree:
+        return self._barcodes
 
 
 class VisiumFormatInfo(TechnologyFormatInfo):
@@ -381,8 +520,8 @@ class VisiumFormatInfo(TechnologyFormatInfo):
         # Load the barcodes
         # TODO: I am assuming that X is first and Y is second
         barcodes = pd.read_table(self._barcode_dir / f"visium-v{version}_coordinates.txt", header=None, names=["barcode", 'x', 'y'])
-        self._barcodes = barcodes["barcode"].tolist()
-        self._barcode_coordinates = barcodes[['x', 'y']].values.tolist()
+        self._barcodes = PrefixTree(barcodes["barcode"].tolist())
+        self._barcode_coordinates = {row["barcode"]: (row["x"], row["y"]) for _, row in barcodes.iterrows()}
 
     @property
     def umi_start(self) -> int:
@@ -394,7 +533,7 @@ class VisiumFormatInfo(TechnologyFormatInfo):
 
     @property
     def cell_barcodes(self) -> list[str]:
-        return self._barcodes
+        return self._barcodes.values()
 
     @property
     def cell_barcode_start(self) -> int:
@@ -405,7 +544,7 @@ class VisiumFormatInfo(TechnologyFormatInfo):
         return True
 
     @property
-    def barcode_coordinates(self) -> list[tuple[int, int]]:
+    def barcode_coordinates(self) -> dict[str, tuple[int, int]]:
         return self._barcode_coordinates
 
     @property
@@ -439,6 +578,10 @@ class VisiumFormatInfo(TechnologyFormatInfo):
     def probe_barcode_length(self) -> int:
         raise NotImplementedError()
 
+    @property
+    def barcode_tree(self) -> PrefixTree:
+        return self._barcodes
+
 
 class VisiumHDFormatInfo(TechnologyFormatInfo):
 
@@ -464,12 +607,14 @@ class VisiumHDFormatInfo(TechnologyFormatInfo):
         with open(self._barcode_dir / "visium_hd_v1.slide", 'rb') as f:
             slide_def.ParseFromString(f.read())
         # Assemble all possible barcodes
-        self._barcode_coordinates = []
-        self._barcodes = []
+        self._barcode_coordinates = dict()
+        barcode_trees = defaultdict(lambda: PrefixTree([]))
         for y, bc1 in enumerate(slide_def.two_part.bc1_oligos):
             for x, bc2 in enumerate(slide_def.two_part.bc2_oligos):
-                self._barcode_coordinates.append((x, y))
-                self._barcodes.append(bc1 + bc2)
+                cell_bc = bc1 + bc2
+                self._barcode_coordinates[cell_bc] = (x, y)
+                barcode_trees[len(cell_bc)].add(cell_bc)
+        self._barcode_trees = dict(barcode_trees)
 
     @property
     def umi_start(self) -> int:
@@ -481,7 +626,7 @@ class VisiumHDFormatInfo(TechnologyFormatInfo):
 
     @property
     def cell_barcodes(self) -> list[str]:
-        return self._barcodes
+        return sum([t.values() for t in self._barcode_trees.values()], [])
 
     @property
     def cell_barcode_start(self) -> int:
@@ -492,7 +637,7 @@ class VisiumHDFormatInfo(TechnologyFormatInfo):
         return True
 
     @property
-    def barcode_coordinates(self) -> list[tuple[int, int]]:
+    def barcode_coordinates(self) -> dict[str, tuple[int, int]]:
         return self._barcode_coordinates
 
     @property
@@ -529,6 +674,38 @@ class VisiumHDFormatInfo(TechnologyFormatInfo):
     @property
     def probe_barcode_length(self) -> int:
         raise NotImplementedError()
+
+    @property
+    def max_cell_barcode_length(self) -> int:
+        return max(self._barcode_trees.keys())  # Optimize max length search
+
+    @property
+    def min_cell_barcode_length(self) -> int:
+        return min(self._barcode_trees.keys())
+
+    @property
+    def barcode_tree(self) -> PrefixTree:
+        # VisiumHD is weird, with hierarchical barcode lengths
+        # So we have multiple PrefixTrees (one for each length)
+        raise NotImplementedError()
+
+    # Override the search to search all trees
+    def correct_barcode(self, barcode: str, max_mismatches: int) -> tuple[Optional[str], bool]:
+        # Note: We assume that the barcode length provided is the max length
+        best = None
+        for length in range(self.max_cell_barcode_length, self.min_cell_barcode_length - 1, -1):
+            res = self._barcode_trees[length].search(barcode[:length], max_mismatches)
+            if res is not None:
+                score = res[1]
+                # Short circuit if we have a perfect match (Since we go for longest to shortest this is valid)
+                if score == 0:
+                    return res[0], False
+                if best is None or res[1] < best[1]:  # Else, see if this is better
+                    best = res
+
+        if best is not None:
+            return best[0], best[1] > 0
+        return None, False
 
 
 def read_barcodes(output_dir: Path) -> pd.DataFrame:
@@ -887,3 +1064,13 @@ def permute_bases(seq: str, pos: list[int]) -> str:
         for i, base in zip(pos, combination):
             curr_seq = curr_seq[:i] + base + curr_seq[i+1:]
         yield curr_seq
+
+
+def generate_permuted_seqs(seq: str, quality: np.array, max_distance: int) -> str:
+    # Generate all possible sequences with a maximum edit distance
+    # We will prioritize the positions by the quality of the base
+    # Sort by making the worst quality be first
+    quality_indices = np.argsort(-quality)
+
+    for base_positions in itertools.permutations(quality_indices, max_distance):
+        yield from permute_bases(seq, base_positions)
