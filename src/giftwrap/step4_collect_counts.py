@@ -34,7 +34,7 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
     probe_idx2name = {idx: name for idx, name in enumerate(manifest['name'])}
 
     # Get metadata cols
-    barcode2h5_idx = {bc: int(idx) for idx, bc in enumerate(barcodes_df.barcode)}
+    barcode2h5_idx = {bc: idx for idx, bc in enumerate(barcodes_df.barcode.values)}
 
     # First we must scan for all possible probe id/gap fill combinations
     possible_probes = set()
@@ -65,7 +65,7 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
         matrix_grp = output_file.create_group("matrix")
         # List of barcodes
         matrix_grp.create_dataset("barcode",
-                                  data=np.array([barcode2h5_idx.keys()], dtype='S'),
+                                  data=np.array(list(barcode2h5_idx.keys()), dtype='S'),
                                   compression='gzip')
         # List of probes
         matrix_grp.create_dataset("probe",
