@@ -261,7 +261,7 @@ def process_read(r1, r2,
     if was_corrected:
         states.append(ReadProcessState.CORRECTED_BARCODE)
 
-    if len(states) == 0:
+    if len(states) == 1:  # Should be equal to one because of the TOTAL_READS state
         states.append(ReadProcessState.EXACT)
 
     coordinate_x = None

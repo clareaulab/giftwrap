@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import scipy
 from scipy.stats import spearmanr, gaussian_kde
+from sankeyflow import Sankey
 
 from .utils import filter_h5_file, read_h5_file
 from .analysis.tools import collapse_gapfills
@@ -69,6 +70,62 @@ def sequence_saturation_curve(full_counts, n_points: int = 1_000) -> np.array:
     return saturations
 
 
+def make_sankey(fastq_stats: dict, counts_stats: dict) -> Sankey:
+    nodes = [
+        [("Reads", fastq_stats.get("TOTAL_READS", 0))],
+
+        [("Exact Matches", fastq_stats.get("EXACT", 0)), ("Corrected LHS", fastq_stats.get("CORRECTED_LHS", 0)),
+         ("Corrected RHS", fastq_stats.get("CORRECTED_RHS", 0)),
+         ("Corrected Cell Barcode", fastq_stats.get("CORRECTED_BARCODE", 0)),
+         ("Filtered", fastq_stats.get("TOTAL_READS", 0) - fastq_stats.get("PROBE_CONTAINING_READS", 0))],
+
+        [("Mapped Reads", fastq_stats.get("PROBE_CONTAINING_READS", 0)),
+         ("No LHS", fastq_stats.get("FILTERED_NO_LHS", 0)), ("No RHS", fastq_stats.get("FILTERED_NO_RHS", 0)),
+         ("No Cell Barcode", fastq_stats.get("FILTERED_NO_CELL_BARCODE", 0)),
+         ("No Constant Sequence", fastq_stats.get('FILTERED_NO_CONSTANT', 0)),
+         ("No Probe Barcode", fastq_stats.get("FILTERED_NO_PROBE_BARCODE", 0))],
+
+        [("Total UMIs", counts_stats.get("TOTAL_UMIS", 0)), ("Total Cells", counts_stats.get("TOTAL_CELLS", 0))]
+    ]
+
+    flows = [
+        ("Reads", "Exact Matches", fastq_stats.get("EXACT", 0)),
+        ("Reads", "Corrected LHS", fastq_stats.get("CORRECTED_LHS", 0)),
+        ("Reads", "Corrected RHS", fastq_stats.get("CORRECTED_RHS", 0)),
+        ("Reads", "Corrected Cell Barcode", fastq_stats.get("CORRECTED_BARCODE", 0)),
+        ("Reads", "Filtered", fastq_stats.get("TOTAL_READS", 0) - fastq_stats.get("PROBE_CONTAINING_READS", 0)),
+        ("Filtered", "No LHS", fastq_stats.get("FILTERED_NO_LHS", 0)),
+        ("Filtered", "No RHS", fastq_stats.get("FILTERED_NO_RHS", 0)),
+        ("Filtered", "No Cell Barcode", fastq_stats.get("FILTERED_NO_CELL_BARCODE", 0)),
+        ("Filtered", "No Constant Sequence", fastq_stats.get('FILTERED_NO_CONSTANT', 0)),
+        ("Filtered", "No Probe Barcode", fastq_stats.get("FILTERED_NO_PROBE_BARCODE", 0)),
+        ("Exact Matches", "Mapped Reads", fastq_stats.get("EXACT", 0)),
+        ("Corrected LHS", "Mapped Reads", fastq_stats.get("CORRECTED_LHS", 0)),
+        ("Corrected RHS", "Mapped Reads", fastq_stats.get("CORRECTED_RHS", 0)),
+        ("Corrected Cell Barcode", "Mapped Reads", fastq_stats.get("CORRECTED_BARCODE", 0)),
+        ("Mapped Reads", "Total UMIs", counts_stats.get("TOTAL_UMIS", 0)),
+        ("Mapped Reads", "Total Cells", counts_stats.get("TOTAL_CELLS", 0))
+    ]
+
+    # Prune any zeros
+    for node in nodes:
+        to_remove = []
+        for i, (name, value) in enumerate(node):
+            if value == 0:
+                to_remove.append(i)
+        for i in to_remove[::-1]:
+            node.pop(i)
+
+    to_remove = []
+    for i, flow in enumerate(flows):
+        if flow[1] not in [n[0] for n in nodes[-1]] or flow[2] == 0:
+            to_remove.append(i)
+    for i in to_remove[::-1]:
+        flows.pop(i)
+
+    return Sankey(flows=flows, nodes=nodes)
+
+
 def make_pdf_report(output_file, gapfill_adata, adata):
     try:
         import matplotlib.pyplot as plt
@@ -79,6 +136,24 @@ def make_pdf_report(output_file, gapfill_adata, adata):
 
     print("Generating PDF report, this may take a few minutes...")
     with PdfPages(output_file) as pdf:
+        # Compute a sankey diagram describing the overall flow of data processing
+        fig, ax = plt.subplots(1, 1, figsize=(8, 8))
+        fig.set_dpi(600)
+        fig.suptitle("Data processing flow")
+        # Read the counts metrics file (long format table) into a dictionary
+        fastq_metrics = pd.read_table(output_file.parent / "fastq_metrics.tsv").set_index("metric").to_dict()["value"]
+        # Read the counts metrics file (long format table) into a dictionary
+        counts_metrics = pd.read_table(output_file.with_suffix(".tsv")).set_index("statistic").to_dict()["value"]
+        # Create the sankey diagram
+        sankey = make_sankey(fastq_metrics, counts_metrics)
+        sankey.draw(ax)
+        fig.text(0.5, 0.005,
+                    "This figure shows the flow of data processing from the raw fastq files to the final gapfill counts. "
+                    "The width of the lines represents the number of reads or cells at each step.",
+                    ha='center', wrap=True)
+        pdf.savefig(fig)
+        plt.close(fig)
+
         # Barcode rank plot (log-umis vs log-cell rank)
         fig, ax = plt.subplots(1, 1, figsize=(8, 8))
         fig.set_dpi(600)
@@ -109,6 +184,8 @@ def make_pdf_report(output_file, gapfill_adata, adata):
         fig.suptitle("Sequencing saturation curve")
         saturations = sequence_saturation_curve(collapse_gapfills(gapfill_adata).layers['total_reads'], n_points=1000)
         ax.plot(saturations[:,0], saturations[:,1])
+        # Use log10 scale
+        ax.set_xscale("log")
         ax.set_xlabel("Mean reads per cell")
         ax.set_ylabel("Sequencing saturation")
         fig.text(0.5, 0.005,
@@ -383,6 +460,8 @@ def summarize_counts(input: Path, summary_output: Path, summary_pdf_output: Path
     # Number of cells
     stats["statistic"].append("TOTAL_CELLS")
     stats["value"].append(gapfill_adata.shape[0])
+    stats["statistic"].append("TOTAL_UMIS")
+    stats["value"].append(gapfill_adata.X.sum())
     # Number of non-zero cells
     stats["statistic"].append("GAPFILL_CONTAINING_CELLS")
     stats["value"].append((umis_per_cell > 0).sum())

@@ -40,7 +40,7 @@ Note that the probes file should be either in `.tsv`, `.csv`, or `.xlsx` format.
 
 ## Advanced options
 The pipeline can also be run with the following arguments:
-- `--cores`: The number of cores to use for processing.
+- `--cores`: The number of cores to use for processing. Note: VisiumHD has a high complexity cell barcoding scheme, making its counts more memory-bottlenecked than CPU bottlenecked.
 - `-wta`: The path to either the filtered_feature_bc_matrix.h5 or the sample_filtered_feature_bc_matrix folder from CellRanger for the WTA panel.
 - `-f`: If passed, overwrite files instead of exiting if they already exist.
 - `--technology`: The technology. I.e. Flex/VisiumHD. Default is Flex.

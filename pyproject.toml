@@ -30,6 +30,7 @@ dependencies = [
     "anndata>=0.10.9",
     "matplotlib>=3.9.2",
     "openpyxl>=3.1.5",
+    "sankeyflow>=0.3.8",
 ]
 
 [project.urls]

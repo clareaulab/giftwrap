@@ -5,7 +5,6 @@ import os
 import shutil
 import subprocess
 from abc import ABC, abstractmethod
-from collections import defaultdict
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 import itertools
@@ -23,13 +22,26 @@ import scipy
 class PrefixTree:
     """
     Dynamically expanding tree (up to N mismatches) of strings based on prefixes.
+    Note that indels are not considered since it would be extremely slow to search.
     This is based on the trie data structure.
+    Note that this supports memory sharing.
     """
 
+    __slots__ = ['_root', '_size']
+
     def __init__(self, contents: list[str]):
-        self.root = dict()
+        """
+        Initialize the tree with a list of contents.
+        :param contents: The list of contents.
+        """
+        self._root = dict()
+        self._size = 0
         for content in contents:
             self.add(content)
+
+    @property
+    def root(self) -> dict:
+        return self._root
 
     def add(self, content: str):
         """
@@ -40,7 +52,9 @@ class PrefixTree:
             if char not in node:
                 node[char] = dict()
             node = node[char]
-        node['$'] = content  # Store the full content at the end as a short cut
+        if '$' not in node:  # This end node did not exist yet
+            node['$'] = content  # Store the full content at the end as a short cut
+            self._size += 1
 
     # Recursive function to find the best match as fast as possible
     # Note that we do not allow for insertions and deletions, only substitutions
@@ -100,7 +114,6 @@ class PrefixTree:
 
         return best
 
-    @functools.lru_cache(maxsize=1024)
     def search(self, content: str, max_mismatches: int) -> Optional[tuple[str, int]]:
         """
         Search the tree for a content with a maximum number of mismatches.
@@ -115,6 +128,7 @@ class PrefixTree:
             dictionary[key] = value
         elif value < dictionary[key]:
             dictionary[key] = value
+
     def __contains__(self, content: str) -> bool:
         """
         Check if exact content is in the tree.
@@ -144,6 +158,12 @@ class PrefixTree:
             if char == '$':
                 continue
             self._values(node[char], vals)
+
+    def size(self) -> int:
+        return self._size
+
+    def __len__(self):
+        return self.size()
 
 
 #Based on: https://docs.python.org/3/library/itertools.html#itertools.batched
@@ -397,6 +417,7 @@ class TechnologyFormatInfo(ABC):
         """
         return PrefixTree(self.cell_barcodes)
 
+    @functools.lru_cache(1024)
     def correct_barcode(self, barcode: str, max_mismatches: int) -> tuple[Optional[str], bool]:
         """
         Given a probable barcode string, attempt to correct the sequence.
@@ -608,13 +629,13 @@ class VisiumHDFormatInfo(TechnologyFormatInfo):
             slide_def.ParseFromString(f.read())
         # Assemble all possible barcodes
         self._barcode_coordinates = dict()
-        barcode_trees = defaultdict(lambda: PrefixTree([]))
+        _barcode_tree = PrefixTree([])
         for y, bc1 in enumerate(slide_def.two_part.bc1_oligos):
             for x, bc2 in enumerate(slide_def.two_part.bc2_oligos):
                 cell_bc = bc1 + bc2
                 self._barcode_coordinates[cell_bc] = (x, y)
-                barcode_trees[len(cell_bc)].add(cell_bc)
-        self._barcode_trees = dict(barcode_trees)
+                _barcode_tree.add(cell_bc)
+        self._barcode_tree = _barcode_tree
 
     @property
     def umi_start(self) -> int:
@@ -626,7 +647,7 @@ class VisiumHDFormatInfo(TechnologyFormatInfo):
 
     @property
     def cell_barcodes(self) -> list[str]:
-        return sum([t.values() for t in self._barcode_trees.values()], [])
+        return self._barcode_tree.values()
 
     @property
     def cell_barcode_start(self) -> int:
@@ -676,25 +697,28 @@ class VisiumHDFormatInfo(TechnologyFormatInfo):
         raise NotImplementedError()
 
     @property
+    @functools.lru_cache(1)
     def max_cell_barcode_length(self) -> int:
-        return max(self._barcode_trees.keys())  # Optimize max length search
+        return max(map(len, self.cell_barcodes))
 
     @property
+    @functools.lru_cache(1)
     def min_cell_barcode_length(self) -> int:
-        return min(self._barcode_trees.keys())
+        return min(map(len, self.cell_barcodes))
 
     @property
     def barcode_tree(self) -> PrefixTree:
-        # VisiumHD is weird, with hierarchical barcode lengths
-        # So we have multiple PrefixTrees (one for each length)
-        raise NotImplementedError()
+        # NOTE: VisiumHD is weird, with hierarchical barcode lengths
+        return self._barcode_tree
 
     # Override the search to search all trees
+    @functools.lru_cache(1024)
     def correct_barcode(self, barcode: str, max_mismatches: int) -> tuple[Optional[str], bool]:
         # Note: We assume that the barcode length provided is the max length
         best = None
+        tree = self.barcode_tree
         for length in range(self.max_cell_barcode_length, self.min_cell_barcode_length - 1, -1):
-            res = self._barcode_trees[length].search(barcode[:length], max_mismatches)
+            res = tree.search(barcode[:length], max_mismatches)
             if res is not None:
                 score = res[1]
                 # Short circuit if we have a perfect match (Since we go for longest to shortest this is valid)

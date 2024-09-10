@@ -189,6 +189,7 @@ dependencies = [
     { name = "openpyxl" },
     { name = "pandas" },
     { name = "rapidfuzz" },
+    { name = "sankeyflow" },
     { name = "scipy" },
     { name = "tqdm" },
 ]
@@ -228,6 +229,7 @@ requires-dist = [
     { name = "protobuf", marker = "extra == 'all'", specifier = ">=5.28.0" },
     { name = "protobuf", marker = "extra == 'spatial'", specifier = ">=5.28.0" },
     { name = "rapidfuzz", specifier = ">=3.9.6" },
+    { name = "sankeyflow" },
     { name = "scanpy", marker = "extra == 'all'", specifier = ">=1.9.8" },
     { name = "scanpy", marker = "extra == 'analysis'", specifier = ">=1.9.8" },
     { name = "scipy", specifier = ">=1.14.1" },
@@ -667,6 +669,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/7f/3b/e593d8f0b7bb2c1cb00514552056a4b61000d2d8f4fd24e016fdd2e1afe1/rapidfuzz-3.9.6-cp313-cp313-win32.whl", hash = "sha256:71cc168c305a4445109cd0d4925406f6e66bcb48fde99a1835387c58af4ecfe9", size = 1840420 },
     { url = "https://files.pythonhosted.org/packages/fe/09/d25939dfe7eea5e4a474dfebd60073acd792621d42a9ffe7534627c8ad26/rapidfuzz-3.9.6-cp313-cp313-win_amd64.whl", hash = "sha256:59ee78f2ecd53fef8454909cda7400fe2cfcd820f62b8a5d4dfe930102268054", size = 1645331 },
     { url = "https://files.pythonhosted.org/packages/d8/26/6eda9e43dd5b0833feb4cf9ea0ad4e46b07c4811d8b8815a8517b379c640/rapidfuzz-3.9.6-cp313-cp313-win_arm64.whl", hash = "sha256:58b4ce83f223605c358ae37e7a2d19a41b96aa65b1fede99cc664c9053af89ac", size = 848759 },
+]
+
+[[package]]
+name = "sankeyflow"
+version = "0.3.8"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/4c/5b/248161fd58608730c6ce1db686085afbc55d695e9b9b7e6ce30abb35023f/sankeyflow-0.3.8.tar.gz", hash = "sha256:5415619a0114c3e38a05135ea65aa93210237c6b24c7fdb851e0bf7d6e3ff7d9", size = 23929 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7e/7c/9a81bdf0e815377d99bfe1c4a88ff1dfb46a7b0eb1d84b834c34b4456e08/sankeyflow-0.3.8-py3-none-any.whl", hash = "sha256:c6a6f48806a38458e287b20071b08747e203218dbec44a52db1c65bfb009179e", size = 22479 },
 ]
 
 [[package]]

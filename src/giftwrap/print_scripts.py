@@ -20,6 +20,7 @@ def print_tech():
         description="An example python file for defining a custom technology."
     )
     args = parser.parse_args()  # No args
+    print("from giftwrap import FlexFormatInfo, PrefixTree")
     print(inspect.getsource(FlexFormatInfo), end="")
     exit(0)
 
