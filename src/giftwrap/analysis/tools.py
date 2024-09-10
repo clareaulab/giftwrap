@@ -19,9 +19,19 @@ def collapse_gapfills(adata: ad.AnnData) -> ad.AnnData:
     new_X = np.zeros((adata.shape[0], adata.var["probe"].nunique()))
     new_obs = adata.obs.copy()
     new_var = adata.var.groupby("probe").first().reset_index().drop(columns=["gapfill"]).set_index("probe")
-    for i, probe in enumerate(new_var.index):
-        new_X[:, i] = adata.X[:, adata.var["probe"] == probe].sum(axis=1)
-    return ad.AnnData(X=new_X, obs=new_obs, var=new_var)
+    for i, probe in enumerate(new_var.index.values):
+        new_X[:, i] = adata.X[:, adata.var["probe"] == probe].sum(axis=1).flatten()
+    # Do the same for layers
+    new_layers = dict()
+    for layer in adata.layers.keys():
+        new_X_layer = np.zeros((adata.shape[0], adata.var["probe"].nunique()))
+        for i, probe in enumerate(new_var.index.values):
+            if layer == 'percent_supporting':
+                new_X_layer[:, i] = adata.layers[layer][:, adata.var["probe"] == probe].mean(axis=1).flatten()
+            else:
+                new_X_layer[:, i] = adata.layers[layer][:, adata.var["probe"] == probe].sum(axis=1).flatten()
+        new_layers[layer] = new_X_layer
+    return ad.AnnData(X=new_X, obs=new_obs, var=new_var, layers=new_layers)
 
 
 def intersect_wta(wta_adata: ad.AnnData, gapfill_adata: ad.AnnData) -> (ad.AnnData, ad.AnnData):
