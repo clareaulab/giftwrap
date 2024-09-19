@@ -60,7 +60,7 @@ def process_lines(lines: list[str]) -> tuple[str, bool]:
 
         # If there is only one unique sequence left, write it out
         if len(set(gapfill_seqs)) == 1:
-            return f"{cell_barcode_idx}\t{probe_idx}\t{probe_bc_idx}\t{gapfill_seqs[0]}\t{count}\t{1/count}\n", True
+            return f"{cell_barcode_idx}\t{probe_idx}\t{probe_bc_idx}\t{gapfill_seqs[0]}\t{count}\t{len(gapfill_seqs)/count}\n", True
 
     # Finally, compute the most likely sequence base-by-base
     seq_probs = [dict(A=list(), T=list(), C=list(), G=list()) for _ in range(len(gapfill_seqs[0]))]
