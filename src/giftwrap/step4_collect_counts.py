@@ -173,9 +173,9 @@ def run(output: str, cores: int, overwrite: bool):
     barcodes_df = read_barcodes(output)
     print("Done.")
 
-    # Multiplexed if there is more than one unique number at the end of each barcode
-    bc_ids = barcodes_df.barcode.str.split("-").str[1].unique().tolist()
-    multiplex = len(bc_ids)
+    # Multiplexed if there is more than one unique number plex indicated
+    plexes = barcodes_df.plex.unique().tolist()
+    multiplex = len(plexes) > 1
     # # Detect multiplexed experiment
     # demultiplexed_barcodes = dict()
     # for idx, bc in barcodes.items():
@@ -193,16 +193,16 @@ def run(output: str, cores: int, overwrite: bool):
             pool.starmap(
                 collect_counts,
                 [
-                    (input, output, manifest, barcodes_df[barcodes_df.barcode.str.endswith(f"-{plex}")].copy(), overwrite, plex)
-                    for plex in bc_ids
+                    (input, output, manifest, barcodes_df[barcodes_df.plex == plex].copy(), overwrite, plex)
+                    for plex in plexes
                 ]
             )
-        print(f"Counts data saved as counts.[{','.join(bc_ids)}].h5")
+        print(f"Counts data saved as counts.[{','.join(plexes)}].h5")
     else:
         print("Detected single-plex run.")
         print("Collecting counts...")
         # No need to multithread
-        collect_counts(input, output, manifest, barcodes_df, overwrite, int(bc_ids[0]))
+        collect_counts(input, output, manifest, barcodes_df, overwrite, int(plexes[0]))
         print(f"Counts data saved as counts.1.h5.")
 
     exit(0)

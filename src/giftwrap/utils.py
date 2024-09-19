@@ -398,15 +398,16 @@ class TechnologyFormatInfo(ABC):
         """
         raise NotImplementedError()
 
-    def make_barcode_string(self, cell_barcode: str, plex: int = 1, x_coord: Optional[int] = None, y_coord: Optional[int] = None) -> str:
+    def make_barcode_string(self, cell_barcode: str, plex: int = 1, x_coord: Optional[int] = None, y_coord: Optional[int] = None, is_multiplexed: bool = False) -> str:
         """
         Format a cell barcode into a string.
         :param cell_barcode: The barcode.
         :param plex: The bc index for representing demultiplexed cells.
         :param x_coord: The x coordinate.
         :param y_coord: The y coordinate.
+        :param is_multiplexed: Whether the data is multiplexed.
         """
-        return f"{cell_barcode}-{plex}"
+        return f"{cell_barcode}-{plex}"  # Naive multiplexed barcode
 
     @property
     @functools.lru_cache(maxsize=1)
@@ -468,6 +469,8 @@ class FlexFormatInfo(TechnologyFormatInfo):
                 "ATTCGGTT"
             ]) }
 
+        self._index_to_probe_barcodes = {v: k for k, v in self._probe_barcodes.items()}
+
 
     @property
     def umi_start(self) -> int:
@@ -520,6 +523,11 @@ class FlexFormatInfo(TechnologyFormatInfo):
 
     def probe_barcode_index(self, bc: str):
         return self._probe_barcodes[bc]
+
+    def make_barcode_string(self, cell_barcode: str, plex: int = 1, x_coord: Optional[int] = None, y_coord: Optional[int] = None, is_multiplexed: bool = False) -> str:
+        if is_multiplexed:
+            cell_barcode += self._index_to_probe_barcodes[plex]
+        return f"{cell_barcode}-1"
 
     @property
     def barcode_coordinates(self) -> dict[str, tuple[int, int]]:
@@ -670,7 +678,7 @@ class VisiumHDFormatInfo(TechnologyFormatInfo):
         return False
 
     # Cell barcodes will be the 2um "binned" output
-    def make_barcode_string(self, cell_barcode: str, plex: int = 1, x_coord: Optional[int] = None, y_coord: Optional[int] = None) -> str:
+    def make_barcode_string(self, cell_barcode: str, plex: int = 1, x_coord: Optional[int] = None, y_coord: Optional[int] = None, is_multiplexed: bool = False) -> str:
         return f"s_002um_{x_coord}_{y_coord}-{plex}"
 
     @property
@@ -908,6 +916,9 @@ def filter_h5_file(input_file: Path, output_file: Path, barcodes_list: list[str]
         cell_metadata_grp.create_dataset('columns', data=np.array(obs_meta_df.columns, dtype='S'), compression='gzip')
         for col in obs_meta_df.columns:
             values = obs_meta_df[col].values
+            # If it is not an integer or float, then convert to string
+            if not np.issubdtype(values.dtype, np.number):
+                values = values.astype('S')
             cell_metadata_grp.create_dataset(col, data=values, compression='gzip')
 
         del f.attrs['n_cells']
@@ -968,9 +979,22 @@ def read_h5_file(filename: str) -> ad.AnnData:
 
         # Read the obs metadata
         obs_meta_columns = f['cell_metadata']['columns'][:].astype(str)
-        obs_meta_df = pd.DataFrame({
-            col: (f['cell_metadata'][col][:].astype(str) if col == 'barcode' else f['cell_metadata'][col][:].astype(int)) for col in obs_meta_columns
-        }).set_index('barcode')
+        obs_meta_df = dict()
+        for column in obs_meta_columns:
+            values = f['cell_metadata'][column][:]
+            if column == 'barcode':
+                values = values.astype(str)
+            else:
+                try:
+                    values = values.astype(int)  # Most metadata are ints
+                except:  # If that doesn't work, try string
+                    try:
+                        values = values.astype(str)
+                    except:
+                        values = np.zeros_like(values, dtype=int)  # Give up
+            obs_meta_df[column] = values
+        obs_meta_df = pd.DataFrame(obs_meta_df).set_index("barcode")
+
         obs_df = obs_df.merge(obs_meta_df, on='barcode', how='left')
 
         manifest = pd.DataFrame({
@@ -982,6 +1006,10 @@ def read_h5_file(filename: str) -> ad.AnnData:
         })
         if 'gene' in f['probe_metadata']:
             manifest['gene'] = f['probe_metadata']['gene'][:].astype(str)
+
+        # Check if probe names are unique on the manifest
+        if len(manifest['probe'].unique()) != len(manifest):
+            raise ValueError("Probe names are not unique.")
 
         # Add reference to var_df
         var_df = var_df.merge(manifest, on='probe', how='left')
@@ -1006,55 +1034,55 @@ def read_h5_file(filename: str) -> ad.AnnData:
     return adata
 
 
-def merge_anndatas(adata_expression: ad.AnnData, adata_gapfill: ad.AnnData) -> ad.AnnData:
-    """
-    Merge two AnnData objects. The adata_gapfill should have the same barcodes as the adata_expression.
-    :param adata_expression: The expression data.
-    :param adata_gapfill: The gapfill data.
-    :return: The merged AnnData object.
-    """
-    # This will attempt to merge the two AnnData objects.
-    # Note that they have two completely different sets of vars so we will have to merge them manually by concatenating.
-
-    # First we will concatenate the expression data
-    X = scipy.sparse.hstack([adata_expression.X, adata_gapfill.X])
-    # For each layer, we will concatenate with empty matrices
-    layers = \
-        {k: scipy.sparse.hstack([v, scipy.sparse.csr_matrix((v.shape[0], adata_gapfill.X.shape[1]))]) for k, v in adata_expression.layers.items()} \
-        + {k: scipy.sparse.csr_matrix((adata_gapfill.X.shape[0], v.shape[1])) for k, v in adata_gapfill.layers.items()}
-    # Should be the same cells, so join the obs and fill in with NaNs for missing data
-    obs = pd.merge(adata_expression.obs, adata_gapfill.obs, how='outer', left_index=True, right_index=True)
-    # Concatenate the var data
-    # For each var, concatenate nan for filled in data
-    var = dict()
-    for column in adata_expression.var.columns:
-        var[column] = np.concatenate([adata_expression.var[column].values, np.full(adata_gapfill.X.shape[1], np.nan)])
-    for column in adata_gapfill.var.columns:
-        var[column] = np.concatenate([np.full(adata_expression.X.shape[1], np.nan), adata_gapfill.var[column].values])
-    var = pd.DataFrame(var)
-
-    uns = dict()
-    # Merge the uns data
-    for key in adata_expression.uns.keys():
-        uns[key] = adata_expression.uns[key]
-    for key in adata_gapfill.uns.keys():
-        uns[key] = adata_gapfill.uns[key]
-
-    # There may be varm or obsm data in the expression anndata, so we will have to merge them as well
-    varm = dict()
-    for key in adata_expression.varm.keys():
-        varm[key] = pd.concat([adata_expression.varm[key], pd.DataFrame(index=adata_gapfill.var.index)], axis=0)
-    for key in adata_gapfill.varm.keys():
-        varm[key] = pd.concat([pd.DataFrame(index=adata_expression.var.index), adata_gapfill.varm[key]], axis=0)
-
-    obsm = dict()
-    for key in adata_expression.obsm.keys():
-        obsm[key] = pd.concat([adata_expression.obsm[key], pd.DataFrame(index=adata_gapfill.obs.index)], axis=1)
-    for key in adata_gapfill.obsm.keys():
-        obsm[key] = pd.concat([pd.DataFrame(index=adata_expression.obs.index), adata_gapfill.obsm[key]], axis=1)
-
-    adata = ad.AnnData(X, layers=layers, obs=obs, var=var, uns=uns, varm=varm, obsm=obsm)
-    return adata
+# def merge_anndatas(adata_expression: ad.AnnData, adata_gapfill: ad.AnnData) -> ad.AnnData:
+#     """
+#     Merge two AnnData objects. The adata_gapfill should have the same barcodes as the adata_expression.
+#     :param adata_expression: The expression data.
+#     :param adata_gapfill: The gapfill data.
+#     :return: The merged AnnData object.
+#     """
+#     # This will attempt to merge the two AnnData objects.
+#     # Note that they have two completely different sets of vars so we will have to merge them manually by concatenating.
+#
+#     # First we will concatenate the expression data
+#     X = scipy.sparse.hstack([adata_expression.X, adata_gapfill.X])
+#     # For each layer, we will concatenate with empty matrices
+#     layers = \
+#         {k: scipy.sparse.hstack([v, scipy.sparse.csr_matrix((v.shape[0], adata_gapfill.X.shape[1]))]) for k, v in adata_expression.layers.items()} \
+#         + {k: scipy.sparse.csr_matrix((adata_gapfill.X.shape[0], v.shape[1])) for k, v in adata_gapfill.layers.items()}
+#     # Should be the same cells, so join the obs and fill in with NaNs for missing data
+#     obs = pd.merge(adata_expression.obs, adata_gapfill.obs, how='outer', left_index=True, right_index=True)
+#     # Concatenate the var data
+#     # For each var, concatenate nan for filled in data
+#     var = dict()
+#     for column in adata_expression.var.columns:
+#         var[column] = np.concatenate([adata_expression.var[column].values, np.full(adata_gapfill.X.shape[1], np.nan)])
+#     for column in adata_gapfill.var.columns:
+#         var[column] = np.concatenate([np.full(adata_expression.X.shape[1], np.nan), adata_gapfill.var[column].values])
+#     var = pd.DataFrame(var)
+#
+#     uns = dict()
+#     # Merge the uns data
+#     for key in adata_expression.uns.keys():
+#         uns[key] = adata_expression.uns[key]
+#     for key in adata_gapfill.uns.keys():
+#         uns[key] = adata_gapfill.uns[key]
+#
+#     # There may be varm or obsm data in the expression anndata, so we will have to merge them as well
+#     varm = dict()
+#     for key in adata_expression.varm.keys():
+#         varm[key] = pd.concat([adata_expression.varm[key], pd.DataFrame(index=adata_gapfill.var.index)], axis=0)
+#     for key in adata_gapfill.varm.keys():
+#         varm[key] = pd.concat([pd.DataFrame(index=adata_expression.var.index), adata_gapfill.varm[key]], axis=0)
+#
+#     obsm = dict()
+#     for key in adata_expression.obsm.keys():
+#         obsm[key] = pd.concat([adata_expression.obsm[key], pd.DataFrame(index=adata_gapfill.obs.index)], axis=1)
+#     for key in adata_gapfill.obsm.keys():
+#         obsm[key] = pd.concat([pd.DataFrame(index=adata_expression.obs.index), adata_gapfill.obsm[key]], axis=1)
+#
+#     adata = ad.AnnData(X, layers=layers, obs=obs, var=var, uns=uns, varm=varm, obsm=obsm)
+#     return adata
 
 
 def interpret_phred_letter(quality: str, base: Literal['sanger'] | Literal['illumina'] = 'illumina') -> float:
@@ -1098,3 +1126,51 @@ def generate_permuted_seqs(seq: str, quality: np.array, max_distance: int) -> st
 
     for base_positions in itertools.permutations(quality_indices, max_distance):
         yield from permute_bases(seq, base_positions)
+
+
+# Based on: https://kb.10xgenomics.com/hc/en-us/articles/115003646912-How-is-sequencing-saturation-calculated
+def sequencing_saturation(counts: np.array) -> float:
+    """
+    Sequencing saturation is 1 - (n_deduped_reads / n_reads)
+    where n_deduped_reads is the number of valid cell bc/valid umi/gene combinations
+    and n_reads is the total number of reads with a valid mapping to a valid cell barcode and umi.
+    :param counts: Counts should be the number of reads rather than UMIs.
+    :return: The saturation.
+    """
+    # Number of reads
+    n_reads = counts.sum()
+    # Number of deduped reads
+    n_deduped_reads = (counts > 0).sum()
+    return 1 - (n_deduped_reads / n_reads)
+
+
+def sequence_saturation_curve(full_counts, n_points: int = 1_000) -> np.array:
+    """
+    Compute the sequencing saturation curve.
+    :param full_counts: The cell x feature matrix where each count = # of reads..
+    :param n_points: The number of points to compute the curve at. Note that this is computed on a log scale.
+    :return: The saturation curve.
+    """
+    # Convert to dense
+    if scipy.sparse.issparse(full_counts):
+        full_counts = full_counts.toarray()
+    full_counts = full_counts.astype(int)
+
+    # Compute the subsampled proportion
+    proportions = np.linspace(0.00001, 1, n_points)
+    saturations = np.zeros((n_points,2))
+
+    for i, proportion in enumerate(proportions):
+        # Randomly subsample the data
+        subsampled = np.random.binomial(n=full_counts, p=proportion, size=full_counts.shape)
+
+        # Compute the saturation
+        saturation = sequencing_saturation(subsampled)
+
+        # Compute the mean reads/cell
+        mean_reads_per_cell = subsampled.sum(axis=1).mean()
+
+        saturations[i,0] = mean_reads_per_cell
+        saturations[i,1] = saturation
+
+    return saturations

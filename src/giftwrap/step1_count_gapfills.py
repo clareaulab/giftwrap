@@ -330,9 +330,9 @@ def search_files(read1s, read2s, output_dir, tech_info, cores=1, n_reads_per_bat
     with mp as pool:
         with gzip.open(output_dir / "probe_reads.tsv.gz", 'wt') as f, gzip.open(output_dir / "barcodes.tsv.gz", 'wt') as f2:
             f.write(f"cell_idx\tprobe_idx\tprobe_barcode\tgapfill\tgapfill_quality\tumi\tumi_quality\n")
-            f2.write("barcode")
+            f2.write("barcode\tplex")
             if tech_info.is_spatial:
-                f2.write("in_tissue\tarray_row\tarray_col")
+                f2.write("\tin_tissue\tarray_row\tarray_col")
             f2.write("\n")
 
             job = None
@@ -352,11 +352,11 @@ def search_files(read1s, read2s, output_dir, tech_info, cores=1, n_reads_per_bat
                             probe_bc = tech_info.probe_barcode_index(data.probe_barcode)
                         else:
                             probe_bc = 1
-                        complete_cell_barcode = tech_info.make_barcode_string(data.cell_barcode, probe_bc, data.coordinate_x, data.coordinate_y)
+                        complete_cell_barcode = tech_info.make_barcode_string(data.cell_barcode, probe_bc, data.coordinate_x, data.coordinate_y, tech_info.has_probe_barcode and (multiplex > 1 or barcode > 0))
                         if complete_cell_barcode not in barcodes_encountered:
                             barcode_id = len(barcodes_encountered)
                             barcodes_encountered[complete_cell_barcode] = barcode_id
-                            f2.write(f"{complete_cell_barcode}")  # Record the barcode
+                            f2.write(f"{complete_cell_barcode}\t{probe_bc}")  # Record the barcode
                             if tech_info.is_spatial:
                                 f2.write(f"\t1\t{data.coordinate_x}\t{data.coordinate_y}")
                             f2.write("\n")
@@ -532,6 +532,17 @@ def build_manifest(probes, output: Path, overwrite):
 
     # Filter out non-unique entries
     df = df.drop_duplicates(subset=["lhs_probe", "rhs_probe", "gap_probe_sequence", 'original_gap_probe_sequence'] + ([] if gene_column is None else ["gene"]))
+
+    # If there are duplicated names, add arbitrary suffixes
+    if df.name.nunique() != df.shape[0]:
+        print("Warning: Duplicated probe names found. Adding arbitrary suffixes to make them unique.")
+        name_counts = df.name.value_counts()
+        for name, count in name_counts.items():
+            if count == 1:
+                continue
+            indices = df[df.name == name].index
+            for i, idx in enumerate(indices):
+                df.at[idx, "name"] = f"{name}_{i}"
 
     # Reset the index
     df.reset_index(drop=True, inplace=True)

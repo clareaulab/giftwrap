@@ -4,11 +4,10 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
-import scipy
 from scipy.stats import spearmanr, gaussian_kde
 from sankeyflow import Sankey
 
-from .utils import filter_h5_file, read_h5_file
+from .utils import filter_h5_file, read_h5_file, sequencing_saturation, sequence_saturation_curve
 from .analysis.tools import collapse_gapfills
 
 
@@ -21,53 +20,6 @@ def best_fit(x, y):
     z = np.polyfit(x, y, 1)
     p = np.poly1d(z)
     return p(np.unique(x))
-
-# Based on: https://kb.10xgenomics.com/hc/en-us/articles/115003646912-How-is-sequencing-saturation-calculated
-def sequencing_saturation(counts: np.array) -> float:
-    """
-    Sequencing saturation is 1 - (n_deduped_reads / n_reads)
-    where n_deduped_reads is the number of valid cell bc/valid umi/gene combinations
-    and n_reads is the total number of reads with a valid mapping to a valid cell barcode and umi.
-    :param counts: Counts should be the number of reads rather than UMIs.
-    :return: The saturation.
-    """
-    # Number of reads
-    n_reads = counts.sum()
-    # Number of deduped reads
-    n_deduped_reads = (counts > 0).sum()
-    return 1 - (n_deduped_reads / n_reads)
-
-
-def sequence_saturation_curve(full_counts, n_points: int = 1_000) -> np.array:
-    """
-    Compute the sequencing saturation curve.
-    :param full_counts: The cell x feature matrix where each count = # of reads..
-    :param n_points: The number of points to compute the curve at. Note that this is computed on a log scale.
-    :return: The saturation curve.
-    """
-    # Convert to dense
-    if scipy.sparse.issparse(full_counts):
-        full_counts = full_counts.toarray()
-    full_counts = full_counts.astype(int)
-
-    # Compute the subsampled proportion
-    proportions = np.linspace(0.00001, 1, n_points)
-    saturations = np.zeros((n_points,2))
-
-    for i, proportion in enumerate(proportions):
-        # Randomly subsample the data
-        subsampled = np.random.binomial(n=full_counts, p=proportion, size=full_counts.shape)
-
-        # Compute the saturation
-        saturation = sequencing_saturation(subsampled)
-
-        # Compute the mean reads/cell
-        mean_reads_per_cell = subsampled.sum(axis=1).mean()
-
-        saturations[i,0] = mean_reads_per_cell
-        saturations[i,1] = saturation
-
-    return saturations
 
 
 def make_sankey(fastq_stats: dict, counts_stats: dict) -> Sankey:
@@ -185,7 +137,7 @@ def make_pdf_report(output_file, gapfill_adata, adata):
         saturations = sequence_saturation_curve(collapse_gapfills(gapfill_adata).layers['total_reads'], n_points=1000)
         ax.plot(saturations[:,0], saturations[:,1])
         # Use log10 scale
-        ax.set_xscale("log")
+        # ax.set_xscale("log")
         ax.set_xlabel("Mean reads per cell")
         ax.set_ylabel("Sequencing saturation")
         fig.text(0.5, 0.005,
