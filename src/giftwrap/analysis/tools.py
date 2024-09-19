@@ -78,20 +78,20 @@ def call_genotypes(adata: ad.AnnData,
     mp = maybe_multiprocess(cores)
     genotypes = dict()
     genotypes_p = dict()
-    with mp:
+    with mp as pool:
         for probe in (pbar := tqdm(probes, desc="Genotyping ")):
             pbar.set_postfix_str(f"Probe {probe}...")
             probe_genotypes = adata.var["gapfill"][adata.var["probe"] == probe].values
             gapfill_counts = adata.X[:, adata.var["probe"] == probe].toarray()
-            results = mp.starmap(
+            results = pool.starmap(
                 _genotype_call_job,
                 [(probe_genotypes, counts, threshold) for counts in gapfill_counts]
             )
             genotypes[probe] = [x[0] for x in results]
             genotypes_p[probe] = [x[1] for x in results]
 
-    adata.obsm["genotype"] = pd.DataFrame(genotypes)
-    adata.obsm["genotype_p"] = pd.DataFrame(genotypes_p)
+    adata.obsm["genotype"] = pd.DataFrame(genotypes, index=adata.obs.index)
+    adata.obsm["genotype_p"] = pd.DataFrame(genotypes_p, index=adata.obs.index)
     return adata
 
 

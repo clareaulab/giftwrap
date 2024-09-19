@@ -75,7 +75,7 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
 
         # Save cell metadata
         cell_metadata_grp = output_file.create_group("cell_metadata")
-        cell_metadata_grp.create_dataset("columns", data=np.array(barcodes_df.columns, dtype='S'), compression='gzip')
+        cell_metadata_grp.create_dataset("columns", data=np.array(barcodes_df.columns.values.tolist(), dtype='S'), compression='gzip')
         for col in barcodes_df.columns:
             values = barcodes_df[col].values
             # If it is not an integer or float, then convert to string
