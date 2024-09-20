@@ -152,7 +152,6 @@ def main():
             + (["-r1", read1, "-r2", read2] if project is None else ["--project", project])
             + (['-m', str(multiplex)] if multiplex > 1 else [])
             + (['-b', str(barcode)] if barcode > 1 else [])
-            # + (['-n', "100000"] if technology == "VisiumHD" else []) # If VisiumHD, we should reduce the batch size since it requires more memory to search all the barcodes...
         )
         if returncode != 0:
             print("Error: Failed to count gapfills.", file=sys.stderr)

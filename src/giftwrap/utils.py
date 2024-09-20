@@ -27,13 +27,16 @@ class PrefixTree:
     Note that this supports memory sharing.
     """
 
-    __slots__ = ['_root', '_size']
+    __slots__ = ['_root', '_size', 'allow_indels']
 
-    def __init__(self, contents: list[str]):
+    def __init__(self, contents: list[str], allow_indels: bool = False):
         """
         Initialize the tree with a list of contents.
         :param contents: The list of contents.
+        :param allow_indels: Whether to allow insertions/deletions in the search.
+            Equivalent to edit distance when true, equivalent to hamming distance when false.
         """
+        self.allow_indels = allow_indels
         self._root = dict()
         self._size = 0
         for content in contents:
@@ -69,49 +72,81 @@ class PrefixTree:
             if curr_mismatches >= visited[id(curr_node)]:  # Skip if we have already visited this node with a better score than is possible
                 return None
         # Check for end cases
-        if content_index > len(full_content):
-            return None
         if curr_mismatches > max_mismatches:
             return None
+        if content_index > len(full_content):
+            return None
         remaining_mismatches = max_mismatches - curr_mismatches
+
+        best_score = None
+        best = None
 
         if content_index == len(full_content):  # We reached the end of the content, is there an end of word here?
             if '$' in curr_node:  # This will always be the best match
                 # Add to visited
                 self._insert_if_better(visited, id(curr_node), curr_mismatches)
                 return curr_node['$'], curr_mismatches
-            else:
+            elif not (self.allow_indels and remaining_mismatches <= 0):  # Stop early if we can't insert/delete
                 return None  # We have reached the end of the content and have no more mismatches to spare
 
-        # See if a match exists
-        if full_content[content_index] in curr_node:
-            # Continue the search
-            res = self._search(full_content, curr_node[full_content[content_index]], content_index + 1, max_mismatches, curr_mismatches, visited)
-            if res is not None:
-                self._insert_if_better(visited, id(curr_node), res[1])
-                return res
+        # See if a match exists or perform mismatches if this is not the end of the content
+        if content_index < len(full_content):
+            if full_content[content_index] in curr_node:
+                # Continue the search
+                res = self._search(full_content, curr_node[full_content[content_index]], content_index + 1, max_mismatches, curr_mismatches, visited)
+                if res is not None:
+                    if best_score is None or res[1] < best_score:
+                        best = res
+                        best_score = res[1]
+                    self._insert_if_better(visited, id(curr_node), res[1])
+                    return best
 
-        # No match, try mismatches
-        best = None
-        best_score = None
-        for char in curr_node:
-            if char == full_content[content_index]:  # Ignore already scanned characters
-                continue
-            elif char == '$':  # End of word, but not end of the query. Continue to see if there are other matches
-                continue
-            # Continue the search, but with a mismatch
-            res = self._search(full_content, curr_node[char], content_index + 1, max_mismatches, curr_mismatches + 1, visited)
+            # No match, try mismatches
+            for char in curr_node:
+                if char == full_content[content_index]:  # Ignore already scanned characters
+                    continue
+                elif char == '$':  # End of word, but not end of the query. Continue to see if there are other matches
+                    continue
+                # Continue the search, but with a mismatch
+                res = self._search(full_content, curr_node[char], content_index + 1, max_mismatches, curr_mismatches + 1, visited)
+                if res is not None:
+                    if best is None or res[1] < best_score:
+                        best = res
+                        best_score = res[1]
+                        # Break early if we have a perfect match with this substitution
+                        if best_score == curr_mismatches+1:
+                            break
+
+        if best_score is None or best_score > max_mismatches or (self.allow_indels and (best_score - curr_mismatches) > 1):
+            # No match found, or invalid match found, or the match that was found had more than one mismatch.
+            # Meaning we can theoretically improve the score with indels
+            if not self.allow_indels:
+                return None  # No need to continue if we don't allow indels
+
+            # First test deleting this position
+            res = self._search(full_content, curr_node, content_index + 1, max_mismatches, curr_mismatches + 1, visited)
             if res is not None:
                 if best is None or res[1] < best_score:
                     best = res
                     best_score = res[1]
-                    # Break early if we have a perfect match with this substitution
+                # Break early if we have a perfect match with this deletion
+                if best_score == curr_mismatches+1:
+                    return best
+
+            # Now test inserting a character
+            for char in curr_node:
+                if char == '$':
+                    continue
+                res = self._search(full_content, curr_node[char], content_index, max_mismatches, curr_mismatches + 1, visited)
+                if res is not None:
+                    if best is None or res[1] < best_score:
+                        best = res
+                        best_score = res[1]
+                    # Break early if we have a perfect match with this insertion
                     if best_score == curr_mismatches+1:
-                        break
+                        return best
 
-        if best_score is not None:
-            self._insert_if_better(visited, id(curr_node), best_score)
-
+        self._insert_if_better(visited, id(curr_node), best_score)
         return best
 
     def search(self, content: str, max_mismatches: int) -> Optional[tuple[str, int]]:
@@ -124,6 +159,9 @@ class PrefixTree:
         return None
 
     def _insert_if_better(self, dictionary, key, value):
+        if value is None:
+            return
+
         if key not in dictionary:
             dictionary[key] = value
         elif value < dictionary[key]:
@@ -637,7 +675,8 @@ class VisiumHDFormatInfo(TechnologyFormatInfo):
             slide_def.ParseFromString(f.read())
         # Assemble all possible barcodes
         self._barcode_coordinates = dict()
-        _barcode_tree = PrefixTree([])
+        _barcode_tree = PrefixTree([], allow_indels=True)  # Allow for indels as per 10X:
+        # https://www.10xgenomics.com/support/software/space-ranger/latest/algorithms-overview/gene-expression#:~:text=using%20the%20edit%20distance%2C%20which%20allows%20for%20insertions%2C%20deletions%2C%20and%20substitutions.%20Up%20to%20four%20edits%20are%20permissible%20to%20correct%20a%20barcode%20to%20the%20whitelist.
         for y, bc1 in enumerate(slide_def.two_part.bc1_oligos):
             for x, bc2 in enumerate(slide_def.two_part.bc2_oligos):
                 cell_bc = bc1 + bc2
@@ -1083,6 +1122,17 @@ def read_h5_file(filename: str) -> ad.AnnData:
 #
 #     adata = ad.AnnData(X, layers=layers, obs=obs, var=var, uns=uns, varm=varm, obsm=obsm)
 #     return adata
+
+
+def compute_max_distance(seq_len: int, distance_per_10bp: int) -> int:
+    """
+    Computes the edit distance threshold given a sequence length.
+    :param seq_len: The sequence length.
+    :param distance_per_10bp: The distance per 10 bp.
+    :return: The edit distance threshold. Minimum will be 1bp.
+    """
+    # Round up to the nearest 10bp
+    return max(1, int(np.ceil(seq_len / 10) * distance_per_10bp))
 
 
 def interpret_phred_letter(quality: str, base: Literal['sanger'] | Literal['illumina'] = 'illumina') -> float:

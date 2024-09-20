@@ -18,7 +18,7 @@ import fuzzysearch
 import rapidfuzz
 
 from .utils import maybe_multiprocess, batched, read_manifest, sort_tsv_file, FlexFormatInfo, VisiumHDFormatInfo, \
-    VisiumFormatInfo, TechnologyFormatInfo, phred_string_to_probs
+    VisiumFormatInfo, TechnologyFormatInfo, phred_string_to_probs, compute_max_distance
 
 
 # Enum for possible states
@@ -82,7 +82,7 @@ def process_read(r1, r2,
                 potential_lhs_search_space,
                 lhs_seqs,
                 scorer=rapidfuzz.distance.Levenshtein.distance,
-                score_cutoff=max_distance
+                score_cutoff=compute_max_distance(max_lhs_probe_size, max_distance)
             )
             if potential_match is not None:
                 if best_score is None or potential_match[1] < best_score:
@@ -97,7 +97,7 @@ def process_read(r1, r2,
             match_query,
             lhs_seqs,
             scorer=rapidfuzz.distance.Levenshtein.distance,
-            score_cutoff=max_distance
+            score_cutoff=compute_max_distance(max_lhs_probe_size, max_distance)
         )
 
     if match is None:  # No match found
@@ -119,9 +119,12 @@ def process_read(r1, r2,
         # Search for up to half of the constant sequence
         constant_seq_match = None
         for const_seq_len in range(len(tech_info.constant_sequence), len(tech_info.constant_sequence) // 2 - 1, -1):
-            # The constant sequence may be truncated, so we only set max distance for insertions and substitutions
-            constant_seq_search = fuzzysearch.find_near_matches(tech_info.constant_sequence[:const_seq_len], r2_seq,
-                                                                max_l_dist=max_distance)
+            # The constant sequence may be truncated
+            constant_seq_search = fuzzysearch.find_near_matches(tech_info.constant_sequence[:const_seq_len],
+                                                                r2_seq,
+                                                                max_l_dist=compute_max_distance(const_seq_len, max_distance)
+                                                                )
+
             if len(constant_seq_search) > 0:
                 potential_constant_seq_match = sorted(constant_seq_search, key=lambda x: (x.dist, -x.start))[0]
                 if constant_seq_match is None or potential_constant_seq_match.dist < constant_seq_match.dist:
@@ -144,14 +147,14 @@ def process_read(r1, r2,
 
             if multiplex <= 1:  # Singleplex, so we search for the specified barcode
                 probe_barcode = tech_info.probe_barcodes[barcode-1]
-                if rapidfuzz.distance.Levenshtein.distance(probe_bc_search_space, probe_barcode) > max_distance:
+                if rapidfuzz.distance.Levenshtein.distance(probe_bc_search_space, probe_barcode) > compute_max_distance(len(probe_bc_search_space), max_distance):
                     return [ReadProcessState.TOTAL_READS, ReadProcessState.FILTERED_NO_PROBE_BARCODE], None
             else:  # Multiplexed, so we need to search for the barcode
                 probe_barcode_match = rapidfuzz.process.extractOne(
                     probe_bc_search_space,
                     tech_info.probe_barcodes[:multiplex],
                     scorer=rapidfuzz.distance.Levenshtein.distance,
-                    score_cutoff=max_distance
+                    score_cutoff=compute_max_distance(len(probe_bc_search_space), max_distance)
                 )
                 if probe_barcode_match is None:
                     return [ReadProcessState.TOTAL_READS, ReadProcessState.FILTERED_NO_PROBE_BARCODE], None
@@ -173,7 +176,7 @@ def process_read(r1, r2,
         rhs_match = None
         if tech_info.has_constant_sequence:
             search = fuzzysearch.find_near_matches(rhs_sequence, sequence,
-                                                   max_l_dist=max_distance)
+                                                   max_l_dist=compute_max_distance(len(rhs_sequence), max_distance))
             if len(search) > 0:
                 rhs_match = sorted(search, key=lambda x: (x.dist, -x.start))[0]
         else:  # If these reads have no constant sequence, there is a chance that the RHS is cut off if it is at the end
@@ -182,7 +185,7 @@ def process_read(r1, r2,
                 # Allow for up to 8mer RHS prefix (This matches our 10x flex constant sequence search)
                 for rhs_len in range(max_rhs_length, 7, -1):
                     search = fuzzysearch.find_near_matches(rhs_sequence[:rhs_len], sequence,
-                                                           max_l_dist=max_distance)
+                                                           max_l_dist=compute_max_distance(rhs_len, max_distance))
                     if len(search) == 0:
                         continue
                     search = sorted(search, key=lambda x: (x.dist, -x.start))[0]
@@ -191,7 +194,7 @@ def process_read(r1, r2,
 
             else:  # RHS is not shorter than the read so we should have the full sequence
                 search = fuzzysearch.find_near_matches(rhs_sequence, sequence,
-                                                       max_l_dist=max_distance)
+                                                       max_l_dist=compute_max_distance(len(rhs_sequence), max_distance))
                 if len(search) > 0:
                     rhs_match = sorted(search, key=lambda x: (x.dist, -x.start))[0]
         return rhs_match
@@ -253,7 +256,10 @@ def process_read(r1, r2,
         cell_barcode_quality = r1_quality[tech_info.cell_barcode_start:tech_info.umi_start]
 
     # We have a likely probe. Now we need to correct the barcode
-    was_corrected, cell_barcode = correct_barcode(cell_barcode, np.array(phred_string_to_probs(cell_barcode_quality)), tech_info, max_distance)
+    was_corrected, cell_barcode = correct_barcode(cell_barcode,
+                                                  np.array(phred_string_to_probs(cell_barcode_quality)),
+                                                  tech_info,
+                                                  compute_max_distance(len(cell_barcode), max_distance))
 
     if cell_barcode is None:
         return [ReadProcessState.TOTAL_READS, ReadProcessState.FILTERED_NO_CELL_BARCODE], None
@@ -705,8 +711,8 @@ def main():
     parser.add_argument(
         "-t", '--threshold',
         type=int,
-        default=2,
-        help="The maximum edit distance for fuzzy matching probes and cell barcodes."
+        default=1,
+        help="The maximum edit distance for fuzzy matching probes and cell barcodes per 10bp."
     )
     # Enumerate the technologies supported (Flex or Visium)
     parser.add_argument(

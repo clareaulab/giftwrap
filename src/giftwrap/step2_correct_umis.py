@@ -9,12 +9,13 @@ import numpy as np
 from tqdm import tqdm
 
 from .utils import maybe_multiprocess, batched, maybe_gzip, GzipNamedTemporaryFile, phred_string_to_probs, \
-    permute_bases, generate_permuted_seqs
+    permute_bases, generate_permuted_seqs, compute_max_distance
 
 
 def process_lines(lines: list[str], threshold: int) -> tuple[list[str], int]:
     # First group by name and umi
     probe_umi_to_lines = defaultdict(list)
+    umi_len = 0
     for line in lines:
         line = line.strip()
         if len(line) == 0:
@@ -23,7 +24,11 @@ def process_lines(lines: list[str], threshold: int) -> tuple[list[str], int]:
         probe_id = split[1]
         probe_bc = split[2]
         umi = split[5]
+        umi_len = max(umi_len, len(umi))
         probe_umi_to_lines[(probe_id, probe_bc, umi)].append(split)
+
+    # Compute the threshold
+    threshold = compute_max_distance(umi_len, threshold)
 
     all_valid_umis = defaultdict(set)
     final_lines = []
@@ -190,7 +195,7 @@ def main():
         required=False,
         type=int,
         default=1,
-        help="The edit distance threshold for fuzzy matching. Default is 1."
+        help="The edit distance threshold per 10bp for fuzzy matching. Default is 1."
     )
     parser.add_argument(
         '--cores', '-c',
