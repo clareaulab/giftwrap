@@ -17,7 +17,7 @@ from tqdm import tqdm
 import fuzzysearch
 import rapidfuzz
 
-from .utils import maybe_multiprocess, batched, read_manifest, sort_tsv_file, FlexFormatInfo, VisiumHDFormatInfo, \
+from utils import maybe_multiprocess, batched, read_manifest, sort_tsv_file, FlexFormatInfo, VisiumHDFormatInfo, \
     VisiumFormatInfo, TechnologyFormatInfo, phred_string_to_probs, compute_max_distance
 
 
@@ -45,9 +45,18 @@ def process_reads(reads,
                  max_distance,
                  min_lhs_probe_size, min_rhs_probe_size,
                  max_lhs_probe_size, max_rhs_probe_size,
-                 multiplex, barcode) -> list[tuple[list[ReadProcessState], Optional[ReadData]]]:
+                 multiplex, barcode, allow_indels) -> list[tuple[list[ReadProcessState], Optional[ReadData]]]:
+    if allow_indels:  # If allow indels, levenshtein distance is used
+        def fuzzysearch_fn(subsequence, sequence, dist):
+            return fuzzysearch.find_near_matches(subsequence, sequence, max_l_dist=dist)
+    else:  # If not, we use the hamming distance
+        def fuzzysearch_fn(subsequence, sequence, dist):
+            return fuzzysearch.find_near_matches(subsequence, sequence, max_substitutions=dist, max_insertions=0, max_deletions=0)
+    fuzzysearch_fn = functools.lru_cache(maxsize=len(reads) // 2)(fuzzysearch_fn)
+
     return [process_read(r1, r2, rhs_seqs, lhs_seqs, lhs_seq2potential_rhs_seqs, tech_info, names, max_distance,
-                         min_lhs_probe_size, min_rhs_probe_size, max_lhs_probe_size, max_rhs_probe_size, multiplex, barcode)
+                         min_lhs_probe_size, min_rhs_probe_size, max_lhs_probe_size, max_rhs_probe_size, multiplex,
+                         barcode, fuzzysearch_fn)
             for (r1, r2) in reads]
 
 
@@ -58,7 +67,7 @@ def process_read(r1, r2,
                  max_distance,
                  min_lhs_probe_size, min_rhs_probe_size,
                  max_lhs_probe_size, max_rhs_probe_size,
-                 multiplex, barcode) -> tuple[list[ReadProcessState], Optional[ReadData]]:
+                 multiplex, barcode, fuzzysearch_fn) -> tuple[list[ReadProcessState], Optional[ReadData]]:
     ((r1_title, r1_seq, r1_quality), (r2_title, r2_seq, r2_quality)) = r1, r2
     r1_len = len(r1_seq)
     r2_len = len(r2_seq)
@@ -120,10 +129,8 @@ def process_read(r1, r2,
         constant_seq_match = None
         for const_seq_len in range(len(tech_info.constant_sequence), len(tech_info.constant_sequence) // 2 - 1, -1):
             # The constant sequence may be truncated
-            constant_seq_search = fuzzysearch.find_near_matches(tech_info.constant_sequence[:const_seq_len],
-                                                                r2_seq,
-                                                                max_l_dist=compute_max_distance(const_seq_len, max_distance)
-                                                                )
+            constant_seq_search = fuzzysearch_fn(tech_info.constant_sequence[:const_seq_len],
+                                                 r2_seq, compute_max_distance(const_seq_len, max_distance))
 
             if len(constant_seq_search) > 0:
                 potential_constant_seq_match = sorted(constant_seq_search, key=lambda x: (x.dist, -x.start))[0]
@@ -175,8 +182,7 @@ def process_read(r1, r2,
         # If there is a constant sequence, it was found and therefore we should have the full RHS length
         rhs_match = None
         if tech_info.has_constant_sequence:
-            search = fuzzysearch.find_near_matches(rhs_sequence, sequence,
-                                                   max_l_dist=compute_max_distance(len(rhs_sequence), max_distance))
+            search = fuzzysearch_fn(rhs_sequence, sequence, compute_max_distance(len(rhs_sequence), max_distance))
             if len(search) > 0:
                 rhs_match = sorted(search, key=lambda x: (x.dist, -x.start))[0]
         else:  # If these reads have no constant sequence, there is a chance that the RHS is cut off if it is at the end
@@ -184,8 +190,8 @@ def process_read(r1, r2,
                 max_rhs_length = len(r2_seq)
                 # Allow for up to 8mer RHS prefix (This matches our 10x flex constant sequence search)
                 for rhs_len in range(max_rhs_length, 7, -1):
-                    search = fuzzysearch.find_near_matches(rhs_sequence[:rhs_len], sequence,
-                                                           max_l_dist=compute_max_distance(rhs_len, max_distance))
+                    search = fuzzysearch_fn(rhs_sequence[:rhs_len], sequence,
+                                            compute_max_distance(rhs_len, max_distance))
                     if len(search) == 0:
                         continue
                     search = sorted(search, key=lambda x: (x.dist, -x.start))[0]
@@ -193,8 +199,8 @@ def process_read(r1, r2,
                         rhs_match = search
 
             else:  # RHS is not shorter than the read so we should have the full sequence
-                search = fuzzysearch.find_near_matches(rhs_sequence, sequence,
-                                                       max_l_dist=compute_max_distance(len(rhs_sequence), max_distance))
+                search = fuzzysearch_fn(rhs_sequence, sequence,
+                                        compute_max_distance(len(rhs_sequence), max_distance))
                 if len(search) > 0:
                     rhs_match = sorted(search, key=lambda x: (x.dist, -x.start))[0]
         return rhs_match
@@ -278,7 +284,7 @@ def process_read(r1, r2,
     return states, ReadData(probe_idx, probe_barcode, gapfill_seq, gapfill_quality, cell_barcode, umi, umi_quality, coordinate_x, coordinate_y)
 
 
-def search_files(read1s, read2s, output_dir, tech_info, cores=1, n_reads_per_batch=1_000_000, max_distance=2, multiplex=1, barcode=1):
+def search_files(read1s, read2s, output_dir, tech_info, cores=1, n_reads_per_batch=1_000_000, max_distance=2, multiplex=1, barcode=1, allow_indels=False):
     probes = read_manifest(output_dir)
 
     lhs_seqs = probes['lhs_probe'].tolist()
@@ -388,7 +394,8 @@ def search_files(read1s, read2s, output_dir, tech_info, cores=1, n_reads_per_bat
                                       max_lhs_probe_size=max_lhs_probe_size,
                                       max_rhs_probe_size=max_rhs_probe_size,
                                       multiplex=multiplex,
-                                      barcode=barcode),
+                                      barcode=barcode,
+                                      allow_indels=allow_indels),
                     batch
                 )
                 if last_job is not None:  # Output the previous run, then continue reading the file while the next batch is being processed
@@ -418,13 +425,13 @@ def search_files(read1s, read2s, output_dir, tech_info, cores=1, n_reads_per_bat
     print(f"{total} reads extracted.")
 
 
-@functools.lru_cache(maxsize=1_000)
-def find_exact_match(barcode: str, tech_info: TechnologyFormatInfo) -> Optional[str]:
-    for length, bcs in tech_info.length2barcodes().items():  # We assume this is sorted from largest -> smallest
-        barcode_sub = barcode[:length]
-        if barcode_sub in bcs:
-            return barcode_sub
-    return None
+# @functools.lru_cache(maxsize=1_000)
+# def find_exact_match(barcode: str, tech_info: TechnologyFormatInfo) -> Optional[str]:
+#     for length, bcs in tech_info.length2barcodes().items():  # We assume this is sorted from largest -> smallest
+#         barcode_sub = barcode[:length]
+#         if barcode_sub in bcs:
+#             return barcode_sub
+#     return None
 
 
 def correct_barcode(barcode: str, barcode_quality: np.array, tech_info: TechnologyFormatInfo, max_dist: int) -> tuple[bool, Optional[str]]:
@@ -562,7 +569,7 @@ def build_manifest(probes, output: Path, overwrite):
     print(f"{df.shape[0]} unique probes found.")
 
 
-def run(probes, read1, read2, project, output, cores, n_reads_per_batch, max_distance, technology, tech_df, overwrite, multiplex, barcode, r1_len, r2_len):
+def run(probes, read1, read2, project, output, cores, n_reads_per_batch, max_distance, technology, tech_df, overwrite, multiplex, barcode, r1_len, r2_len, allow_indels):
     if (read1 == read2 == project) and project is None:
         raise AssertionError("At least one of the read1, read2, or project arguments must be provided.")
     assert not (multiplex > 1 and barcode > 1), "Multiplex and barcode arguments are mutually exclusive."
@@ -654,11 +661,11 @@ def run(probes, read1, read2, project, output, cores, n_reads_per_batch, max_dis
             r1_len,
             r2_len
         )
-    print(f"{len(tech_info.cell_barcodes)} cell barcodes found.")
+    print(f"{tech_info.n_barcodes} cell barcodes found.")
 
     build_manifest(probes, output, overwrite)
 
-    search_files(read1s, read2s, output, tech_info, cores=cores, n_reads_per_batch=n_reads_per_batch, max_distance=max_distance, multiplex=multiplex, barcode=barcode)
+    search_files(read1s, read2s, output, tech_info, cores=cores, n_reads_per_batch=n_reads_per_batch, max_distance=max_distance, multiplex=multiplex, barcode=barcode, allow_indels=allow_indels)
     exit(0)
 
 def main():
@@ -765,6 +772,15 @@ def main():
         default=None,
         help="The length of the R2 read. Can optimize the probe mapping speed and accuracy."
     )
+    parser.add_argument(
+        "--allow_indels",
+        required=False,
+        action="store_true",
+        help="Allow indels in the probe error correction. Note that cell barcode correction is based on the technology used."
+    )
+    # Add spaceranger to PATH
+    spaceranger = "/Users/austinv11/PycharmProjects/giftwrap/spaceranger-3.1.1/bin/"
+    os.environ["PATH"] += os.pathsep + spaceranger
 
     args = parser.parse_args()
 
@@ -782,7 +798,8 @@ def main():
          args.multiplex,
          args.barcode,
          args.r1_length,
-         args.r2_length)
+         args.r2_length,
+         args.allow_indels)
 
 if __name__ == '__main__':
     main()

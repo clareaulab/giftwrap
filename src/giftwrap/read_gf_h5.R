@@ -61,8 +61,8 @@ read <- function(file) {
   rownames(counts)   <- barcodes_df$barcode
   colnames(counts) <- features_df$probe_gapfill
 
-  rownames(total_umis)   <- barcodes_df$barcode
-  colnames(total_umis) <- features_df$probe_gapfill
+  rownames(total_reads)   <- barcodes_df$barcode
+  colnames(total_reads) <- features_df$probe_gapfill
 
   rownames(percent_supporting)   <- barcodes_df$barcode
   colnames(percent_supporting) <- features_df$probe_gapfill

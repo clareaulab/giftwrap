@@ -59,21 +59,21 @@ def make_sankey(fastq_stats: dict, counts_stats: dict) -> Sankey:
         ("Mapped Reads", "Total Cells", counts_stats.get("TOTAL_CELLS", 0))
     ]
 
-    # Prune any zeros
-    for node in nodes:
-        to_remove = []
-        for i, (name, value) in enumerate(node):
-            if value == 0:
-                to_remove.append(i)
-        for i in to_remove[::-1]:
-            node.pop(i)
-
-    to_remove = []
-    for i, flow in enumerate(flows):
-        if flow[1] not in [n[0] for n in nodes[-1]] or flow[2] == 0:
-            to_remove.append(i)
-    for i in to_remove[::-1]:
-        flows.pop(i)
+    # # Prune any zeros
+    # for node in nodes:
+    #     to_remove = []
+    #     for i, (name, value) in enumerate(node):
+    #         if value == 0:
+    #             to_remove.append(i)
+    #     for i in to_remove[::-1]:
+    #         node.pop(i)
+    #
+    # to_remove = []
+    # for i, flow in enumerate(flows):
+    #     if flow[1] not in [n[0] for n in nodes[-1]] or flow[2] == 0:
+    #         to_remove.append(i)
+    # for i in to_remove[::-1]:
+    #     flows.pop(i)
 
     return Sankey(flows=flows, nodes=nodes)
 

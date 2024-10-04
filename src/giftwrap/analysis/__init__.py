@@ -1,3 +1,3 @@
-from . import preprocess, plots, tools
+from . import preprocess, plots, tools, spatial
 
-__all__ = ['preprocess', 'plots', 'tools']
+__all__ = ['preprocess', 'plots', 'tools', 'spatial']

@@ -133,6 +133,15 @@ wheels = [
 ]
 
 [[package]]
+name = "diskcache"
+version = "5.6.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/3f/21/1c1ffc1a039ddcc459db43cc108658f32c57d271d7289a2794e401d0fdb6/diskcache-5.6.3.tar.gz", hash = "sha256:2c3a3fa2743d8535d832ec61c2054a1641f41775aa7c556758a109941e33e4fc", size = 67916 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3f/27/4570e78fc0bf5ea0ca45eb1de3818a23787af9b390c0b0a0033a1b8236f9/diskcache-5.6.3-py3-none-any.whl", hash = "sha256:5e31b2d5fbad117cc363ebaf6b689474db18a1f6438bc82358b024abd4c2ca19", size = 45550 },
+]
+
+[[package]]
 name = "et-xmlfile"
 version = "1.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -182,6 +191,7 @@ source = { editable = "." }
 dependencies = [
     { name = "anndata" },
     { name = "biopython" },
+    { name = "diskcache" },
     { name = "fuzzysearch" },
     { name = "h5py" },
     { name = "matplotlib" },
@@ -215,6 +225,7 @@ spatial = [
 requires-dist = [
     { name = "anndata", specifier = ">=0.10.9" },
     { name = "biopython", specifier = ">=1.84" },
+    { name = "diskcache", specifier = ">=5.6.3" },
     { name = "fuzzysearch", specifier = ">=0.7.3" },
     { name = "h5py", specifier = ">=3.11.0" },
     { name = "igraph", marker = "extra == 'all'", specifier = ">=0.11.6" },
@@ -229,7 +240,7 @@ requires-dist = [
     { name = "protobuf", marker = "extra == 'all'", specifier = ">=5.28.0" },
     { name = "protobuf", marker = "extra == 'spatial'", specifier = ">=5.28.0" },
     { name = "rapidfuzz", specifier = ">=3.9.6" },
-    { name = "sankeyflow" },
+    { name = "sankeyflow", specifier = ">=0.3.9" },
     { name = "scanpy", marker = "extra == 'all'", specifier = ">=1.9.8" },
     { name = "scanpy", marker = "extra == 'analysis'", specifier = ">=1.9.8" },
     { name = "scipy", specifier = ">=1.14.1" },
@@ -673,11 +684,11 @@ wheels = [
 
 [[package]]
 name = "sankeyflow"
-version = "0.3.8"
+version = "0.3.9"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/4c/5b/248161fd58608730c6ce1db686085afbc55d695e9b9b7e6ce30abb35023f/sankeyflow-0.3.8.tar.gz", hash = "sha256:5415619a0114c3e38a05135ea65aa93210237c6b24c7fdb851e0bf7d6e3ff7d9", size = 23929 }
+sdist = { url = "https://files.pythonhosted.org/packages/3a/74/29101d2693f5d40143f4b4f680eeec69b924ff424d806938a85a77ebe39f/sankeyflow-0.3.9.tar.gz", hash = "sha256:34eae71cb941bd1b9233a891439634e23176c0458a460cfd2099f1c8eb8e73ef", size = 24129 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7e/7c/9a81bdf0e815377d99bfe1c4a88ff1dfb46a7b0eb1d84b834c34b4456e08/sankeyflow-0.3.8-py3-none-any.whl", hash = "sha256:c6a6f48806a38458e287b20071b08747e203218dbec44a52db1c65bfb009179e", size = 22479 },
+    { url = "https://files.pythonhosted.org/packages/fe/56/56a7045b9ca72af3a1f5e085e3f7ad82760b7088b81454a869a31239c046/sankeyflow-0.3.9-py3-none-any.whl", hash = "sha256:01b0254dd2d4297498054246cd718181c945d4a73d48d1c3722a2214c3f81640", size = 22687 },
 ]
 
 [[package]]

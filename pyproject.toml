@@ -5,6 +5,7 @@ description = "Tools to quantify GIFT-seq datasets."
 readme = "README.md"
 authors = [
     {name = "Austin A. Varela", email = "aav4003@med.cornell.edu"},
+    {name = "Caleb A. Lareau", email = "lareauc@mskcc.org"}
 ]
 license = {text = "MIT License"}
 classifiers = [
@@ -30,7 +31,8 @@ dependencies = [
     "anndata>=0.10.9",
     "matplotlib>=3.9.2",
     "openpyxl>=3.1.5",
-    "sankeyflow>=0.3.8",
+    "sankeyflow>=0.3.9",
+    "diskcache>=5.6.3",
 ]
 
 [project.urls]
