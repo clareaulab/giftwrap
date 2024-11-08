@@ -113,6 +113,12 @@ def main():
         required=False,
         help="Overwrite the output directory if it already exists."
     )
+    parser.add_argument(
+        "--skip_constant_seq",
+        required=False,
+        action="store_true",
+        help="If the technology (i.e. Flex) has a constant sequence in the probe design, do not filter reads for missing it. This is useful for reads that are too short to capture the full probes."
+    )
 
     args = parser.parse_args()
 
@@ -128,6 +134,7 @@ def main():
     tech_def = args.tech_def
     cellranger_output = args.cellranger_output
     overwrite = args.overwrite
+    skip_constant_seq = args.skip_constant_seq
 
 
     print("Gapfill counts pipeline started.")
@@ -152,6 +159,7 @@ def main():
             + (["-r1", read1, "-r2", read2] if project is None else ["--project", project])
             + (['-m', str(multiplex)] if multiplex > 1 else [])
             + (['-b', str(barcode)] if barcode > 1 else [])
+            + (['--skip_constant_seq'] if skip_constant_seq else [])
         )
         if returncode != 0:
             print("Error: Failed to count gapfills.", file=sys.stderr)

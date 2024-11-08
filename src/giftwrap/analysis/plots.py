@@ -135,17 +135,17 @@ def tsne(adata: ad.AnnData, genotype: str, **kwargs):
     if genotype not in adata.obsm['genotype'].columns:
         raise ValueError(f"Genotype {genotype} not found in adata.")
 
-    if 'genotype' in adata.obs or 'genotype_p' in adata.obs:
-        print("Warning: Overwriting existing genotype and genotype_p columns in adata.obs.")
+    if 'genotype' in adata.obs or 'genotype_proportion' in adata.obs:
+        print("Warning: Overwriting existing genotype and genotype_proportion columns in adata.obs.")
 
     # Add fake obs columns so that we may plot the genotype and its probability
     adata.obs['genotype'] = adata.obsm['genotype'][genotype]
-    adata.obs['genotype_p'] = adata.obsm['genotype_p'][genotype]
+    adata.obs['genotype_proportion'] = adata.obsm['genotype_proportion'][genotype]
 
-    return_val = sc.pl.tsne(adata, color=['genotype', 'genotype_p'], **kwargs)
+    return_val = sc.pl.tsne(adata, color=['genotype', 'genotype_proportion'], **kwargs)
 
     # Drop the fake columns
-    adata.obs.drop(columns=['genotype', 'genotype_p'], inplace=True)
+    adata.obs.drop(columns=['genotype', 'genotype_proportion'], inplace=True)
 
     return return_val
 
@@ -163,16 +163,16 @@ def umap(adata: ad.AnnData, genotype: str, **kwargs):
     if genotype not in adata.obsm['genotype'].columns:
         raise ValueError(f"Genotype {genotype} not found in adata.")
 
-    if 'genotype' in adata.obs or 'genotype_p' in adata.obs:
-        print("Warning: Overwriting existing genotype and genotype_p columns in adata.obs.")
+    if 'genotype' in adata.obs or 'genotype_proportion' in adata.obs:
+        print("Warning: Overwriting existing genotype and genotype_proportion columns in adata.obs.")
 
     # Add fake obs columns so that we may plot the genotype and its probability
     adata.obs['genotype'] = adata.obsm['genotype'][genotype]
-    adata.obs['genotype_p'] = adata.obsm['genotype_p'][genotype]
+    adata.obs['genotype_proportion'] = adata.obsm['genotype_proportion'][genotype]
 
-    return_val = sc.pl.umap(adata, color=['genotype', 'genotype_p'], **kwargs)
+    return_val = sc.pl.umap(adata, color=['genotype', 'genotype_proportion'], **kwargs)
 
     # Drop the fake columns
-    adata.obs.drop(columns=['genotype', 'genotype_p'], inplace=True)
+    adata.obs.drop(columns=['genotype', 'genotype_proportion'], inplace=True)
 
     return return_val

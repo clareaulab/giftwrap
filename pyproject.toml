@@ -67,8 +67,10 @@ giftwrap-correct-umis = "giftwrap.step2_correct_umis:main"
 giftwrap-correct-gapfill = "giftwrap.step3_correct_gapfill:main"
 giftwrap-collect = "giftwrap.step4_collect_counts:main"
 giftwrap-summarize = "giftwrap.step5_summarize_counts:main"
-giftwrap-generate-r = "giftwrap.print_scripts:print_R"
-giftwrap-generate-tech = "giftwrap.print_scripts:print_tech"
+giftwrap-generate-r = "giftwrap.misc_scripts:print_R"
+giftwrap-generate-tech = "giftwrap.misc_scripts:print_tech"
+giftwrap-convert-probes = "giftwrap.misc_scripts:convert_probes"
+giftwrap-diagnostic = "giftwrap.basic_counts:main"
 
 [build-system]
 requires = ["hatchling"]

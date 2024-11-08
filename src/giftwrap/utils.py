@@ -19,6 +19,7 @@ import h5py
 import anndata as ad
 import scipy
 import diskcache as dc
+from Bio.SeqIO.QualityIO import FastqGeneralIterator
 
 
 class PrefixTree:
@@ -760,6 +761,7 @@ class VisiumFormatInfo(TechnologyFormatInfo):
 class VisiumHDFormatInfo(TechnologyFormatInfo):
 
     def __init__(self,
+                 space_ranger_path: Optional[str] = None,
                  barcode_dir: Optional[str] = None,
                  read1_length: Optional[int] = 43,
                  read2_length: Optional[int] = 50):
@@ -769,8 +771,11 @@ class VisiumHDFormatInfo(TechnologyFormatInfo):
         import importlib
         import sys
         # Find spaceranger
-        spaceranger = shutil.which("spaceranger")
-        if not spaceranger:
+        if not space_ranger_path:
+            spaceranger = shutil.which("spaceranger")
+        else:
+            spaceranger = space_ranger_path
+        if not spaceranger or not os.path.exists(spaceranger):
             raise FileNotFoundError("spaceranger not found on PATH.")
         spaceranger_path = Path(spaceranger)
         # Import the protobuf schema
@@ -1337,3 +1342,80 @@ def sequence_saturation_curve(full_counts, n_points: int = 1_000) -> np.array:
         saturations[i,1] = saturation
 
     return saturations
+
+
+def read_probes_input(probes: str) -> pd.DataFrame:
+    # Parse the probes file
+    if probes.endswith(".csv"):
+        df = pd.read_csv(probes)
+    elif probes.endswith(".xlsx"):
+        df = pd.read_excel(probes)
+    else:
+        df = pd.read_table(probes)
+    # Normalize the column names to be lowercase
+    df.columns = df.columns.str.lower()
+    if 'gap_probe_sequence' not in df.columns:
+        df['gap_probe_sequence'] = "NA"
+    if 'original_gap_probe_sequence' not in df.columns:
+        df['original_gap_probe_sequence'] = "NA"
+    gene_column = None
+    # Check if there is a gene name column
+    if 'gene' in df.columns:
+        gene_column = 'gene'
+    elif 'GENE' in df.columns:
+        gene_column = 'GENE'
+    elif 'symbol' in df.columns:
+        gene_column = 'symbol'
+    elif 'SYMBOL' in df.columns:
+        gene_column = 'SYMBOL'
+    elif 'gene_name' in df.columns:
+        gene_column = 'gene_name'
+    elif 'GENE_NAME' in df.columns:
+        gene_column = 'GENE_NAME'
+    elif 'gene_symbol' in df.columns:
+        gene_column = 'gene_symbol'
+    elif 'GENE_SYMBOL' in df.columns:
+        gene_column = 'GENE_SYMBOL'
+    # Rename the gene column to a standard name
+    if gene_column is not None:
+        df.rename(columns={gene_column: "gene"}, inplace=True)
+    # Define the manifest with all data needed for downstream processing
+    df = df[["name", "lhs_probe", "rhs_probe", "gap_probe_sequence", 'original_gap_probe_sequence'] + (
+        [] if gene_column is None else ["gene"])]
+    # Filter out non-unique entries
+    df = df.drop_duplicates(subset=["lhs_probe", "rhs_probe", "gap_probe_sequence", 'original_gap_probe_sequence'] + (
+        [] if gene_column is None else ["gene"]))
+    # If there are duplicated names, add arbitrary suffixes
+    if df.name.nunique() != df.shape[0]:
+        print("Warning: Duplicated probe names found. Adding arbitrary suffixes to make them unique.")
+        name_counts = df.name.value_counts()
+        for name, count in name_counts.items():
+            if count == 1:
+                continue
+            indices = df[df.name == name].index
+            for i, idx in enumerate(indices):
+                df.at[idx, "name"] = f"{name}_{i}"
+    # Reset the index
+    df.reset_index(drop=True, inplace=True)
+    # Create an index column
+    df["index"] = df.index
+    return df
+
+
+def read_fastqs(read1s, read2s):
+    r1_to_chain = []
+    r2_to_chain = []
+    for r1, r2 in zip(read1s, read2s):
+        if r1.endswith(".gz"):
+            read1_iterator = FastqGeneralIterator(gzip.open(r1, 'rt'))
+        else:
+            read1_iterator = FastqGeneralIterator(open(r1, 'r'))
+        if r2.endswith(".gz"):
+            read2_iterator = FastqGeneralIterator(gzip.open(r2, 'rt'))
+        else:
+            read2_iterator = FastqGeneralIterator(open(r2, 'r'))
+        r1_to_chain.append(read1_iterator)
+        r2_to_chain.append(read2_iterator)
+    read1_iterator = itertools.chain(*r1_to_chain)
+    read2_iterator = itertools.chain(*r2_to_chain)
+    return read1_iterator, read2_iterator

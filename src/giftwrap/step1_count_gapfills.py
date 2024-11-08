@@ -1,6 +1,5 @@
 import argparse
 import functools
-import itertools
 import os
 import os.path as osp
 import gzip
@@ -11,14 +10,12 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
-import pandas as pd
-from Bio.SeqIO.QualityIO import FastqGeneralIterator
 from tqdm import tqdm
 import fuzzysearch
 import rapidfuzz
 
-from utils import maybe_multiprocess, batched, read_manifest, sort_tsv_file, FlexFormatInfo, VisiumHDFormatInfo, \
-    VisiumFormatInfo, TechnologyFormatInfo, phred_string_to_probs, compute_max_distance
+from .utils import maybe_multiprocess, batched, read_manifest, sort_tsv_file, FlexFormatInfo, VisiumHDFormatInfo, \
+    VisiumFormatInfo, TechnologyFormatInfo, phred_string_to_probs, compute_max_distance, read_probes_input, read_fastqs
 
 
 # Enum for possible states
@@ -45,7 +42,8 @@ def process_reads(reads,
                  max_distance,
                  min_lhs_probe_size, min_rhs_probe_size,
                  max_lhs_probe_size, max_rhs_probe_size,
-                 multiplex, barcode, allow_indels) -> list[tuple[list[ReadProcessState], Optional[ReadData]]]:
+                 multiplex, barcode, allow_indels,
+                  skip_constant_seq) -> list[tuple[list[ReadProcessState], Optional[ReadData]]]:
     if allow_indels:  # If allow indels, levenshtein distance is used
         def fuzzysearch_fn(subsequence, sequence, dist):
             return fuzzysearch.find_near_matches(subsequence, sequence, max_l_dist=dist)
@@ -56,7 +54,7 @@ def process_reads(reads,
 
     return [process_read(r1, r2, rhs_seqs, lhs_seqs, lhs_seq2potential_rhs_seqs, tech_info, names, max_distance,
                          min_lhs_probe_size, min_rhs_probe_size, max_lhs_probe_size, max_rhs_probe_size, multiplex,
-                         barcode, fuzzysearch_fn)
+                         barcode, skip_constant_seq, fuzzysearch_fn)
             for (r1, r2) in reads]
 
 
@@ -67,7 +65,8 @@ def process_read(r1, r2,
                  max_distance,
                  min_lhs_probe_size, min_rhs_probe_size,
                  max_lhs_probe_size, max_rhs_probe_size,
-                 multiplex, barcode, fuzzysearch_fn) -> tuple[list[ReadProcessState], Optional[ReadData]]:
+                 multiplex, barcode, skip_constant_seq,
+                 fuzzysearch_fn) -> tuple[list[ReadProcessState], Optional[ReadData]]:
     ((r1_title, r1_seq, r1_quality), (r2_title, r2_seq, r2_quality)) = r1, r2
     r1_len = len(r1_seq)
     r2_len = len(r2_seq)
@@ -138,16 +137,24 @@ def process_read(r1, r2,
                     constant_seq_match = potential_constant_seq_match
 
         if constant_seq_match is None:  # No matches, short circuit
-            return [ReadProcessState.TOTAL_READS, ReadProcessState.FILTERED_NO_CONSTANT], None
+            if skip_constant_seq:
+                # If we are skipping the constant seq, we will just assume the constant seq is not present
+                rhs_end = len(r2_seq)
+                constant_end = -1
+                has_constant_seq = False
+            else:
+                return [ReadProcessState.TOTAL_READS, ReadProcessState.FILTERED_NO_CONSTANT], None
+        else:
+            has_constant_seq = True
+            # If the gap is too long, the constant seq may be cut off. So we will fuzzy match the first N bases of the
+            # constant seq against the match to get the final distance
+            rhs_end = constant_seq_match.start
+            constant_end = constant_seq_match.end
 
-        # If the gap is too long, the constant seq may be cut off. So we will fuzzy match the first N bases of the
-        # constant seq against the match to get the final distance
-        rhs_end = constant_seq_match.start
-        constant_end = constant_seq_match.end
 
         # Next, if the run is multiplexed or the probe barcode is specified
         # We will need to search for the probe barcode
-        if tech_info.has_probe_barcode and (multiplex > 1 or barcode > 0):
+        if has_constant_seq and tech_info.has_probe_barcode and (multiplex > 1 or barcode > 0):
             probe_bc_search_space = r2_seq[constant_end + tech_info.probe_barcode_start:constant_end + tech_info.probe_barcode_start + tech_info.probe_barcode_length]
             if len(probe_bc_search_space) == 0:  # Short circuit
                 return [ReadProcessState.TOTAL_READS, ReadProcessState.FILTERED_NO_PROBE_BARCODE], None
@@ -284,7 +291,9 @@ def process_read(r1, r2,
     return states, ReadData(probe_idx, probe_barcode, gapfill_seq, gapfill_quality, cell_barcode, umi, umi_quality, coordinate_x, coordinate_y)
 
 
-def search_files(read1s, read2s, output_dir, tech_info, cores=1, n_reads_per_batch=1_000_000, max_distance=2, multiplex=1, barcode=1, allow_indels=False):
+def search_files(read1s, read2s, output_dir, tech_info,
+                 cores=1, n_reads_per_batch=1_000_000, max_distance=2,
+                 multiplex=1, barcode=1, allow_indels=False, skip_constant_seq=False):
     probes = read_manifest(output_dir)
 
     lhs_seqs = probes['lhs_probe'].tolist()
@@ -310,21 +319,7 @@ def search_files(read1s, read2s, output_dir, tech_info, cores=1, n_reads_per_bat
     min_lhs_probe_size = min(len(lhs) for lhs in lhs_seqs)
     min_rhs_probe_size = min(len(rhs) for rhs in rhs_seqs)
 
-    r1_to_chain = []
-    r2_to_chain = []
-    for r1, r2 in zip(read1s, read2s):
-        if r1.endswith(".gz"):
-            read1_iterator = FastqGeneralIterator(gzip.open(r1, 'rt'))
-        else:
-            read1_iterator = FastqGeneralIterator(open(r1, 'r'))
-        if r2.endswith(".gz"):
-            read2_iterator = FastqGeneralIterator(gzip.open(r2, 'rt'))
-        else:
-            read2_iterator = FastqGeneralIterator(open(r2, 'r'))
-        r1_to_chain.append(read1_iterator)
-        r2_to_chain.append(read2_iterator)
-    read1_iterator = itertools.chain(*r1_to_chain)
-    read2_iterator = itertools.chain(*r2_to_chain)
+    read1_iterator, read2_iterator = read_fastqs(read1s, read2s)
 
     # Note we have to map to tuple because starmap expects tuple inputs
     n_jobs = max(cores, 1)
@@ -395,7 +390,8 @@ def search_files(read1s, read2s, output_dir, tech_info, cores=1, n_reads_per_bat
                                       max_rhs_probe_size=max_rhs_probe_size,
                                       multiplex=multiplex,
                                       barcode=barcode,
-                                      allow_indels=allow_indels),
+                                      allow_indels=allow_indels,
+                                      skip_constant_seq=skip_constant_seq),
                     batch
                 )
                 if last_job is not None:  # Output the previous run, then continue reading the file while the next batch is being processed
@@ -500,68 +496,7 @@ def build_manifest(probes, output: Path, overwrite):
             raise AssertionError(f"Output directory already exists: {output}")
     output.mkdir(parents=True, exist_ok=overwrite)
 
-    # Parse the probes file
-    if probes.endswith(".csv"):
-        df = pd.read_csv(probes)
-    elif probes.endswith(".xlsx"):
-        df = pd.read_excel(probes)
-    else:
-        df = pd.read_table(probes)
-
-    # Normalize the column names to be lowercase
-    df.columns = df.columns.str.lower()
-
-    if 'gap_probe_sequence' not in df.columns:
-        df['gap_probe_sequence'] = "NA"
-
-    if 'original_gap_probe_sequence' not in df.columns:
-        df['original_gap_probe_sequence'] = "NA"
-
-    gene_column = None
-    # Check if there is a gene name column
-    if 'gene' in df.columns:
-        gene_column = 'gene'
-    elif 'GENE' in df.columns:
-        gene_column = 'GENE'
-    elif 'symbol' in df.columns:
-        gene_column = 'symbol'
-    elif 'SYMBOL' in df.columns:
-        gene_column = 'SYMBOL'
-    elif 'gene_name' in df.columns:
-        gene_column = 'gene_name'
-    elif 'GENE_NAME' in df.columns:
-        gene_column = 'GENE_NAME'
-    elif 'gene_symbol' in df.columns:
-        gene_column = 'gene_symbol'
-    elif 'GENE_SYMBOL' in df.columns:
-        gene_column = 'GENE_SYMBOL'
-
-    # Rename the gene column to a standard name
-    if gene_column is not None:
-        df.rename(columns={gene_column: "gene"}, inplace=True)
-
-    # Define the manifest with all data needed for downstream processing
-    df = df[["name", "lhs_probe", "rhs_probe", "gap_probe_sequence", 'original_gap_probe_sequence'] + ([] if gene_column is None else ["gene"])]
-
-    # Filter out non-unique entries
-    df = df.drop_duplicates(subset=["lhs_probe", "rhs_probe", "gap_probe_sequence", 'original_gap_probe_sequence'] + ([] if gene_column is None else ["gene"]))
-
-    # If there are duplicated names, add arbitrary suffixes
-    if df.name.nunique() != df.shape[0]:
-        print("Warning: Duplicated probe names found. Adding arbitrary suffixes to make them unique.")
-        name_counts = df.name.value_counts()
-        for name, count in name_counts.items():
-            if count == 1:
-                continue
-            indices = df[df.name == name].index
-            for i, idx in enumerate(indices):
-                df.at[idx, "name"] = f"{name}_{i}"
-
-    # Reset the index
-    df.reset_index(drop=True, inplace=True)
-
-    # Create an index column
-    df["index"] = df.index
+    df = read_probes_input(probes)
 
     # Write the manifest to the output directory
     df.to_csv(output / "manifest.tsv", index=False, sep="\t")
@@ -569,10 +504,11 @@ def build_manifest(probes, output: Path, overwrite):
     print(f"{df.shape[0]} unique probes found.")
 
 
-def run(probes, read1, read2, project, output, cores, n_reads_per_batch, max_distance, technology, tech_df, overwrite, multiplex, barcode, r1_len, r2_len, allow_indels):
+def run(probes, read1, read2, project, output, cores, n_reads_per_batch, max_distance, technology, tech_df, overwrite, multiplex, barcode, r1_len, r2_len, allow_indels, skip_constant_seq):
     if (read1 == read2 == project) and project is None:
         raise AssertionError("At least one of the read1, read2, or project arguments must be provided.")
     assert not (multiplex > 1 and barcode > 1), "Multiplex and barcode arguments are mutually exclusive."
+    assert (not skip_constant_seq) or (multiplex < 2 and barcode < 2), "Skipping the constant sequence is only valid for singleplex sequencing."
 
     print("Searching for fastq files...", end="")
     if project is not None:
@@ -665,8 +601,11 @@ def run(probes, read1, read2, project, output, cores, n_reads_per_batch, max_dis
 
     build_manifest(probes, output, overwrite)
 
-    search_files(read1s, read2s, output, tech_info, cores=cores, n_reads_per_batch=n_reads_per_batch, max_distance=max_distance, multiplex=multiplex, barcode=barcode, allow_indels=allow_indels)
+    search_files(read1s, read2s, output, tech_info,
+                 cores=cores, n_reads_per_batch=n_reads_per_batch, max_distance=max_distance,
+                 multiplex=multiplex, barcode=barcode, allow_indels=allow_indels, skip_constant_seq=skip_constant_seq)
     exit(0)
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -778,9 +717,12 @@ def main():
         action="store_true",
         help="Allow indels in the probe error correction. Note that cell barcode correction is based on the technology used."
     )
-    # Add spaceranger to PATH
-    spaceranger = "/Users/austinv11/PycharmProjects/giftwrap/spaceranger-3.1.1/bin/"
-    os.environ["PATH"] += os.pathsep + spaceranger
+    parser.add_argument(
+        "--skip_constant_seq",
+        required=False,
+        action="store_true",
+        help="If the technology (i.e. Flex) has a constant sequence in the probe design, do not filter reads for missing it. This is useful for reads that are too short to capture the full probes."
+    )
 
     args = parser.parse_args()
 
@@ -799,7 +741,9 @@ def main():
          args.barcode,
          args.r1_length,
          args.r2_length,
-         args.allow_indels)
+         args.allow_indels,
+         args.skip_constant_seq)
+
 
 if __name__ == '__main__':
     main()

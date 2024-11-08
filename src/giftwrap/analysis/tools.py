@@ -46,12 +46,16 @@ def intersect_wta(wta_adata: ad.AnnData, gapfill_adata: ad.AnnData) -> (ad.AnnDa
 
 
 def call_genotypes(adata: ad.AnnData,
+                   flavor: str = "basic",
                    threshold: float = 0.66,
                    cores: int = 1) -> ad.AnnData:
     """
-    Adds a "genotype" obsm to the AnnData object that contains the genotype calls for each cell and a "genotype_p" obsm
+    Adds a "genotype" obsm to the AnnData object that contains the genotype calls for each cell, a "genotype_counts"
+    obsm that contains the number of UMIs supporting the called genotype, and a "genotype_p" obsm
     that contains the cumulative fraction of UMIs for the called genotype.
-    The algorithm is extremely basic, and computes genotypes as follows:
+
+    The 'basic' flavor of the algorithm simply accumulates variants until a certain umi cumulative
+    proportion is reached. This is useful for calling genotypes in a simple and fast manner and is defined as follows:
 
     For each cell:
         For each probe:
@@ -64,10 +68,14 @@ def call_genotypes(adata: ad.AnnData,
                 Return this combination as the genotype sorted and joined by "/".
 
     :param adata: The AnnData object containing the gapfills.
+    :param flavor: The flavor of genotyping to use.
     :param threshold: The minimum cumulative fraction of UMIs to call a genotype.
     :param cores: The number of cores to use for parallel processing. If <1, uses all available cores.
     :return: The same, AnnData object with the genotype calls added.
     """
+    available_flavors = ("basic",)
+    assert flavor in available_flavors, f"Flavor {flavor} not recognized. Available flavors: {available_flavors}."
+
     if cores < 1:
         cores = os.cpu_count()
     elif cores == 1:
@@ -78,6 +86,7 @@ def call_genotypes(adata: ad.AnnData,
     mp = maybe_multiprocess(cores)
     genotypes = dict()
     genotypes_p = dict()
+    genotypes_counts = dict()
     with mp as pool:
         for probe in (pbar := tqdm(probes, desc="Genotyping ")):
             pbar.set_postfix_str(f"Probe {probe}...")
@@ -87,11 +96,14 @@ def call_genotypes(adata: ad.AnnData,
                 _genotype_call_job,
                 [(probe_genotypes, counts, threshold) for counts in gapfill_counts]
             )
-            genotypes[probe] = [x[0] for x in results]
-            genotypes_p[probe] = [x[1] for x in results]
+            for (genotype, count, p) in results:
+                genotypes[probe] = genotypes.get(probe, []) + [genotype]
+                genotypes_counts[probe] = genotypes_counts.get(probe, []) + [count]
+                genotypes_p[probe] = genotypes_p.get(probe, []) + [p]
 
     adata.obsm["genotype"] = pd.DataFrame(genotypes, index=adata.obs.index)
-    adata.obsm["genotype_p"] = pd.DataFrame(genotypes_p, index=adata.obs.index)
+    adata.obsm["genotype_counts"] = pd.DataFrame(genotypes_counts, index=adata.obs.index)
+    adata.obsm["genotype_proportion"] = pd.DataFrame(genotypes_p, index=adata.obs.index)
     return adata
 
 
@@ -101,15 +113,15 @@ def _genotype_call_job(genotypes: np.array, counts: np.array, threshold: float) 
     :param genotypes: The list of genotypes for the probe.
     :param counts: The counts for the gapfills.
     :param threshold: The cumulative fraction of UMIs to call a genotype.
-    :return: Returns a tuple of the genotype call and the cumulative fraction of UMIs for the called genotype.
+    :return: Returns a tuple of the genotype call, number of umis supporting the genotype, and the cumulative fraction of UMIs for the called genotype.
     """
     # First check for short circuit cases
     if counts.sum() == 0:  # No UMIs
-        return np.nan, 0.0
+        return np.nan, 0, 0.0
     if counts.shape[0] == 1:  # Only one gapfill
-        return genotypes[0], 1.0
+        return genotypes[0], counts.sum(), 1.0
     if (counts > 0).sum() == 1:  # All UMIs in a single gapfill
-        return genotypes[counts.argmax()], 1.0
+        return genotypes[counts.argmax()], counts.sum(), 1.0
 
     # Now we have to do a more expensive computation
     sorted_indices = np.argsort(counts)[::-1]
@@ -118,7 +130,7 @@ def _genotype_call_job(genotypes: np.array, counts: np.array, threshold: float) 
 
     cumulative = np.cumsum(counts) / counts.sum()
     idx = np.argmax(cumulative >= threshold)
-    return "/".join(genotypes[:idx + 1]), cumulative[idx]
+    return "/".join(genotypes[:idx + 1]), counts[:idx + 1].sum(), cumulative[idx]
 
 
 def transfer_genotypes(wta_adata: ad.AnnData, gapfill_adata: ad.AnnData) -> ad.AnnData:
@@ -133,25 +145,29 @@ def transfer_genotypes(wta_adata: ad.AnnData, gapfill_adata: ad.AnnData) -> ad.A
 
     cell_ids_wta = wta_adata.obs.index.values
     cell_ids_gapfill = gapfill_adata.obs.index.values
-    intersected_cell_ids = np.array(set(cell_ids_wta).intersection(set(cell_ids_gapfill)))
+    intersected_cell_ids = np.intersect1d(cell_ids_wta, cell_ids_gapfill)
 
     if intersected_cell_ids.shape[0] == cell_ids_wta.shape[0]:
         # All WTA cells are in the gapfill data
         wta_adata.obsm["genotype"] = gapfill_adata[cell_ids_wta].obsm["genotype"]
-        wta_adata.obsm["genotype_p"] = gapfill_adata[cell_ids_wta].obsm["genotype_p"]
+        wta_adata.obsm["genotype_proportion"] = gapfill_adata[cell_ids_wta].obsm["genotype_proportion"]
+        wta_adata.obsm["genotype_counts"] = gapfill_adata[cell_ids_wta].obsm["genotype_counts"]
     elif intersected_cell_ids.shape[0] < cell_ids_wta.shape[0]:
         # Not all WTA cells have gapfill. Need to pad with NaNs.
         genotype = gapfill_adata[intersected_cell_ids].obsm["genotype"]
-        genotype_p = gapfill_adata[intersected_cell_ids].obsm["genotype_p"]
+        genotype_p = gapfill_adata[intersected_cell_ids].obsm["genotype_proportion"]
+        genotype_counts = gapfill_adata[intersected_cell_ids].obsm["genotype_counts"]
         # Append missing ids with NaNs
         missing_ids = np.setdiff1d(cell_ids_wta, intersected_cell_ids)
         intersected_cell_ids = np.concatenate([intersected_cell_ids, missing_ids])
         genotype = pd.concat([genotype, pd.DataFrame(index=missing_ids, columns=genotype.columns)], axis=0)
         genotype_p = pd.concat([genotype_p, pd.DataFrame(index=missing_ids, columns=genotype_p.columns)], axis=0)
+        genotype_counts = pd.concat([genotype_counts, pd.DataFrame(index=missing_ids, columns=genotype_counts.columns)], axis=0)
         # Re-order the WTA
         wta_adata = wta_adata[intersected_cell_ids]
         wta_adata.obsm["genotype"] = genotype
-        wta_adata.obsm["genotype_p"] = genotype_p
+        wta_adata.obsm["genotype_proportion"] = genotype_p
+        wta_adata.obsm["genotype_counts"] = genotype_counts
     else:
         raise ValueError("This should never happen.")
 
