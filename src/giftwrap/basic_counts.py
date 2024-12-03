@@ -15,13 +15,17 @@ def lhs_probe_search(lhs_universe: tuple[tuple[tuple[str, str]]], r2_seq: str, f
     lhs_hit = None
     if fuzzy_search:
         start_i = len(r2_seq)
+        best_dist = 10000
         for lhs_probe_group in lhs_universe:
             if lhs_hit is None:
                 for lhs_probe, lhs_probe_name in lhs_probe_group:
                     match = fuzzysearch.find_near_matches(lhs_probe, r2_seq, max_l_dist=2)
-                    if len(match) > 0 and match[0].end <= start_i:
+                    if len(match) > 0 and (match[0].end <= start_i or match[0].dist < best_dist):
                         lhs_hit = (lhs_probe, lhs_probe_name)
-                        start_i = match[0].end
+                        start_i = match[0].start
+                        best_dist = match[0].dist
+                        if best_dist == 0:
+                            break
     else:
         start_i = 0
         for lhs_probe_group in lhs_universe:
@@ -41,13 +45,17 @@ def rhs_probe_search(rhs_universe: tuple[tuple[tuple[str, str]]], r2_seq: str, f
     rhs_hit = None
     start_i = len(r2_seq)
     if fuzzy_search:
+        best_dist = 10000
         for rhs_probe_group in rhs_universe:
             if rhs_hit is None:
                 for rhs_probe, rhs_probe_name in rhs_probe_group:
                     match = fuzzysearch.find_near_matches(rhs_probe, r2_seq, max_l_dist=2)
-                    if len(match) > 0 and match[0].start <= start_i:
+                    if len(match) > 0 and (match[0].start <= start_i or match[0].dist < best_dist):
                         rhs_hit = (rhs_probe, rhs_probe_name)
                         start_i = match[0].start
+                        best_dist = match[0].dist
+                        if best_dist == 0:
+                            break
     else:
         for rhs_probe_group in rhs_universe:
             if rhs_hit is None:
@@ -170,6 +178,8 @@ def run(probes, project, output, make_unparsed_fastq, correct_barcodes, fuzzy_se
                 if cell_barcode is None:
                     maybe_write(unparsed_r1, unparsed_r2, r1_name, r1_seq, r1_qual, r2_name, r2_seq, r2_qual)
                     continue
+                else:
+                    cell_barcode = cell_barcode[0]
 
             tracker["lhs_probe"].append(lhs_hit[1])
             tracker["lhs_sequence"].append(lhs_hit[0])
@@ -263,5 +273,5 @@ def main():
 
 
 if __name__ == "__main__":
-    # main()
-    run("../../trna_comb_g5_AAV_SPLIT.csv", "../../G5", "test", False, False, False)
+    main()
+    # run("../../trna_comb_g3_AAV_SPLIT.csv", "../../G3", "test", False, True, True)

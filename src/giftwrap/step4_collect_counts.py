@@ -8,10 +8,10 @@ import pandas as pd
 import scipy
 from tqdm import tqdm
 
-from .utils import read_manifest, read_barcodes, maybe_multiprocess, maybe_gzip, write_sparse_matrix
+from .utils import read_manifest, read_barcodes, maybe_multiprocess, maybe_gzip, write_sparse_matrix, _tx_barcode_oligos
 
 
-def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_df: pd.DataFrame, overwrite: bool, plex: int = 1):
+def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_df: pd.DataFrame, overwrite: bool, plex: int = 1, multiplex: bool = False):
     """
     Generate an h5 file with counts for each barcode.
     :param input: The input file.
@@ -28,8 +28,10 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
     elif final_output.exists():
         final_output.unlink()
 
-    # Replace the barcode -plex with -1 to match cellranger output
-    barcodes_df.barcode = barcodes_df.barcode.str.replace(f"-{plex}", "-1")
+
+    # Replace the barcode -plex with {probe bc}-1 to match cellranger output
+    if multiplex:
+        barcodes_df.barcode = barcodes_df.barcode.str.replace(f"-{plex}", f"{_tx_barcode_oligos[plex]}-1")
 
     probe_idx2name = {idx: name for idx, name in enumerate(manifest['name'])}
 
@@ -157,7 +159,7 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
         print("Done.")
 
 
-def run(output: str, cores: int, overwrite: bool):
+def run(output: str, cores: int, overwrite: bool, was_multiplexed: bool):
     if cores < 1:
         cores = os.cpu_count()
 
@@ -199,10 +201,13 @@ def run(output: str, cores: int, overwrite: bool):
             )
         print(f"Counts data saved as counts.[{','.join(plexes)}].h5")
     else:
-        print("Detected single-plex run.")
+        if was_multiplexed or plexes[0] > 1:
+            print(f"Detected multiplexed run using BC{plexes[0]}.")
+        else:
+            print("Detected single-plex run.")
         print("Collecting counts...")
         # No need to multithread
-        collect_counts(input, output, manifest, barcodes_df, overwrite, int(plexes[0]))
+        collect_counts(input, output, manifest, barcodes_df, overwrite, int(plexes[0]), multiplex)
         print(f"Counts data saved as counts.1.h5.")
 
     exit(0)
@@ -229,6 +234,14 @@ def main():
     )
 
     parser.add_argument(
+        "--multiplex", '-m',
+        required=False,
+        action="store_true",
+        default=False,
+        help="Hint to the program that the run should be expected to be multiplexed."
+    )
+
+    parser.add_argument(
         "--overwrite", '-f',
         required=False,
         action="store_true",
@@ -236,7 +249,7 @@ def main():
     )
 
     args = parser.parse_args()
-    run(args.output, args.cores, args.overwrite)
+    run(args.output, args.cores, args.overwrite, args.multiplex)
 
 
 if __name__ == "__main__":

@@ -578,6 +578,25 @@ class TechnologyFormatInfo(ABC):
         return None, False
 
 
+_tx_barcode_oligos = {s: (i+1) for i, s in enumerate([
+    "ACTTTAGG",
+    "AACGGGAA",
+    "AGTAGGCT",
+    "ATGTTGAC",
+    "ACAGACCT",
+    "ATCCCAAC",
+    "AAGTAGAG",
+    "AGCTGTGA",
+    "ACAGTCTG",
+    "AGTGAGTG",
+    "AGAGGCAA",
+    "ACTACTCA",
+    "ATACGTCA",
+    "ATCATGTG",
+    "AACGCCGA",
+    "ATTCGGTT"
+])}
+
 class FlexFormatInfo(TechnologyFormatInfo):
     """
     Describes the format of a 10X Flex run.
@@ -596,24 +615,7 @@ class FlexFormatInfo(TechnologyFormatInfo):
         # Collect the universe of barcodes
         self._barcodes = PrefixTree(list(barcodes["barcode"].unique()))
 
-        self._probe_barcodes = {s: (i+1) for i, s in enumerate([
-                "ACTTTAGG",
-                "AACGGGAA",
-                "AGTAGGCT",
-                "ATGTTGAC",
-                "ACAGACCT",
-                "ATCCCAAC",
-                "AAGTAGAG",
-                "AGCTGTGA",
-                "ACAGTCTG",
-                "AGTGAGTG",
-                "AGAGGCAA",
-                "ACTACTCA",
-                "ATACGTCA",
-                "ATCATGTG",
-                "AACGCCGA",
-                "ATTCGGTT"
-            ]) }
+        self._probe_barcodes = _tx_barcode_oligos
 
         self._index_to_probe_barcodes = {v: k for k, v in self._probe_barcodes.items()}
 

@@ -57,7 +57,7 @@ def main():
         '--multiplex', '-m',
         required=False,
         type=int,
-        default=1,
+        default=0,
         help="The number of probes to multiplexed in the Flex run with the same probe set. Mutually exclusive with --barcode. Defaults to single plex."
     )
     parser.add_argument(
@@ -157,7 +157,7 @@ def main():
             + (['--tech_def', tech_def] if tech_def is not None else [])
             + (['--overwrite'] if overwrite else [])
             + (["-r1", read1, "-r2", read2] if project is None else ["--project", project])
-            + (['-m', str(multiplex)] if multiplex > 1 else [])
+            + (['-m', str(multiplex)] if multiplex > 0 else [])
             + (['-b', str(barcode)] if barcode > 1 else [])
             + (['--skip_constant_seq'] if skip_constant_seq else [])
         )
@@ -218,7 +218,8 @@ def main():
             sys.path[0] + "/giftwrap-collect",
             "-o", str(output),
             "-c", str(cores)
-        ] + (['--overwrite'] if overwrite else []))
+        ] + (['--multiplex'] if multiplex > 0 else [])
+        + (['--overwrite'] if overwrite else []))
         if returncode != 0:
             print("Error: Failed to collect counts.", file=sys.stderr, flush=True)
             sys.exit(1)
