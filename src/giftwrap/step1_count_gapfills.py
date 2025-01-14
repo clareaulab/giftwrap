@@ -487,7 +487,7 @@ def correct_barcode(barcode: str, barcode_quality: np.array, tech_info: Technolo
     # return False, None
 
 
-def build_manifest(probes, output: Path, overwrite):
+def build_manifest(probes, output: Path, overwrite, allow_any_combination):
     print("Indexing probes...", end="")
     if output.exists():
         if overwrite:
@@ -498,13 +498,45 @@ def build_manifest(probes, output: Path, overwrite):
 
     df = read_probes_input(probes)
 
+    print(f"{df.shape[0]} unique probes found.")
+
+    if allow_any_combination:
+        df['was_defined'] = True
+
+        additional_columns = [c for c in df.columns if c not in {'lhs_probe', 'rhs_probe', 'name', 'was_defined'}]
+
+        # Map all possible LHS to all possible RHS if not already defined
+        lhs_name_tuples = df[['lhs_probe', 'name']].drop_duplicates('lhs_probe').itertuples(index=False, name=None)
+        rhs_name_tuples = df[['rhs_probe', 'name']].drop_duplicates('rhs_probe').itertuples(index=False, name=None)
+        for lhs_probe, lhs_name in lhs_name_tuples:
+            for rhs_probe, rhs_name in rhs_name_tuples:
+                if df[(df['lhs_probe'] == lhs_probe) & (df['rhs_probe'] == rhs_probe)].shape[0] == 0:
+                    df = df.append({'lhs_probe': lhs_probe, 'rhs_probe': rhs_probe, 'name': f"{lhs_name}__{rhs_name}", 'was_defined': False} | {c: None for c in additional_columns}, ignore_index=True)
+
+        print(f"{(~df['was_defined']).sum()} decoy pairings added.")
+
     # Write the manifest to the output directory
     df.to_csv(output / "manifest.tsv", index=False, sep="\t")
 
-    print(f"{df.shape[0]} unique probes found.")
 
-
-def run(probes, read1, read2, project, output, cores, n_reads_per_batch, max_distance, technology, tech_df, overwrite, multiplex, barcode, r1_len, r2_len, allow_indels, skip_constant_seq):
+def run(probes,
+        read1,
+        read2,
+        project,
+        output,
+        cores,
+        n_reads_per_batch,
+        max_distance,
+        technology,
+        tech_df,
+        overwrite,
+        multiplex,
+        barcode,
+        r1_len,
+        r2_len,
+        allow_indels,
+        skip_constant_seq,
+        allow_any_combination):
     if (read1 == read2 == project) and project is None:
         raise AssertionError("At least one of the read1, read2, or project arguments must be provided.")
     assert not (multiplex > 1 and barcode > 1), "Multiplex and barcode arguments are mutually exclusive."
@@ -599,7 +631,7 @@ def run(probes, read1, read2, project, output, cores, n_reads_per_batch, max_dis
         )
     print(f"{tech_info.n_barcodes} cell barcodes found.")
 
-    build_manifest(probes, output, overwrite)
+    build_manifest(probes, output, overwrite, allow_any_combination)
 
     search_files(read1s, read2s, output, tech_info,
                  cores=cores, n_reads_per_batch=n_reads_per_batch, max_distance=max_distance,
@@ -723,6 +755,9 @@ def main():
         action="store_true",
         help="If the technology (i.e. Flex) has a constant sequence in the probe design, do not filter reads for missing it. This is useful for reads that are too short to capture the full probes."
     )
+    parser.add_argument('--allow_any_combination',
+                        action='store_true',
+                        help='Allow any combination of probes to be used for gapfill')
 
     args = parser.parse_args()
 
@@ -742,7 +777,8 @@ def main():
          args.r1_length,
          args.r2_length,
          args.allow_indels,
-         args.skip_constant_seq)
+         args.skip_constant_seq,
+         args.allow_any_combination)
 
 
 if __name__ == '__main__':

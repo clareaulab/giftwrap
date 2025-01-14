@@ -80,6 +80,8 @@ def make_sankey(fastq_stats: dict, counts_stats: dict) -> Sankey:
 
 def make_pdf_report(output_file, gapfill_adata, adata):
     try:
+        import matplotlib
+        matplotlib.use('Agg')
         import matplotlib.pyplot as plt
         from matplotlib.backends.backend_pdf import PdfPages
     except:
@@ -152,14 +154,14 @@ def make_pdf_report(output_file, gapfill_adata, adata):
         fig, axs = plt.subplots(2, 1, figsize=(8, 12))
         fig.set_dpi(600)
         fig.suptitle("UMIs distributions")
-        axs[0].hist(umis_per_cell, bins=25)
+        axs[0].hist(umis_per_cell, bins=100)
         # Add horizontal line to show the # of probes
         axs[0].axvline(x=gapfill_adata.var['probe'].nunique(), color='r', linestyle='--')
         axs[0].set_xlabel("UMIs per cell")
         axs[0].set_ylabel("Frequency")
         axs[0].set_title("UMIs per cell distribution")
 
-        axs[1].hist(cells_per_gapfill, bins=25)
+        axs[1].hist(cells_per_gapfill, bins=100)
         axs[1].set_xlabel("Cells per gapfill")
         axs[1].set_ylabel("Frequency")
         axs[1].set_title("Cells per gapfill distribution")
