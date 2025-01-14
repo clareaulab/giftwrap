@@ -7,7 +7,7 @@ import pandas as pd
 from scipy.stats import spearmanr, gaussian_kde
 from sankeyflow import Sankey
 
-from .utils import filter_h5_file, read_h5_file, sequencing_saturation, sequence_saturation_curve
+from .utils import filter_h5_file, read_h5_file, sequencing_saturation, sequence_saturation_curve, maybe_gzip
 from .analysis.tools import collapse_gapfills
 
 
@@ -375,7 +375,7 @@ def make_pdf_report(output_file, gapfill_adata, adata):
             plt.close(fig)
 
 
-def summarize_counts(input: Path, summary_output: Path, summary_pdf_output: Path, counts_output: Path, cellranger_output: Optional[Path]):
+def summarize_counts(input: Path, summary_output: Path, summary_pdf_output: Path, counts_output: Path, flattened_counts_output: Path, cellranger_output: Optional[Path], flatten: bool):
     print("Summarizing counts file ", input, " to ", summary_output, ", ", summary_pdf_output, ", and ", counts_output, " (This will take awhile)...")
 
     # Read cellranger to an anndata file if provided
@@ -398,6 +398,14 @@ def summarize_counts(input: Path, summary_output: Path, summary_pdf_output: Path
         # Filter the counts file to only include cells in the cellranger output
         barcodes = adata.obs.index.tolist()
         filter_h5_file(input, counts_output, barcodes)
+        if flatten:  # We need to filter the flattened counts as well
+            with maybe_gzip(input.parent / input.name.replace(".h5", ".tsv.gz").replace('counts.', 'flat_counts.'), 'r') as f_in:
+                with maybe_gzip(flattened_counts_output, 'w') as f_out:
+                    first = True
+                    for line in f_in:
+                        if line.split("\t")[0] in barcodes or first:
+                            f_out.write(line)
+                            first = False
         gapfill_adata = read_h5_file(counts_output)
         print(f"Filtered to {gapfill_adata.shape[0]} gapfill cells.")
     else:
@@ -452,7 +460,7 @@ def summarize_counts(input: Path, summary_output: Path, summary_pdf_output: Path
     make_pdf_report(summary_pdf_output, gapfill_adata, adata)
 
 
-def run(output, overwrite, cellranger_output):
+def run(output, overwrite, cellranger_output, flatten):
     if isinstance(cellranger_output, str):
         cellranger_output = [cellranger_output]
     has_cellranger = cellranger_output is not None and len(cellranger_output) > 0
@@ -485,6 +493,7 @@ def run(output, overwrite, cellranger_output):
         summary_output_file = output / counts_file.name.replace(".h5", ".summary.tsv")
         summary_pdf_output_file = output / counts_file.name.replace(".h5", ".summary.pdf")
         h5_output_file = output / counts_file.name.replace(".h5", ".filtered.h5")
+        flattened_output_file = output / counts_file.name.replace(".h5", ".filtered.tsv.gz").replace('counts.', 'flat_counts.')
 
         if summary_output_file.exists() or h5_output_file.exists():
             if overwrite:
@@ -493,7 +502,7 @@ def run(output, overwrite, cellranger_output):
                 print("Skipping existing files. Use --overwrite to overwrite.")
                 continue
 
-        summarize_counts(counts_file, summary_output_file, summary_pdf_output_file, h5_output_file, counts_cellranger)
+        summarize_counts(counts_file, summary_output_file, summary_pdf_output_file, h5_output_file, flattened_output_file, counts_cellranger, flatten)
 
 
 def main():
@@ -524,8 +533,15 @@ def main():
              "Can be specified multiple times to merge multiple samples if multiplex (in order of the counts.N.h5 files is sorted by N)."
     )
 
+    parser.add_argument(
+        "--flatten", '-f',
+        required=False,
+        action="store_true",
+        help="Flatten the final output to a gzipped tsv file."
+    )
+
     args = parser.parse_args()
-    run(args.output, args.overwrite, args.cellranger_output)
+    run(args.output, args.overwrite, args.cellranger_output, args.flatten)
 
 
 if __name__ == "__main__":

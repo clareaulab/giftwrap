@@ -511,7 +511,7 @@ def build_manifest(probes, output: Path, overwrite, allow_any_combination):
         for lhs_probe, lhs_name in lhs_name_tuples:
             for rhs_probe, rhs_name in rhs_name_tuples:
                 if df[(df['lhs_probe'] == lhs_probe) & (df['rhs_probe'] == rhs_probe)].shape[0] == 0:
-                    df = df.append({'lhs_probe': lhs_probe, 'rhs_probe': rhs_probe, 'name': f"{lhs_name}__{rhs_name}", 'was_defined': False} | {c: None for c in additional_columns}, ignore_index=True)
+                    df = df.append({'lhs_probe': lhs_probe, 'rhs_probe': rhs_probe, 'name': f"{lhs_name}/{rhs_name}", 'was_defined': False} | {c: None for c in additional_columns}, ignore_index=True)
 
         print(f"{(~df['was_defined']).sum()} decoy pairings added.")
 

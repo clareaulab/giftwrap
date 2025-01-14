@@ -962,6 +962,44 @@ def maybe_gzip(file: Path | None, mode: Literal["r"] | Literal["w"] = "r"):
             return open(file, mode)
 
 
+def compile_flatfile(manifest_df: pd.DataFrame, probe_reads_file: str, barcode_list: list[str], plex: int, output: str):
+    """
+    Flatten giftwrap data to a human readable tsv-based format.
+    :param manifest_df: The manifest dataframe.
+    :param probe_reads_file: The probe reads file.
+    :param barcode_list: The index to barcode mapping. If a barcode is not present here, it will be dropped.
+    :param plex: The plex number.
+    :param output: The output with the following columns: cell barcode, LHS, RHS, probe_call, gapfill, pcr duplicates.
+        Where each row represents an individual umi.
+    """
+    with maybe_gzip(probe_reads_file, 'r') as input_file, maybe_gzip(output, 'w') as output_file:
+        # Skip the header
+        next(input_file)
+        output_file.write(f"cell_barcode\tlhs_probe\trhs_probe\tcalled_probe\tgapfill\tpcr_duplicates\tpercent_supporting\n")
+        for line in input_file:
+            split = line.strip().split("\t")
+            if len(split) != 6:
+                continue
+            cell_idx, probe_idx, probe_bc_idx, gapfill, umi_count, percent_supporting = line.strip().split("\t")
+            if int(cell_idx) > len(barcode_list) or int(probe_bc_idx) != plex:
+                continue
+
+            cell_barcode = barcode_list[int(cell_idx)]
+            probe = manifest_df[manifest_df["index"] == int(probe_idx)].iloc[0]
+            if 'was_defined' in probe:
+                if probe['was_defined']:
+                    lhs_probe = probe['name']
+                    rhs_probe = probe['name']
+                else:
+                    lhs_probe = probe['name'].split("/")[0]
+                    rhs_probe = probe['name'].split("/")[1]
+            else:
+                lhs_probe = probe['name']
+                rhs_probe = probe['name']
+
+            output_file.write(f"{cell_barcode}\t{lhs_probe}\t{rhs_probe}\t{probe_bc_idx}\t{gapfill}\t{umi_count}\t{percent_supporting}\n")
+
+
 def sort_tsv_file(file: Path, columns: list[int], cores: int):
     """
     Sort a written tsv file in-place. Will either use a single core or multiple cores depending on the cores argument.

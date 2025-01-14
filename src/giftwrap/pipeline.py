@@ -125,6 +125,12 @@ def main():
         action="store_true",
         help="Allow any combination of probes to be counted. By default, only the probes that are in the gapfill set are counted"
     )
+    parser.add_argument(
+        '--flatten',
+        required=False,
+        action="store_true",
+        help="After processing, save a processed, flattened version of the data as a gzipped tsv file. Note that this is an inefficient storage format for large datasets."
+    )
 
     args = parser.parse_args()
 
@@ -166,6 +172,7 @@ def main():
             + (['-m', str(multiplex)] if multiplex > 0 else [])
             + (['-b', str(barcode)] if barcode > 1 else [])
             + (['--skip_constant_seq'] if skip_constant_seq else [])
+            + (['--allow_any_combination'] if args.allow_any_combination else [])
         )
         if returncode != 0:
             print("Error: Failed to count gapfills.", file=sys.stderr)
@@ -225,7 +232,8 @@ def main():
             "-o", str(output),
             "-c", str(cores)
         ] + (['--multiplex'] if multiplex > 0 else [])
-        + (['--overwrite'] if overwrite else []))
+        + (['--overwrite'] if overwrite else [])
+        + (['--flatten'] if args.flatten else []))
         if returncode != 0:
             print("Error: Failed to collect counts.", file=sys.stderr, flush=True)
             sys.exit(1)
@@ -250,6 +258,7 @@ def main():
             sys.path[0] + "/giftwrap-summarize",
             "-o", str(output),
         ] + (['--overwrite'] if overwrite else [])
+          + (['--flatten'] if args.flatten else [])
           + wta_args)
         if returncode != 0:
             print("Error: Failed to generate summary statistics and plots.", file=sys.stderr, flush=True)

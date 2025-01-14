@@ -8,10 +8,11 @@ import pandas as pd
 import scipy
 from tqdm import tqdm
 
-from .utils import read_manifest, read_barcodes, maybe_multiprocess, maybe_gzip, write_sparse_matrix, _tx_barcode_to_oligo
+from .utils import read_manifest, read_barcodes, maybe_multiprocess, maybe_gzip, write_sparse_matrix, \
+    _tx_barcode_to_oligo, compile_flatfile
 
 
-def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_df: pd.DataFrame, overwrite: bool, plex: int = 1, multiplex: bool = False):
+def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_df: pd.DataFrame, overwrite: bool, plex: int = 1, multiplex: bool = False, flatten: bool = False):
     """
     Generate an h5 file with counts for each barcode.
     :param input: The input file.
@@ -38,6 +39,9 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
 
     # Get metadata cols
     barcode2h5_idx = {bc: idx for idx, bc in enumerate(barcodes_df.barcode.values)}
+
+    if flatten:
+        compile_flatfile(manifest, input, barcodes_df, plex, output / f'flat_counts.{plex}.tsv.gz')
 
     # First we must scan for all possible probe id/gap fill combinations
     possible_probes = set()
@@ -160,7 +164,7 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
         print("Done.")
 
 
-def run(output: str, cores: int, overwrite: bool, was_multiplexed: bool):
+def run(output: str, cores: int, overwrite: bool, was_multiplexed: bool, flatten: bool):
     if cores < 1:
         cores = os.cpu_count()
 
@@ -196,7 +200,7 @@ def run(output: str, cores: int, overwrite: bool, was_multiplexed: bool):
             pool.starmap(
                 collect_counts,
                 [
-                    (input, output, manifest, barcodes_df[barcodes_df.plex == plex].copy(), overwrite, plex)
+                    (input, output, manifest, barcodes_df[barcodes_df.plex == plex].copy(), overwrite, plex, flatten)
                     for plex in plexes
                 ]
             )
@@ -208,7 +212,7 @@ def run(output: str, cores: int, overwrite: bool, was_multiplexed: bool):
             print("Detected single-plex run.")
         print("Collecting counts...")
         # No need to multithread
-        collect_counts(input, output, manifest, barcodes_df, overwrite, int(plexes[0]), was_multiplexed)
+        collect_counts(input, output, manifest, barcodes_df, overwrite, int(plexes[0]), was_multiplexed, flatten)
         print(f"Counts data saved as counts.1.h5.")
 
     exit(0)
@@ -248,8 +252,15 @@ def main():
         help="Overwrite the output files if they exist."
     )
 
+    parser.add_argument(
+        "--flatten", '-f',
+        required=False,
+        action="store_true",
+        help="Flatten the final output to a gzipped tsv file."
+    )
+
     args = parser.parse_args()
-    run(args.output, args.cores, args.overwrite, args.multiplex)
+    run(args.output, args.cores, args.overwrite, args.multiplex, args.flatten)
 
 
 if __name__ == "__main__":
