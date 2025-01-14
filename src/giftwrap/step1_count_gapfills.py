@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
+import pandas as pd
 from tqdm import tqdm
 import fuzzysearch
 import rapidfuzz
@@ -508,10 +509,25 @@ def build_manifest(probes, output: Path, overwrite, allow_any_combination):
         # Map all possible LHS to all possible RHS if not already defined
         lhs_name_tuples = df[['lhs_probe', 'name']].drop_duplicates('lhs_probe').itertuples(index=False, name=None)
         rhs_name_tuples = df[['rhs_probe', 'name']].drop_duplicates('rhs_probe').itertuples(index=False, name=None)
+        to_add = {
+            'lhs_probe': [],
+            'rhs_probe': [],
+            'name': [],
+            'was_defined': [],
+        }
+        for c in additional_columns:
+            to_add[c] = []
         for lhs_probe, lhs_name in lhs_name_tuples:
             for rhs_probe, rhs_name in rhs_name_tuples:
                 if df[(df['lhs_probe'] == lhs_probe) & (df['rhs_probe'] == rhs_probe)].shape[0] == 0:
-                    df = df.append({'lhs_probe': lhs_probe, 'rhs_probe': rhs_probe, 'name': f"{lhs_name}/{rhs_name}", 'was_defined': False} | {c: None for c in additional_columns}, ignore_index=True)
+                    to_add['lhs_probe'].append(lhs_probe)
+                    to_add['rhs_probe'].append(rhs_probe)
+                    to_add['name'].append(f"{lhs_name}/{rhs_name}")
+                    to_add['was_defined'].append(False)
+                    for c in additional_columns:
+                        to_add[c].append(None)
+        to_add = pd.DataFrame(to_add)
+        df = pd.concat([df, to_add], ignore_index=True)
 
         print(f"{(~df['was_defined']).sum()} decoy pairings added.")
 
