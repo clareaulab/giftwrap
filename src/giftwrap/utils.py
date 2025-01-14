@@ -596,6 +596,7 @@ _tx_barcode_oligos = {s: (i+1) for i, s in enumerate([
     "AACGCCGA",
     "ATTCGGTT"
 ])}
+_tx_barcode_to_oligo = {v: k for k, v in _tx_barcode_oligos.items()}
 
 class FlexFormatInfo(TechnologyFormatInfo):
     """
@@ -617,7 +618,7 @@ class FlexFormatInfo(TechnologyFormatInfo):
 
         self._probe_barcodes = _tx_barcode_oligos
 
-        self._index_to_probe_barcodes = {v: k for k, v in self._probe_barcodes.items()}
+        self._index_to_probe_barcodes = _tx_barcode_to_oligo
 
 
     @property

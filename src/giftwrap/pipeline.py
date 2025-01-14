@@ -119,6 +119,12 @@ def main():
         action="store_true",
         help="If the technology (i.e. Flex) has a constant sequence in the probe design, do not filter reads for missing it. This is useful for reads that are too short to capture the full probes."
     )
+    parser.add_argument(
+        '--allow_any_combination',
+        required=False,
+        action="store_true",
+        help="Allow any combination of probes to be counted. By default, only the probes that are in the gapfill set are counted"
+    )
 
     args = parser.parse_args()
 
