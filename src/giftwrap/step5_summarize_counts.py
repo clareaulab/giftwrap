@@ -534,7 +534,7 @@ def main():
     )
 
     parser.add_argument(
-        "--flatten", '-f',
+        "--flatten",
         required=False,
         action="store_true",
         help="Flatten the final output to a gzipped tsv file."
