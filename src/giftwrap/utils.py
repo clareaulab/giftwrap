@@ -1,6 +1,7 @@
 import functools
 import gzip
 import io
+import json
 import os
 import shutil
 import subprocess
@@ -565,14 +566,16 @@ class TechnologyFormatInfo(ABC):
         return PrefixTree(self.cell_barcodes)
 
     @functools.lru_cache(1024)
-    def correct_barcode(self, barcode: str, max_mismatches: int) -> tuple[Optional[str], bool]:
+    def correct_barcode(self, read: str, max_mismatches: int, start_idx: int, end_idx: int) -> tuple[Optional[str], bool]:
         """
         Given a probable barcode string, attempt to correct the sequence.
-        :param barcode: The barcode sequence.
+        :param read: The barcode-containing sequence.
         :param max_mismatches: The maximum number of mismatches to allow.
+        :param start_idx: The start index of the barcode in the read.
+        :param end_idx: The end index of the barcode in the read.
         :return: The corrected barcode, or None if no match was found.
         """
-        res = self.barcode_tree.search(barcode, max_mismatches)
+        res = self.barcode_tree.search(read[start_idx:end_idx], max_mismatches)
         if res is not None:
             return res[0], res[1] > 0
         return None, False
@@ -781,25 +784,55 @@ class VisiumHDFormatInfo(TechnologyFormatInfo):
         if not spaceranger or not os.path.exists(spaceranger):
             raise FileNotFoundError("spaceranger not found on PATH.")
         spaceranger_path = Path(spaceranger)
+        paths_to_add = [
+            spaceranger_path.parent.parent / "lib" / "python" / "cellranger" / "spatial", # If we found the true binary
+            spaceranger_path.parent / "lib" / "python" / "cellranger" / "spatial"
+        ] # But spaceranger is also symlinked
+        path_to_add = [p for p in paths_to_add if p.exists()]
+        if len(path_to_add) == 0:
+            raise FileNotFoundError("Incorrect spaceranger found on PATH.")
+
         # Import the protobuf schema
-        sys.path.append(str(spaceranger_path.parent.parent / "lib" / "python" / "cellranger" / "spatial"))
+        sys.path.extend([str(p) for p in path_to_add])
         schema_def = importlib.import_module("visium_hd_schema_pb2")
         # Parse the schema
         slide_def = schema_def.VisiumHdSlideDesign()
         with open(self._barcode_dir / "visium_hd_v1.slide", 'rb') as f:
             slide_def.ParseFromString(f.read())
+
+        chem_defs = Path(str(spaceranger_path.parent.parent / "lib" / "python" / "cellranger" / "chemistry_defs.json"))
+        if not chem_defs.exists():
+            chem_defs = self._barcode_dir / "chemistry_defs.json"
+
+        chem_defs = json.loads(chem_defs.read_text())
+        hd_def = chem_defs["SPATIAL-HD-v1"]
+
+        segment1 = hd_def["barcode"][0]
+        self._segment1_length = segment1['length']  # 14
+        self._segment1_offset = segment1["offset"]  # 11
+        segment2 = hd_def["barcode"][1]
+        self._segment2_length = segment2['length']  # 14
+        self._segment2_offset = segment2["offset"]  # 25
+
+        extraction_params = hd_def['barcode_extraction']['params']
+        self._max_offset = extraction_params['max_offset']  # 12
+        self._min_offset = extraction_params['min_offset']  # 8
+
         # Assemble all possible barcodes
         self._barcode_coordinates = dict()
-        bc1_tree = PrefixTree(slide_def.two_part.bc1_oligos, allow_indels=True, prefix_only_search=True)
-        bc2_tree = PrefixTree(slide_def.two_part.bc2_oligos, allow_indels=True, prefix_only_search=True)
+        self._bc1_tree = PrefixTree(slide_def.two_part.bc1_oligos)
+        self._bc2_tree = PrefixTree(slide_def.two_part.bc2_oligos)
+        self._bc_lengths = set()
         # _barcode_tree = PrefixTree([], allow_indels=True)  # Allow for indels as per 10X:
         # https://www.10xgenomics.com/support/software/space-ranger/latest/algorithms-overview/gene-expression#:~:text=using%20the%20edit%20distance%2C%20which%20allows%20for%20insertions%2C%20deletions%2C%20and%20substitutions.%20Up%20to%20four%20edits%20are%20permissible%20to%20correct%20a%20barcode%20to%20the%20whitelist.
-        for y, bc1 in enumerate(slide_def.two_part.bc1_oligos):
-            for x, bc2 in enumerate(slide_def.two_part.bc2_oligos):
+        for x, bc1 in enumerate(slide_def.two_part.bc1_oligos):
+            self._bc_lengths.add(len(bc1))
+            for y, bc2 in enumerate(slide_def.two_part.bc2_oligos):
+                self._bc_lengths.add(len(bc2))
                 cell_bc = bc1 + bc2
                 self._barcode_coordinates[cell_bc] = (x, y)
                 # _barcode_tree.add(cell_bc)
-        self._barcode_tree = SequentialPrefixTree([bc1_tree, bc2_tree])
+        # self._barcode_tree = SequentialPrefixTree([bc1_tree, bc2_tree])
 
     @property
     def umi_start(self) -> int:
@@ -861,43 +894,183 @@ class VisiumHDFormatInfo(TechnologyFormatInfo):
         raise NotImplementedError()
 
     @property
+    def n_barcodes(self) -> int:
+        return len(self._barcode_coordinates)
+
+    @property
     @functools.lru_cache(1)
     def max_cell_barcode_length(self) -> int:
-        return max(map(len, self.cell_barcodes)) + 4  # Max number of insertions allowed
+        return max(self._bc_lengths) + 4  # Max number of insertions allowed
 
     @property
     @functools.lru_cache(1)
     def min_cell_barcode_length(self) -> int:
-        return min(map(len, self.cell_barcodes))
+        return min(self._bc_lengths)
+
+    @property
+    def n_cell_barcodes(self) -> int:
+        return len(self._barcode_coordinates)
 
     @property
     def barcode_tree(self) -> PrefixTree:
         # NOTE: VisiumHD is weird, with hierarchical barcode lengths
-        return self._barcode_tree
+        # return SequentialPrefixTree([self._bc1_tree, self._bc2_tree])
+        raise NotImplementedError()
+
+
+    @functools.lru_cache(1)
+    def get_lengths_to_search(self):
+        search_lengths = []
+        for length in self._bc_lengths:
+            adjusted_less = length - 1
+            adjusted_more = length + 1
+            if length not in search_lengths:
+                search_lengths.append(length)
+            if adjusted_less not in search_lengths and adjusted_less >= 0:
+                search_lengths.append(adjusted_less)
+            if adjusted_more not in search_lengths:
+                search_lengths.append(adjusted_more)
+        search_lengths.sort()
+        return search_lengths
+
+    @property
+    @functools.lru_cache(1)
+    def _default_range(self):
+        return ((self._segment1_offset, self._segment1_offset + self._segment1_length),
+         (self._segment2_offset, self._segment2_offset + self._segment2_length))
+
+    @functools.lru_cache(1)
+    def possible_pairing_ranges(self, read_len: int) -> list[tuple[tuple[int, int],tuple[int, int]]]:
+        possible_pairing_ranges = []
+        for offset in range(self._min_offset, self._max_offset+1):
+            # For each offset, try every possible combination of the two barcodes
+            for bc1_len, bc2_len in itertools.product(self._bc_lengths, self._bc_lengths):
+                # Skip if the length would go off the read
+                if bc1_len + bc2_len + offset > read_len:
+                    continue
+
+                possible_pairing_ranges.append(((offset, offset+bc1_len), (offset+bc1_len, offset+bc1_len+bc2_len)))
+
+        # Add the default range from the chemistry def . We fall back to this if there are no best matches
+        possible_pairing_ranges.append(self._default_range)
+
+        return possible_pairing_ranges
 
     # Override the search to search all trees
     @functools.lru_cache(1024)
-    def correct_barcode(self, barcode: str, max_mismatches: int) -> tuple[Optional[str], bool]:
-        # Note: We assume that the barcode length provided is the max length
-        res = self.barcode_tree.search(barcode, max_mismatches)
-        if res is not None:
-            return res[0], res[1] - res[2] > 0  # Ignore start index
+    def correct_barcode(self, read: str, max_mismatches: int, start_idx: int, end_idx: int) -> tuple[Optional[str], bool]:
+        # Based on logic from spaceranger: https://github.com/10XGenomics/spaceranger/blob/main/lib/rust/cr_lib/src/stages/barcode_correction.rs#L100-L235
+        # and https://github.com/10XGenomics/spaceranger/blob/main/lib/rust/cr_types/src/rna_read.rs#L297-L349
+        # Note that we ignore the provided start and end indices, since we will follow 10X's logic exactly
+
+        # Additionally note that to match spaceranger we will allow for 4 mismatches
+        max_mismatches = max(max_mismatches, 4)
+
+        possible_pairing_ranges = self.possible_pairing_ranges(len(read))
+
+        # Now we iterate and try to find exact matches
+        matches_i = []
+        for pairing_range in possible_pairing_ranges:
+            # Get the ranges
+            bc1_range, bc2_range = pairing_range
+            # Get the barcodes
+            bc1 = read[bc1_range[0]:bc1_range[1]]
+            bc2 = read[bc2_range[0]:bc2_range[1]]
+            # Check if they are in the trees
+            if bc1 in self._bc1_tree and bc2 in self._bc2_tree:
+                matches_i.append((bc1, bc2, bc1_range, bc2_range))
+
+        if len(matches_i) == 0:
+            pass  # No exact matches found
+        elif len(matches_i) == 1:  # Only one match found
+            bc1, bc2, bc1_range, bc2_range = matches_i[0]
+            return bc1 + bc2, False  # No mismatches
+        else:  # Multiple matches found, pick the largest match (or default)
+            bc1, bc2, bc1_range, bc2_range = matches_i[-1]
+            return bc1 + bc2, False  # No mismatches
+
+        # Now we see if either bc1 or bc2 has an exact match for the default range
+        default_bc1 = read[self._default_range[0][0]:self._default_range[0][1]]
+        default_bc2 = read[self._default_range[1][0]:self._default_range[1][1]]
+
+        search_lengths = self.get_lengths_to_search()
+
+        if default_bc1 in self._bc1_tree:  # Default BC1 is found!
+            # Starting from the end of bc1, we will search for the bc2
+            bc1_end = self._default_range[0][1]
+            possible_bc2s = []
+            for length in search_lengths:
+                if bc1_end + length > len(read):
+                    continue
+                possible_bc2 = read[bc1_end:bc1_end + length]
+                # Search for a valid sequence
+                res = self._bc2_tree.search(possible_bc2, max_mismatches)
+                if res is not None:
+                    corrected = default_bc1 + res[0]
+                    distance = res[1]
+                    if distance <= 1:  # Can't theoretically have more than 1 mismatch as the best match, so exit early
+                        return corrected, distance > 0
+                    possible_bc2s.append((corrected, distance))
+            # Find the lowest score
+            if len(possible_bc2s) > 0:
+                best = min(possible_bc2s, key=lambda x: x[1])
+                return best[0], best[1] > 0
+        elif default_bc2 in self._bc2_tree:  # Default BC2 is found!
+            # Same as above, but we gotta search for bc1
+            bc2_start = self._default_range[1][0]
+            possible_bc1s = []
+            for length in search_lengths:
+                if bc2_start - length < 0:
+                    continue
+                possible_bc1 = read[bc2_start - length:bc2_start]
+                # Search for a valid sequence
+                res = self._bc1_tree.search(possible_bc1, max_mismatches)
+                if res is not None:
+                    corrected = res[0] + default_bc2
+                    distance = res[1]
+                    if distance <= 1:
+                        return corrected, distance > 0
+                    possible_bc1s.append((corrected, distance))
+            # Find the lowest score
+            if len(possible_bc1s) > 0:
+                best = min(possible_bc1s, key=lambda x: x[1])
+                return best[0], best[1] > 0
+        else:  # Nothing found...
+            # We have to fuzzy match bc1 and bc2
+            # We will search for the longest possible match
+            best_distance = 1e6
+            best_bc = None
+            for possible_bc1_start in range(self._min_offset, self._max_offset+1):
+                for bc1_len, bc2_len in itertools.product(search_lengths, search_lengths):
+                    if possible_bc1_start + bc1_len + bc2_len > len(read):
+                        continue
+                    possible_bc1 = read[possible_bc1_start:possible_bc1_start + bc1_len]
+                    possible_bc2 = read[possible_bc1_start + bc1_len:possible_bc1_start + bc1_len + bc2_len]
+                    # Search for a valid sequence
+                    bc1_res = self._bc1_tree.search(possible_bc1, max_mismatches)
+                    if bc1_res is None:
+                        continue
+                    bc1_corrected = bc1_res[0]
+                    bc1_distance = bc1_res[1]
+                    bc2_res = self._bc2_tree.search(possible_bc2, max_mismatches)
+                    if bc2_res is None:
+                        continue
+                    bc2_corrected = bc2_res[0]
+                    bc2_distance = bc2_res[1]
+                    if bc1_distance + bc2_distance > max_mismatches:
+                        continue
+                    if bc1_distance + bc2_distance < best_distance:
+                        best_distance = bc1_distance + bc2_distance
+                        best_bc = bc1_corrected + bc2_corrected
+
+                        if best_distance <= 1:  # Literally can't get better than this so exit early
+                            return best_bc, best_distance > 0
+
+            if best_bc is not None:
+                return best_bc, best_distance > 0
+
+        # No matches found, return None
         return None, False
-        # best = None
-        # tree = self.barcode_tree
-        # for length in range(self.max_cell_barcode_length, self.min_cell_barcode_length - 1, -1):
-        #     res = tree.search(barcode[:length], max_mismatches)
-        #     if res is not None:
-        #         score = res[1]
-        #         # Short circuit if we have a perfect match (Since we go for longest to shortest this is valid)
-        #         if score == 0:
-        #             return res[0], False
-        #         if best is None or res[1] < best[1]:  # Else, see if this is better
-        #             best = res
-        #
-        # if best is not None:
-        #     return best[0], best[1] > 0
-        # return None, False
 
 
 def read_barcodes(output_dir: Path) -> pd.DataFrame:
@@ -1438,8 +1611,6 @@ def read_probes_input(probes: str) -> pd.DataFrame:
                 df.at[idx, "name"] = f"{name}_{i}"
     # Reset the index
     df.reset_index(drop=True, inplace=True)
-    # Create an index column
-    df["index"] = df.index
     return df
 
 

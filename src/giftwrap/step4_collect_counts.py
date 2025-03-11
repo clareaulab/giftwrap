@@ -41,7 +41,7 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
     barcode2h5_idx = {bc: idx for idx, bc in enumerate(barcodes_df.barcode.values)}
 
     if flatten:
-        compile_flatfile(manifest, input, barcodes_df, plex, output / f'flat_counts.{plex}.tsv.gz')
+        compile_flatfile(manifest, input, barcodes_df.barcode.values.tolist(), plex, output / f'flat_counts.{plex}.tsv.gz')
 
     # First we must scan for all possible probe id/gap fill combinations
     possible_probes = set()
