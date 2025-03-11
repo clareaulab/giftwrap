@@ -262,18 +262,27 @@ def process_read(r1, r2,
     # Prune out the umi
     if tech_info.umi_start < tech_info.cell_barcode_start:
         # Cell barcode is after the UMI, so we can ignore the umi
-        cell_barcode = r1_seq[tech_info.cell_barcode_start:tech_info.cell_barcode_start+tech_info.max_cell_barcode_length]
-        cell_barcode_quality = r1_quality[tech_info.cell_barcode_start:tech_info.cell_barcode_start+tech_info.max_cell_barcode_length]
+        start_idx = tech_info.cell_barcode_start
+        end_idx = tech_info.cell_barcode_start + tech_info.max_cell_barcode_length
+        # cell_barcode = r1_seq[tech_info.cell_barcode_start:tech_info.cell_barcode_start+tech_info.max_cell_barcode_length]
+        # cell_barcode_quality = r1_quality[tech_info.cell_barcode_start:tech_info.cell_barcode_start+tech_info.max_cell_barcode_length]
     else:
         # Cell barcode is before the UMI, so we need to extract from before the umi
-        cell_barcode = r1_seq[tech_info.cell_barcode_start:tech_info.umi_start]
-        cell_barcode_quality = r1_quality[tech_info.cell_barcode_start:tech_info.umi_start]
+        start_idx = tech_info.umi_start + tech_info.umi_length
+        end_idx = tech_info.umi_start + tech_info.umi_length + tech_info.max_cell_barcode_length
+        # cell_barcode = r1_seq[tech_info.cell_barcode_start:tech_info.umi_start]
+        # cell_barcode_quality = r1_quality[tech_info.cell_barcode_start:tech_info.umi_start]
 
     # We have a likely probe. Now we need to correct the barcode
-    was_corrected, cell_barcode = correct_barcode(cell_barcode,
-                                                  np.array(phred_string_to_probs(cell_barcode_quality)),
-                                                  tech_info,
-                                                  compute_max_distance(len(cell_barcode), max_distance))
+    # was_corrected, cell_barcode = correct_barcode(cell_barcode,
+    #                                               np.array(phred_string_to_probs(cell_barcode_quality)),
+    #                                               tech_info,
+    #                                               )
+    cell_barcode, was_corrected = tech_info.correct_barcode(r1_seq,
+                                                            compute_max_distance(end_idx - start_idx, max_distance),
+                                                            start_idx,
+                                                            end_idx,
+                                                            )
 
     if cell_barcode is None:
         return [ReadProcessState.TOTAL_READS, ReadProcessState.FILTERED_NO_CELL_BARCODE], None
@@ -431,17 +440,17 @@ def search_files(read1s, read2s, output_dir, tech_info,
 #     return None
 
 
-def correct_barcode(barcode: str, barcode_quality: np.array, tech_info: TechnologyFormatInfo, max_dist: int) -> tuple[bool, Optional[str]]:
-    """
-    Correct a barcode by permuting the barcode by max_dist and checking if it is in the set of barcodes.
-    :param barcode: The barcode string.
-    :param barcode_quality: The barcode position qualities (Probability of error).
-    :param tech_info: Information about the technology used.
-    :param max_dist: The maximum edit distance to search for.
-    :return: The corrected barcode, or None if no barcode was found.
-    """
-    match, corrected = tech_info.correct_barcode(barcode, max_dist)  # TODO: Replace rapidfuzz entirely with the trie?
-    return corrected, match
+# def correct_barcode(read: str, start_idx: int, end_idx: int, tech_info: TechnologyFormatInfo, max_dist: int) -> tuple[bool, Optional[str]]:
+#     """
+#     Correct a barcode by permuting the barcode by max_dist and checking if it is in the set of barcodes.
+#     :param read: The barcode-containing read string.
+#     :param barcode_quality: The barcode position qualities (Probability of error).
+#     :param tech_info: Information about the technology used.
+#     :param max_dist: The maximum edit distance to search for.
+#     :return: The corrected barcode, or None if no barcode was found.
+#     """
+#     match, corrected = tech_info.correct_barcode(barcode, max_dist)  # TODO: Replace rapidfuzz entirely with the trie?
+#     return corrected, match
 
     # # based on: https://github.com/caleblareau/errorcorrect_10xatac_barcodes/blob/main/process_10x_barcodes.py#L115
     # match = find_exact_match(barcode, tech_info)
@@ -530,6 +539,10 @@ def build_manifest(probes, output: Path, overwrite, allow_any_combination):
         df = pd.concat([df, to_add], ignore_index=True)
 
         print(f"{(~df['was_defined']).sum()} decoy pairings added.")
+
+    # Create an index column
+    df.reset_index(drop=True, inplace=True)
+    df["index"] = df.index
 
     # Write the manifest to the output directory
     df.to_csv(output / "manifest.tsv", index=False, sep="\t")

@@ -170,16 +170,18 @@ def run(probes, project, output, make_unparsed_fastq, correct_barcodes, fuzzy_se
 
             # Now extract the cell barcode and UMI
             umi = r1_seq[flex_format.umi_start:flex_format.umi_start + flex_format.umi_length]
-            cell_barcode = r1_seq[flex_format.cell_barcode_start:flex_format.umi_start]
 
             if correct_barcodes:
                 # Correct the cell barcode
-                cell_barcode = flex_format.correct_barcode(cell_barcode, max_mismatches=2)
+                cell_barcode = flex_format.correct_barcode(r1_seq, max_mismatches=2,
+                                                           start_idx=flex_format.cell_barcode_start, end_idx=flex_format.umi_start)
                 if cell_barcode is None:
                     maybe_write(unparsed_r1, unparsed_r2, r1_name, r1_seq, r1_qual, r2_name, r2_seq, r2_qual)
                     continue
                 else:
                     cell_barcode = cell_barcode[0]
+            else:
+                cell_barcode = r1_seq[flex_format.cell_barcode_start:flex_format.umi_start]
 
             tracker["lhs_probe"].append(lhs_hit[1])
             tracker["lhs_sequence"].append(lhs_hit[0])
