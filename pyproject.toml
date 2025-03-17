@@ -46,6 +46,7 @@ dependencies = [
 # Need protobuf for VisiumHD cell barcode parsing
 spatial = [
     "protobuf>=5.28.0",
+    "spatialdata>=0.3.0",
 ]
 analysis = [
     "scanpy>=1.9.8",
@@ -55,6 +56,7 @@ analysis = [
 ]
 all = [
     "protobuf>=5.28.0",
+    "spatialdata>=0.3.0",
     "scanpy>=1.9.8",
     "igraph>=0.11.6",
     "numba>=0.57.0"
