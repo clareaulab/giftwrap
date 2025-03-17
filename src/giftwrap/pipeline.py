@@ -67,7 +67,13 @@ def main():
         default=1,
         help="The barcode number to use for the Flex run. Mutually exclusive with --multiplex. Defaults BC01"
     )
-
+    parser.add_argument(
+        "--unmapped_reads",
+        required=False,
+        type=str,
+        default=None,
+        help="If provided, unmapped reads are written to the file prefix given."
+    )
     # Pipeline arguments
     parser.add_argument(
         "--output", '-o',
@@ -173,6 +179,7 @@ def main():
             + (['-b', str(barcode)] if barcode > 1 else [])
             + (['--skip_constant_seq'] if skip_constant_seq else [])
             + (['--allow_any_combination'] if args.allow_any_combination else [])
+            + (['--unmapped_reads', args.unmapped_reads] if args.unmapped_reads is not None else [])
         )
         if returncode != 0:
             print("Error: Failed to count gapfills.", file=sys.stderr)
