@@ -4,6 +4,8 @@ import pandas as pd
 
 import anndata as ad
 import numpy as np
+import scipy
+
 from giftwrap.utils import maybe_multiprocess
 from tqdm.auto import tqdm
 
@@ -87,50 +89,114 @@ def call_genotypes(adata: ad.AnnData,
     genotypes = dict()
     genotypes_p = dict()
     genotypes_counts = dict()
+    N_cells = adata.shape[0]
     with mp as pool:
         for probe in (pbar := tqdm(probes, desc="Genotyping ")):
             pbar.set_postfix_str(f"Probe {probe}...")
             probe_genotypes = adata.var["gapfill"][adata.var["probe"] == probe].values
-            gapfill_counts = adata.X[:, adata.var["probe"] == probe].toarray()
+            if scipy.sparse.issparse(adata.X):
+                gapfill_counts = adata.X[:, (adata.var["probe"] == probe).values].toarray()
+            else:
+                gapfill_counts = adata.X[:, adata.var["probe"] == probe]
+
+            # Chunk the gapfill counts into the number of cores
+            gapfill_counts = np.array_split(gapfill_counts, cores)
+            # Call the genotypes in parallel
             results = pool.starmap(
                 _genotype_call_job,
                 [(probe_genotypes, counts, threshold) for counts in gapfill_counts]
             )
-            for (genotype, count, p) in results:
-                genotypes[probe] = genotypes.get(probe, []) + [genotype]
-                genotypes_counts[probe] = genotypes_counts.get(probe, []) + [count]
-                genotypes_p[probe] = genotypes_p.get(probe, []) + [p]
 
+            # Collect the results
+            start_idx = 0
+            for genotype, count, p in results:
+                if probe not in genotypes:
+                    genotypes[probe] = np.full(N_cells, np.nan, dtype=object)
+                    genotypes_counts[probe] = np.zeros(N_cells, dtype=int)
+                    genotypes_p[probe] = np.zeros(N_cells, dtype=float)
+
+                # Fill in the results
+                end_idx = start_idx + count.shape[0]
+                genotypes[probe][start_idx:end_idx] = genotype
+                genotypes_counts[probe][start_idx:end_idx] = count
+                genotypes_p[probe][start_idx:end_idx] = p
+
+                start_idx = end_idx
+
+    adata.uns['genotype_call_args'] = {
+        "flavor": flavor,
+        "threshold": threshold,
+        "cores": cores
+    }
     adata.obsm["genotype"] = pd.DataFrame(genotypes, index=adata.obs.index)
     adata.obsm["genotype_counts"] = pd.DataFrame(genotypes_counts, index=adata.obs.index)
     adata.obsm["genotype_proportion"] = pd.DataFrame(genotypes_p, index=adata.obs.index)
     return adata
 
 
-def _genotype_call_job(genotypes: np.array, counts: np.array, threshold: float) -> (str, float):
+def _genotype_call_job(genotypes: np.array, counts: np.array, threshold: float) -> (np.array, np.array, np.array):
     """
     Call the genotype for a single cell and probe.
-    :param genotypes: The list of genotypes for the probe.
-    :param counts: The counts for the gapfills.
+    :param genotypes: The string list of genotypes for the probe (N_genotypes_for_probe)
+    :param counts: The counts for the gapfills for the probe (N_cells x N_gapfills_for_probe)
     :param threshold: The cumulative fraction of UMIs to call a genotype.
     :return: Returns a tuple of the genotype call, number of umis supporting the genotype, and the cumulative fraction of UMIs for the called genotype.
     """
-    # First check for short circuit cases
-    if counts.sum() == 0:  # No UMIs
-        return np.nan, 0, 0.0
-    if counts.shape[0] == 1:  # Only one gapfill
-        return genotypes[0], counts.sum(), 1.0
-    if (counts > 0).sum() == 1:  # All UMIs in a single gapfill
-        return genotypes[counts.argmax()], counts.sum(), 1.0
+    N_cells, N_genotypes = counts.shape
+    calls = np.full(N_cells, np.nan, dtype=object)
+    n_umis = np.zeros(N_cells, dtype=int)
+    p_umis = np.zeros(N_cells, dtype=float)
 
-    # Now we have to do a more expensive computation
-    sorted_indices = np.argsort(counts)[::-1]
-    counts = counts[sorted_indices]
-    genotypes = genotypes[sorted_indices]
+    library = counts.sum(-1)
 
-    cumulative = np.cumsum(counts) / counts.sum()
-    idx = np.argmax(cumulative >= threshold)
-    return "/".join(genotypes[:idx + 1]), counts[:idx + 1].sum(), cumulative[idx]
+    # Case 1: No UMIs, should be NaN, 0, 0.0
+    all_zero_mask = (library == 0)
+
+    # Case 2: Only one possible detected genotype option, no need to do compute
+    if N_genotypes == 1:
+        calls[~all_zero_mask] = genotypes[0]
+        n_umis[~all_zero_mask] = counts.sum(-1)[~all_zero_mask]
+        p_umis[~all_zero_mask] = 1.0
+        return calls, n_umis, p_umis
+
+    # Case 3: All umis in a single gapfill
+    single_gapfill_mask = ((counts > 0).sum(-1) == 1) & (~all_zero_mask)
+    if np.any(single_gapfill_mask):
+        # Find the correct genotypes
+        gapfill_indices = np.argmax(counts[single_gapfill_mask], -1)
+        calls[single_gapfill_mask] = genotypes[gapfill_indices]
+        n_umis[single_gapfill_mask] = counts[single_gapfill_mask].sum(-1)
+        p_umis[single_gapfill_mask] = 1.0
+
+    # Case 4: All other cases, requiring more expensive computation
+    remaining_mask = ~all_zero_mask & ~single_gapfill_mask
+    if np.any(remaining_mask):
+        # Get the counts and genotypes for the remaining cells
+        remaining_counts = counts[remaining_mask]
+
+        # Compute sorted indices (descending order)
+        sorted_indices = np.argsort(remaining_counts, axis=-1)[:, ::-1]
+        sorted_counts = np.take_along_axis(remaining_counts, sorted_indices, axis=-1)
+        sorted_genotypes = np.take_along_axis(genotypes[np.newaxis, :], sorted_indices, axis=-1)
+
+        # Compute cumulative proportions
+        cumulative = np.cumsum(sorted_counts, axis=-1) / sorted_counts.sum(axis=-1, keepdims=True)
+
+        # Find the index where cumulative proportion exceeds the threshold
+        idx = np.argmax(cumulative >= threshold, axis=-1)
+        # Finally, compute the genotype calls, counts, and proportions
+        for subset_i, orig_i in enumerate(np.where(remaining_mask)[0]):
+            # Get the index of the first genotype that exceeds the threshold
+            if idx[subset_i] == 0:
+                calls[orig_i] = sorted_genotypes[subset_i, 0]
+                n_umis[orig_i] = sorted_counts[subset_i, 0]
+                p_umis[orig_i] = 1.0
+            else:
+                calls[orig_i] = "/".join(sorted_genotypes[subset_i, :idx[subset_i] + 1])
+                n_umis[orig_i] = sorted_counts[subset_i, :idx[subset_i] + 1].sum()
+                p_umis[orig_i] = cumulative[subset_i, idx[subset_i]]
+
+    return calls, n_umis, p_umis
 
 
 def transfer_genotypes(wta_adata: ad.AnnData, gapfill_adata: ad.AnnData) -> ad.AnnData:

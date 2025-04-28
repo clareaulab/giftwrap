@@ -195,8 +195,9 @@ class PrefixTree:
         Returns None if no content is found with the given number of mismatches.
         Else returns a tuple of: Corrected Content, Number of Mismatches, Start Index within the Given String the match begins on
         """
-        if (content, max_mismatches) in self._cache:
-            return self._cache[(content, max_mismatches)]
+        cached = self._cache.get((content, max_mismatches), default=-1)
+        if cached != -1:
+            return cached
 
         res = self._search(content, self.root, 0, max_mismatches, 0, dict())
 
@@ -450,6 +451,7 @@ class TechnologyFormatInfo(ABC):
         raise NotImplementedError()
 
     @property
+    @functools.lru_cache(1)
     def max_cell_barcode_length(self) -> int:
         """
         Returns the maximum length of a cell barcode.
@@ -868,7 +870,7 @@ class VisiumHDFormatInfo(TechnologyFormatInfo):
 
     # Cell barcodes will be the 2um "binned" output
     def make_barcode_string(self, cell_barcode: str, plex: int = 1, x_coord: Optional[int] = None, y_coord: Optional[int] = None, is_multiplexed: bool = False) -> str:
-        return f"s_002um_{x_coord}_{y_coord}-{plex}"
+        return f"s_002um_{y_coord:05d}_{x_coord:05d}-{plex}"
 
     @property
     def constant_sequence(self) -> str:
@@ -1396,7 +1398,7 @@ def read_h5_file(filename: str) -> ad.AnnData:
                                 "probe_metadata": manifest,
                                 "plex": f.attrs['plex'],
                                 "project": f.attrs['project'],
-                                "created_date": pd.Timestamp(f.attrs['created_date']),
+                                "created_date": f.attrs['created_date'], #pd.Timestamp(f.attrs['created_date']),
                                 "n_cells": f.attrs['n_cells'],
                                 "n_probes": f.attrs['n_probes'],
                                 "n_probe_gapfill_combinations": f.attrs['n_probe_gapfill_combinations'],

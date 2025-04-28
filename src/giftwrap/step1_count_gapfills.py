@@ -53,26 +53,83 @@ def process_reads(reads,
             return fuzzysearch.find_near_matches(subsequence, sequence, max_substitutions=dist, max_insertions=0, max_deletions=0)
     fuzzysearch_fn = functools.lru_cache(maxsize=len(reads) // 2)(fuzzysearch_fn)
 
-    return [process_read(r1, r2, rhs_seqs, lhs_seqs, lhs_seq2potential_rhs_seqs, tech_info, names, max_distance,
+    unmapped = []
+    results = []
+    for (r1, r2) in reads:
+        res = process_read(r1, r2, rhs_seqs, lhs_seqs, lhs_seq2potential_rhs_seqs, tech_info, names, max_distance,
                          min_lhs_probe_size, min_rhs_probe_size, max_lhs_probe_size, max_rhs_probe_size, multiplex,
                          barcode, skip_constant_seq, unmapped_reads_prefix, fuzzysearch_fn)
-            for (r1, r2) in reads]
+
+        reasons = res[0]
+        data = res[1]
+        if data is None:  # Unmapped read
+            unmapped.append((reasons[-1], r1, r2))
+
+        results.append((reasons, data))
+
+    save_unmapped_data(unmapped_reads_prefix, unmapped)
+
+    return results
 
 
-def append_to_fastq(prefix, read1, read2, reason):
+def save_unmapped_data(prefix, unmapped: list[tuple[ReadProcessState, tuple[tuple[str, str, str],tuple[str, str, str]]]]):
     """
-    Add unmapped reads to fastq. And tag them with the reason.
+    Add unmapped reads to fastq. And tag them with the reason. To deal with asynchronous writing, we will write to temp
+    files and then concatenate them at the end.
     """
     if prefix is None:
         return
-    r1_title, r1_seq, r1_quality = read1
-    r2_title, r2_seq, r2_quality = read2
-    r1_file = Path(prefix + "_R1.fastq.gz")
-    r2_file = Path(prefix + "_R2.fastq.gz")
 
-    with gzip.open(r1_file, 'at') as f1, gzip.open(r2_file, 'at') as f2:
-        f1.write(f"@{r1_title} {reason}\n{r1_seq}\n+\n{r1_quality}\n")
-        f2.write(f"@{r2_title} {reason}\n{r2_seq}\n+\n{r2_quality}\n")
+    prefix = Path(prefix+"_temp")
+    r1_dir = prefix / "R1"
+    r2_dir = prefix / "R2"
+    if not prefix.exists():
+        r1_dir.mkdir(parents=True, exist_ok=True)
+        r2_dir.mkdir(parents=True, exist_ok=True)
+
+    # Get arbitrary random name
+    r1_file = None
+    r2_file = None
+    while r1_file is None or r2_file is None:
+        hex_name = os.urandom(16).hex()
+        r1_file = r1_dir / f"{hex_name}"
+        r2_file = r2_dir / f"{hex_name}"
+        if r1_file.exists() or r2_file.exists():
+            r1_file = None
+            r2_file = None
+    r1_file.touch()
+    r2_file.touch()
+    with gzip.open(r1_file, 'wt') as f1, gzip.open(r2_file, 'wt') as f2:
+        for reason, r1, r2 in unmapped:
+            r1_title, r1_seq, r1_quality = r1
+            r2_title, r2_seq, r2_quality = r2
+            f1.write(f"@{r1_title} {reason}\n{r1_seq}\n+\n{r1_quality}\n")
+            f2.write(f"@{r2_title} {reason}\n{r2_seq}\n+\n{r2_quality}\n")
+
+
+def collect_unmapped_fastq(unmapped_reads_prefix):
+    if unmapped_reads_prefix is None:
+        return
+    print("Collecting unmapped reads...", end="")
+    temp_dir = Path(unmapped_reads_prefix+"_temp")
+    assert temp_dir.exists()
+    r1_dir = temp_dir / "R1"
+    r2_dir = temp_dir / "R2"
+    assert r1_dir.exists() and r2_dir.exists()
+    out_R1_file = Path(unmapped_reads_prefix + "_R1.fastq.gz")
+    out_R2_file = Path(unmapped_reads_prefix + "_R2.fastq.gz")
+
+    with gzip.open(out_R1_file, 'at') as f1, gzip.open(out_R2_file, 'at') as f2:
+        for r1_file in r1_dir.iterdir():
+            # Get the corresponding r2 file
+            r2_file = r2_dir / r1_file.name
+            assert r2_file.exists()
+            with gzip.open(r1_file, 'rt') as f1_temp, gzip.open(r2_file, 'rt') as f2_temp:
+                shutil.copyfileobj(f1_temp, f1)
+                shutil.copyfileobj(f2_temp, f2)
+    # Remove the temp directory
+    shutil.rmtree(temp_dir)
+    print("Done.")
 
 
 def process_read(r1, r2,
@@ -127,8 +184,6 @@ def process_read(r1, r2,
         )
 
     if match is None:  # No match found
-        append_to_fastq(unmapped_reads_prefix,
-                        r1, r2, ReadProcessState.FILTERED_NO_LHS)
         return [ReadProcessState.TOTAL_READS, ReadProcessState.FILTERED_NO_LHS], None
 
     match_size = len(match_query)
@@ -163,8 +218,6 @@ def process_read(r1, r2,
                 constant_end = -1
                 has_constant_seq = False
             else:
-                append_to_fastq(unmapped_reads_prefix,
-                        r1, r2, ReadProcessState.FILTERED_NO_CONSTANT)
                 return [ReadProcessState.TOTAL_READS, ReadProcessState.FILTERED_NO_CONSTANT], None
         else:
             has_constant_seq = True
@@ -179,15 +232,11 @@ def process_read(r1, r2,
         if has_constant_seq and tech_info.has_probe_barcode and (multiplex > 1 or barcode > 0):
             probe_bc_search_space = r2_seq[constant_end + tech_info.probe_barcode_start:constant_end + tech_info.probe_barcode_start + tech_info.probe_barcode_length]
             if len(probe_bc_search_space) == 0:  # Short circuit
-                append_to_fastq(unmapped_reads_prefix,
-                        r1, r2, ReadProcessState.FILTERED_NO_PROBE_BARCODE)
                 return [ReadProcessState.TOTAL_READS, ReadProcessState.FILTERED_NO_PROBE_BARCODE], None
 
             if multiplex <= 1:  # Singleplex, so we search for the specified barcode
                 probe_barcode = tech_info.probe_barcodes[barcode-1]
                 if rapidfuzz.distance.Levenshtein.distance(probe_bc_search_space, probe_barcode) > compute_max_distance(len(probe_bc_search_space), max_distance):
-                    append_to_fastq(unmapped_reads_prefix,
-                        r1, r2, ReadProcessState.FILTERED_NO_PROBE_BARCODE)
                     return [ReadProcessState.TOTAL_READS, ReadProcessState.FILTERED_NO_PROBE_BARCODE], None
             else:  # Multiplexed, so we need to search for the barcode
                 probe_barcode_match = rapidfuzz.process.extractOne(
@@ -197,8 +246,6 @@ def process_read(r1, r2,
                     score_cutoff=compute_max_distance(len(probe_bc_search_space), max_distance)
                 )
                 if probe_barcode_match is None:
-                    append_to_fastq(unmapped_reads_prefix,
-                        r1, r2, ReadProcessState.FILTERED_NO_PROBE_BARCODE)
                     return [ReadProcessState.TOTAL_READS, ReadProcessState.FILTERED_NO_PROBE_BARCODE], None
                 probe_barcode = probe_barcode_match[0]
         # Else don't verify since we don't need to demultiplex
@@ -250,8 +297,6 @@ def process_read(r1, r2,
         rhs_match = find_rhs_match(r2_seq, potential_rhs_probe_seq)
 
         if rhs_match is None:  # Short circuit
-            append_to_fastq(unmapped_reads_prefix,
-                            r1, r2, ReadProcessState.FILTERED_NO_RHS)
             return [ReadProcessState.TOTAL_READS, ReadProcessState.FILTERED_NO_RHS], None
 
         rhs_idx = potential_rhs_probe_idx
@@ -270,8 +315,6 @@ def process_read(r1, r2,
                 rhs_match = potential_rhs_match
                 rhs_idx = potential_rhs_probe_idx
         if rhs_match is None:  # Short circuit
-            append_to_fastq(unmapped_reads_prefix,
-                            r1, r2, ReadProcessState.FILTERED_NO_RHS)
             return [ReadProcessState.TOTAL_READS, ReadProcessState.FILTERED_NO_RHS], None
 
     if rhs_seqs[rhs_idx] != r2_seq[rhs_match.start:rhs_match.end]:
@@ -299,8 +342,8 @@ def process_read(r1, r2,
         # cell_barcode_quality = r1_quality[tech_info.cell_barcode_start:tech_info.cell_barcode_start+tech_info.max_cell_barcode_length]
     else:
         # Cell barcode is before the UMI, so we need to extract from before the umi
-        start_idx = tech_info.umi_start + tech_info.umi_length
-        end_idx = tech_info.umi_start + tech_info.umi_length + tech_info.max_cell_barcode_length
+        start_idx = tech_info.cell_barcode_start
+        end_idx = tech_info.cell_barcode_start + tech_info.max_cell_barcode_length
         # cell_barcode = r1_seq[tech_info.cell_barcode_start:tech_info.umi_start]
         # cell_barcode_quality = r1_quality[tech_info.cell_barcode_start:tech_info.umi_start]
 
@@ -316,8 +359,6 @@ def process_read(r1, r2,
                                                             )
 
     if cell_barcode is None:
-        append_to_fastq(unmapped_reads_prefix,
-                        r1, r2, ReadProcessState.FILTERED_NO_CELL_BARCODE)
         return [ReadProcessState.TOTAL_READS, ReadProcessState.FILTERED_NO_CELL_BARCODE], None
 
     if was_corrected:
@@ -340,7 +381,8 @@ def search_files(read1s, read2s, output_dir, tech_info,
                  skip_constant_seq=False, unmapped_reads_prefix=None):
     probes = read_manifest(output_dir)
 
-    unmapped_reads_prefix = os.path.join(output_dir, unmapped_reads_prefix)
+    if unmapped_reads_prefix:
+        unmapped_reads_prefix = os.path.join(output_dir, unmapped_reads_prefix)
 
     lhs_seqs = probes['lhs_probe'].tolist()
     rhs_seqs = probes['rhs_probe'].tolist()
@@ -385,7 +427,7 @@ def search_files(read1s, read2s, output_dir, tech_info,
             f.write(f"cell_idx\tprobe_idx\tprobe_barcode\tgapfill\tgapfill_quality\tumi\tumi_quality\n")
             f2.write("barcode\tplex")
             if tech_info.is_spatial:
-                f2.write("\tin_tissue\tarray_row\tarray_col")
+                f2.write("\tin_tissue\tarray_col\tarray_row")
             f2.write("\n")
 
             job = None
@@ -448,6 +490,9 @@ def search_files(read1s, read2s, output_dir, tech_info,
             if job is not None:  # Process the final batch
                 process_data(job.get())
                 pbar.set_postfix({name.name: count for name, count in result_reason_counter.items()})
+
+    # If we were writing unmapped reads, we need to collect them
+    collect_unmapped_fastq(unmapped_reads_prefix)
 
     print("Reads processed.")
 
