@@ -176,6 +176,25 @@ This R script requires the `Matrix` and `rhdf5` packages to be installed. All th
 are read with the `read()` function. If you have `Seurat` installed, you can directly read the data into a Seurat object
 with the `read_seurat()` function.
 
+### Spatial Analysis example
+Note: This expects the giftwrap-sc[spatial] extras to be installed. 
+Additionally, we recommend installing spatialdata-io and spatialdata-plot as well.
+```python
+import giftwrap as gw
+import spatialdata as sd
+import spatialdata_io as sdio
+import spatialdata_plot
+
+wta = sdio.visium_hd(...)  # Load the WTA data
+gf = gw.read_h5_file("counts.1.filtered.h5")  # Load the gapfill data
+
+# Join the WTA and gapfill data
+wta = gw.sp.join_with_wta(wta, gf)
+
+# Plot the data
+wta.pl.
+```
+
 # Building
 
 First, install uv: https://github.com/astral-sh/uv

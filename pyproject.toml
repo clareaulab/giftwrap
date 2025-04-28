@@ -78,5 +78,13 @@ giftwrap-diagnostic = "giftwrap.basic_counts:main"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build.targets.sdist]
+exclude = [
+  "spaceranger-3.1.1",
+    "test_out",
+    "*fastq*",
+    "venv",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/giftwrap"]
