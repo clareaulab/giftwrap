@@ -10,7 +10,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 import itertools
 import contextlib
-from typing import Literal, Optional
+from typing import Literal, Optional, Union
 import multiprocessing
 
 import math
@@ -603,6 +603,36 @@ _tx_barcode_oligos = {s: (i+1) for i, s in enumerate([
 ])}
 _tx_barcode_to_oligo = {v: k for k, v in _tx_barcode_oligos.items()}
 
+
+def _parse_possible_barcodes(barcode_lists: list[Path]) -> np.ndarray[str]:
+    """
+    Parse a list of barcode files into a single array.
+    :param barcode_lists: The paths to read barcodes from.
+    :return: A numpy array of barcodes.
+    """
+    for barcode_path in barcode_lists:
+        try:
+            to_add = read_wta(
+                barcode_path,
+                barcodes_only=True
+            )
+            # Convert the numpy array to a pandas series
+            to_add = pd.Series(
+                to_add
+            )
+            if barcodes is None:
+                barcodes = to_add
+            else:
+                barcodes = pd.concat([barcodes, to_add], ignore_index=True)
+        except:
+            print(
+                "Warning: Unable to parse barcodes from the provided WTA cellranger output.", barcode_path,
+                " Falling back to bundled barcodes."
+            )
+
+    return barcodes.drop_duplicates().reset_index(drop=True)
+
+
 class FlexFormatInfo(TechnologyFormatInfo):
     """
     Describes the format of a 10X Flex run.
@@ -611,15 +641,23 @@ class FlexFormatInfo(TechnologyFormatInfo):
     def __init__(self,
                  barcode_dir: Optional[str] = None,
                  read1_length: Optional[int] = 28,
-                 read2_length: Optional[int] = 90):
+                 read2_length: Optional[int] = 90,
+                 barcode_list: Optional[list[Path]] = None):
+        if barcode_dir is None and barcode_list is None:
+            raise ValueError("Either barcode_dir or barcode_list must be provided.")
+
         super().__init__(barcode_dir, read1_length, read2_length)
-        # Load the barcodes
-        barcodes = pd.read_table(self._barcode_dir / "737K-fixed-rna-profiling.txt.gz", header=None, names=["barcode"],
-                                 compression="gzip")
+        if barcode_list:
+            barcodes = _parse_possible_barcodes(barcode_list)
+        else:
+            barcodes = None
+        if barcodes is None:
+            # Load the barcodes
+            barcodes = pd.read_table(self._barcode_dir / "737K-fixed-rna-profiling.txt.gz", header=None, names=["barcode"], compression="gzip")["barcode"]
         # Strip the -Number from the barcode
-        barcodes["barcode"] = barcodes["barcode"].str.split("-").str[0]
+        barcodes = barcodes.str.split("-").str[0]
         # Collect the universe of barcodes
-        self._barcodes = PrefixTree(list(barcodes["barcode"].unique()))
+        self._barcodes = PrefixTree(list(barcodes.unique()))
 
         self._probe_barcodes = _tx_barcode_oligos
 
@@ -698,11 +736,21 @@ class VisiumFormatInfo(TechnologyFormatInfo):
                  version: int = 5,
                  barcode_dir: Optional[str] = None,
                  read1_length: Optional[int] = 28,
-                 read2_length: Optional[int] = 90):
+                 read2_length: Optional[int] = 90,
+                 barcode_list: Optional[list[Path]] = None
+                 ):
+        if barcode_dir is None and barcode_list is None:
+            raise ValueError("Either barcode_dir or barcode_list must be provided.")
+
         super().__init__(barcode_dir, read1_length, read2_length)
         # Load the barcodes
-        # TODO: I am assuming that X is first and Y is second
-        barcodes = pd.read_table(self._barcode_dir / f"visium-v{version}_coordinates.txt", header=None, names=["barcode", 'x', 'y'])
+        if barcode_list:
+            barcodes = _parse_possible_barcodes(barcode_list)
+        else:
+            barcodes = None
+        if barcodes is None:
+            # TODO: I am assuming that X is first and Y is second
+            barcodes = pd.read_table(self._barcode_dir / f"visium-v{version}_coordinates.txt", header=None, names=["barcode", 'x', 'y'])
         self._barcodes = PrefixTree(barcodes["barcode"].tolist())
         self._barcode_coordinates = {row["barcode"]: (row["x"], row["y"]) for _, row in barcodes.iterrows()}
 
@@ -772,8 +820,25 @@ class VisiumHDFormatInfo(TechnologyFormatInfo):
                  space_ranger_path: Optional[str] = None,
                  barcode_dir: Optional[str] = None,
                  read1_length: Optional[int] = 43,
-                 read2_length: Optional[int] = 50):
+                 read2_length: Optional[int] = 50,
+                 barcode_list: Optional[list[Path]] = None):
+        if barcode_dir is None and barcode_list is None:
+            raise ValueError("Either barcode_dir or barcode_list must be provided.")
+
         super().__init__(barcode_dir, read1_length, read2_length)
+        xy_whitelist = None
+        if barcode_list:
+            barcodes = _parse_possible_barcodes(barcode_list)
+            if barcodes:
+                xy_whitelist = set()
+                # Parse the coordinates from the barcode strings
+                for bc in barcodes:
+                    f"s_002um_{y_coord:05d}_{x_coord:05d}-{plex}"
+                    y, x = bc.split("-")[0].split("_")[1:]
+                    y = int(y)
+                    x = int(x)
+                    xy_whitelist.add((x, y))
+
         # Load the barcodes, note that this REQUIRES spaceranger to be installed
         import shutil
         import importlib
@@ -828,8 +893,10 @@ class VisiumHDFormatInfo(TechnologyFormatInfo):
         # _barcode_tree = PrefixTree([], allow_indels=True)  # Allow for indels as per 10X:
         # https://www.10xgenomics.com/support/software/space-ranger/latest/algorithms-overview/gene-expression#:~:text=using%20the%20edit%20distance%2C%20which%20allows%20for%20insertions%2C%20deletions%2C%20and%20substitutions.%20Up%20to%20four%20edits%20are%20permissible%20to%20correct%20a%20barcode%20to%20the%20whitelist.
         for x, bc1 in enumerate(slide_def.two_part.bc1_oligos):
-            self._bc_lengths.add(len(bc1))
             for y, bc2 in enumerate(slide_def.two_part.bc2_oligos):
+                if (x, y) not in xy_whitelist:
+                    continue   # Skip if not in the whitelist
+                self._bc_lengths.add(len(bc1))
                 self._bc_lengths.add(len(bc2))
                 cell_bc = bc1 + bc2
                 self._barcode_coordinates[cell_bc] = (x, y)
@@ -1175,6 +1242,101 @@ def compile_flatfile(manifest_df: pd.DataFrame, probe_reads_file: str, barcode_l
             output_file.write(f"{cell_barcode}\t{lhs_probe}\t{rhs_probe}\t{probe_bc_idx}\t{gapfill}\t{umi_count}\t{percent_supporting}\n")
 
 
+def _parse_barcodes_tsv(filepath: Path) -> np.ndarray[str]:
+    """
+    Parse a barcodes.tsv file.
+    :param filepath: The path to the barcodes.tsv(.gz) file.
+    :return: A list of barcodes.
+    """
+    return pd.read_csv(filepath, sep="\t", header=None)[0].values
+
+
+def _parse_molecule_info_h5(filepath: Path) -> np.ndarray[str]:
+    """
+    Parse a VisiumHD molecule_info.h5 file.
+    :param filepath: The path to the molecule_info.h5 file.
+    :return: A list of barcodes.
+    """
+    with h5py.File(filepath, "r") as f:
+        return f['barcodes'].asstr()[()]
+
+
+def _parse_filtered_feature_bc_matrix_h5(filepath: Path) -> np.ndarray[str]:
+    """
+    Parse a filtered_feature_bc_matrix.h5 file.
+    :param filepath: The path to the filtered_feature_bc_matrix.h5 file.
+    :return: A list of barcodes.
+    """
+    with h5py.File(filepath, "r") as f:
+        return f['matrix']['barcodes'].asstr()[()]
+
+
+def read_wta(
+        input_path: Path,
+        barcodes_only: bool = False,
+        fallback_to_barcodes: bool = False,
+) -> Union[ad.AnnData, np.ndarray[str]]:
+    """
+    Read a WTA file and return the cells processed by cellranger or spaceranger.
+    :param input_path: The path to the WTA file.
+    :param barcodes_only: If true, return only the barcodes.
+    :param fallback_to_barcodes: If true, fallback to barcodes if scanpy is not available regardless.
+    :return: The cells processed by cellranger. An AnnData object if barcodes_only is False, otherwise a DataFrame.
+
+    Note that this prefers to parse outputs using scanpy as it will be the most robust, but if scanpy is not available,
+        we will try to parse outputs to extract just cell barcodes.
+    """
+    # Check if this is cellranger of spaceranger according to the file structure
+    if barcodes_only:
+        if input_path.is_dir():
+            # Check if square_002um appears in the directory structure
+            if "square_002um" in str(input_path):  # Pointing to the binned output
+                if "filtered_feature_bc_matrix" in str(input_path):
+                    return _parse_barcodes_tsv(input_path / "barcodes.tsv.gz")
+                else:
+                    return _parse_barcodes_tsv(input_path / "filtered_feature_bc_matrix" / "barcodes.tsv.gz")
+            elif (input_path / "spatial").exists():  # Pointing to the spatial output base directory
+                return _parse_barcodes_tsv(input_path / "binned_outputs" / "square_002um" / "filtered_feature_bc_matrix" / "barcodes.tsv.gz")
+            elif (input_path / "outs" / "binned_outputs" / "square_002um").exists():
+                return _parse_barcodes_tsv(input_path / "outs" / "binned_outputs" / "square_002um" / "filtered_feature_bc_matrix" / "barcodes.tsv.gz")
+            elif (input_path / "binned_outputs" / "square_002um").exists():
+                return _parse_barcodes_tsv(input_path / "binned_outputs" / "square_002um" / "filtered_feature_bc_matrix" / "barcodes.tsv.gz")
+            elif (input_path / "square_002um").exists():
+                return _parse_barcodes_tsv(input_path / "square_002um" / "filtered_feature_bc_matrix" / "barcodes.tsv.gz")
+            else: # Assume cell ranger output
+                return _parse_barcodes_tsv(input_path / "barcodes.tsv.gz")
+        else:
+            base_filename = input_path.name
+            if (base_filename == 'molecule_info.h5' and (input_path.parent / 'spatial').exists()):  # Given a molecule_info.h5 file in a spatial directory
+                return _parse_molecule_info_h5(input_path)
+            elif (base_filename == "filtered_feature_bc_matrix.h5" and (input_path.parent / 'spatial').exists()):
+                return _parse_filtered_feature_bc_matrix_h5(input_path)
+            elif base_filename == "filtered_feature_bc_matrix.h5":
+                return _parse_filtered_feature_bc_matrix_h5(input_path)
+            elif base_filename == "sample_molecule_info.h5":
+                return _parse_molecule_info_h5(input_path)
+        raise FileNotFoundError("Barcodes file not found.")
+
+    try:
+        import scanpy as sc
+    except:
+        if not barcodes_only and not fallback_to_barcodes:
+            print("Scanpy not found. Please install it to use the cellranger output.")
+            return
+        elif fallback_to_barcodes:
+            return read_wta(input_path, barcodes_only=True)
+
+    if input_path.is_dir():
+        adata = sc.read_10x_mtx(input_path)
+    else:
+        adata = sc.read_10x_h5(input_path)
+
+    if barcodes_only:
+        return adata.obs_names.values
+    else:
+        return adata
+
+
 def sort_tsv_file(file: Path, columns: list[int], cores: int):
     """
     Sort a written tsv file in-place. Will either use a single core or multiple cores depending on the cores argument.
@@ -1231,7 +1393,7 @@ def sort_tsv_file(file: Path, columns: list[int], cores: int):
     df.to_csv(file, sep="\t", index=False, compression="gzip" if "gz" in file.suffix else None)
 
 
-def filter_h5_file(input_file: Path, output_file: Path, barcodes_list: list[str], pad_matrix: bool = True):
+def filter_h5_file(input_file: Path, output_file: Path, barcodes_list: np.ndarray[str], pad_matrix: bool = True):
     """
     Given a counts h5 file and a list of barcodes, filter the barcodes to only include the ones in the list.
     :param input_file: The input h5 file.

@@ -7,7 +7,7 @@ import pandas as pd
 from scipy.stats import spearmanr, gaussian_kde
 from sankeyflow import Sankey
 
-from .utils import filter_h5_file, read_h5_file, sequencing_saturation, sequence_saturation_curve, maybe_gzip
+from .utils import filter_h5_file, read_h5_file, read_wta, sequencing_saturation, sequence_saturation_curve, maybe_gzip
 from .analysis.tools import collapse_gapfills
 
 
@@ -380,23 +380,26 @@ def summarize_counts(input: Path, summary_output: Path, summary_pdf_output: Path
 
     # Read cellranger to an anndata file if provided
     if cellranger_output is not None:
-        try:
-            import scanpy as sc
-        except:
-            print("Scanpy not found. Please install it to use the cellranger output.")
-            return
-        if cellranger_output.is_dir():
-            adata = sc.read_10x_mtx(cellranger_output)
+        obj = read_wta(
+            cellranger_output,
+            fallback_to_barcodes=True
+        )
+        # If an array was returned, we only have barcodes, else we have an andata object
+        if isinstance(obj, np.ndarray):
+            adata = None
+            barcodes = obj
+            print("Cellranger output provided, AnnData only partially parsed. Using barcodes only.")
         else:
-            adata = sc.read_10x_h5(cellranger_output)
+            adata = obj
+            barcodes = adata.obs_names.values
     else:
         adata = None
+        barcodes = None
         print("No cellranger output provided, unable to filter counts...")
 
-    if adata:
-        print(f"Cellranger identified {adata.shape[1]} cells. Filtering counts...", end="")
+    if barcodes:
+        print(f"Cellranger identified {barcodes.shape[0]} cells. Filtering counts...", end="")
         # Filter the counts file to only include cells in the cellranger output
-        barcodes = adata.obs.index.tolist()
         filter_h5_file(input, counts_output, barcodes)
         if flatten:  # We need to filter the flattened counts as well
             with maybe_gzip(input.parent / input.name.replace(".h5", ".tsv.gz").replace('counts.', 'flat_counts.'), 'r') as f_in:
@@ -466,7 +469,7 @@ def run(output, overwrite, cellranger_output, flatten):
     has_cellranger = cellranger_output is not None and len(cellranger_output) > 0
     if has_cellranger:
         cellranger_output = [Path(x) for x in cellranger_output]
-    print("WTA CellRanger output provided:", has_cellranger)
+        print("WTA CellRanger output provided.")
 
     output = Path(output)
     assert output.exists(), f"Output directory does not exist."
