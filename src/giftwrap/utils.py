@@ -833,7 +833,6 @@ class VisiumHDFormatInfo(TechnologyFormatInfo):
                 xy_whitelist = set()
                 # Parse the coordinates from the barcode strings
                 for bc in barcodes:
-                    f"s_002um_{y_coord:05d}_{x_coord:05d}-{plex}"
                     y, x = bc.split("-")[0].split("_")[1:]
                     y = int(y)
                     x = int(x)
@@ -1248,7 +1247,7 @@ def _parse_barcodes_tsv(filepath: Path) -> np.ndarray[str]:
     :param filepath: The path to the barcodes.tsv(.gz) file.
     :return: A list of barcodes.
     """
-    return pd.read_csv(filepath, sep="\t", header=None)[0].values
+    return pd.read_csv(filepath, sep="\t", header=None, compression='gzip' if filepath.suffix == '.gz' else None).iloc[:, 0].str.split("-").str[0].to_numpy(dtype=str)
 
 
 def _parse_molecule_info_h5(filepath: Path) -> np.ndarray[str]:
@@ -1258,7 +1257,11 @@ def _parse_molecule_info_h5(filepath: Path) -> np.ndarray[str]:
     :return: A list of barcodes.
     """
     with h5py.File(filepath, "r") as f:
-        return f['barcodes'].asstr()[()]
+        barcodes = f['barcodes'].asstr()[()]
+
+    # Remove -1 from the barcodes
+    barcodes = np.apply_along_axis(lambda bc: bc.split("-")[0], axis=0, arr=barcodes)
+    return barcodes.astype(str)
 
 
 def _parse_filtered_feature_bc_matrix_h5(filepath: Path) -> np.ndarray[str]:
@@ -1268,7 +1271,11 @@ def _parse_filtered_feature_bc_matrix_h5(filepath: Path) -> np.ndarray[str]:
     :return: A list of barcodes.
     """
     with h5py.File(filepath, "r") as f:
-        return f['matrix']['barcodes'].asstr()[()]
+        barcodes = f['matrix']['barcodes'].asstr()[()]
+
+    # Remove -1 from the barcodes
+    barcodes = np.apply_along_axis(lambda bc: bc.split("-")[0], axis=0, arr=barcodes)
+    return barcodes.astype(str)
 
 
 def read_wta(
