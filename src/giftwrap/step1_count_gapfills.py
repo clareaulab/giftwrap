@@ -648,11 +648,21 @@ def run(probes,
         allow_indels,
         skip_constant_seq,
         allow_any_combination,
-        unmapped_reads_prefix):
+        unmapped_reads_prefix,
+        cellranger_output):
     if (read1 == read2 == project) and project is None:
         raise AssertionError("At least one of the read1, read2, or project arguments must be provided.")
     assert not (multiplex > 1 and barcode > 1), "Multiplex and barcode arguments are mutually exclusive."
     assert (not skip_constant_seq) or (multiplex < 2 and barcode < 2), "Skipping the constant sequence is only valid for singleplex sequencing."
+
+    if isinstance(cellranger_output, str):
+        cellranger_output = [cellranger_output]
+    has_cellranger = cellranger_output is not None and len(cellranger_output) > 0
+    if has_cellranger:
+        cellranger_output = [Path(x) for x in cellranger_output]
+        print("WTA CellRanger output provided.")
+    else:
+        cellranger_output = None
 
     print("Searching for fastq files...", end="")
     if project is not None:
@@ -725,13 +735,16 @@ def run(probes,
         tech_info = FlexFormatInfo(
             barcode_dir,
             r1_len,
-            r2_len
+            r2_len,
+            cellranger_output,
         )
     elif technology == "VisiumHD":
         tech_info = VisiumHDFormatInfo(
+            None,
             barcode_dir,
             r1_len,
-            r2_len
+            r2_len,
+            cellranger_output
         )
     else:  # Visium-vVERSION
         version = int(technology.split("-v")[1])
@@ -739,7 +752,8 @@ def run(probes,
             version,
             barcode_dir,
             r1_len,
-            r2_len
+            r2_len,
+            cellranger_output
         )
     print(f"{tech_info.n_barcodes} cell barcodes found.")
 
@@ -878,28 +892,39 @@ def main():
     parser.add_argument('--allow_any_combination',
                         action='store_true',
                         help='Allow any combination of probes to be used for gapfill')
+    parser.add_argument(
+        "--cellranger_output", '-wta',
+        action="append",
+        required=False,
+        default=None,
+        help="Path to either the filtered_feature_bc_matrix.h5 or the sample_filtered_feature_bc_matrix folder from CellRanger. "
+             "Can be specified multiple times to merge multiple samples if multiplex (in order of provided barcodes)."
+    )
 
     args = parser.parse_args()
 
-    run(args.probes,
-         args.read1,
-         args.read2,
-         args.project,
-         args.output,
-         args.cores,
-         args.n_reads_per_batch,
-         args.threshold,
-         args.technology,
-         args.tech_def,
-         args.overwrite,
-         args.multiplex,
-         args.barcode,
-         args.r1_length,
-         args.r2_length,
-         args.allow_indels,
-         args.skip_constant_seq,
-         args.allow_any_combination,
-         args.unmapped_reads)
+    run(
+        args.probes,
+        args.read1,
+        args.read2,
+        args.project,
+        args.output,
+        args.cores,
+        args.n_reads_per_batch,
+        args.threshold,
+        args.technology,
+        args.tech_def,
+        args.overwrite,
+        args.multiplex,
+        args.barcode,
+        args.r1_length,
+        args.r2_length,
+        args.allow_indels,
+        args.skip_constant_seq,
+        args.allow_any_combination,
+        args.unmapped_reads,
+        args.cellranger_output
+    )
 
 
 if __name__ == '__main__':

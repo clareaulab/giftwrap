@@ -158,6 +158,13 @@ def main():
     print("Gapfill counts pipeline started.")
     print("================================", flush=True)
 
+    wta_args = []
+    if cellranger_output is not None and len(cellranger_output) > 0:
+        if isinstance(cellranger_output, str):
+            cellranger_output = [cellranger_output]
+        for wta in cellranger_output:
+            wta_args += ["-wta", wta]
+
     # Check if step 1 is already done
     output = Path(output)
     if not (output / "steps" / "COUNT_GAPFILLS").exists() or overwrite:
@@ -180,6 +187,7 @@ def main():
             + (['--skip_constant_seq'] if skip_constant_seq else [])
             + (['--allow_any_combination'] if args.allow_any_combination else [])
             + (['--unmapped_reads', args.unmapped_reads] if args.unmapped_reads is not None else [])
+            + wta_args
         )
         if returncode != 0:
             print("Error: Failed to count gapfills.", file=sys.stderr)
@@ -253,12 +261,6 @@ def main():
     # Step 5: Summary statistics and plots
     if not (output / "steps" / "ANALYSIS").exists() or overwrite:
         print("Step 5: Generating summary statistics and plots.", file=sys.stderr, flush=True)
-        wta_args = []
-        if cellranger_output is not None and len(cellranger_output) > 0:
-            if isinstance(cellranger_output, str):
-                cellranger_output = [cellranger_output]
-            for wta in cellranger_output:
-                wta_args += ["-wta", wta]
         start = datetime.now()
         returncode = streaming_subprocess_run([
             # sys.executable,
