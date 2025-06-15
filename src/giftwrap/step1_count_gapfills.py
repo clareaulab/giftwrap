@@ -652,7 +652,7 @@ def run(probes,
         cellranger_output):
     if (read1 == read2 == project) and project is None:
         raise AssertionError("At least one of the read1, read2, or project arguments must be provided.")
-    assert not (multiplex > 1 and barcode > 1), "Multiplex and barcode arguments are mutually exclusive."
+    assert not (multiplex > 1 and barcode > 0), "Multiplex and barcode arguments are mutually exclusive."
     assert (not skip_constant_seq) or (multiplex < 2 and barcode < 2), "Skipping the constant sequence is only valid for singleplex sequencing."
 
     if isinstance(cellranger_output, str):
