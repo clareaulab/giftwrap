@@ -608,8 +608,9 @@ def _parse_possible_barcodes(barcode_lists: list[Path]) -> np.ndarray[str]:
     """
     Parse a list of barcode files into a single array.
     :param barcode_lists: The paths to read barcodes from.
-    :return: A numpy array of barcodes.
+    :return: A numpy array of barcodes. Or None if no barcodes were found.
     """
+    barcodes = None
     for barcode_path in barcode_lists:
         try:
             to_add = read_wta(
@@ -630,6 +631,9 @@ def _parse_possible_barcodes(barcode_lists: list[Path]) -> np.ndarray[str]:
                 " Falling back to bundled barcodes."
             )
 
+    if barcodes is None:
+        # If no barcodes were found, return None
+        return None
     return barcodes.drop_duplicates().reset_index(drop=True)
 
 
@@ -1318,7 +1322,7 @@ def read_wta(
                 return _parse_molecule_info_h5(input_path)
             elif (base_filename == "filtered_feature_bc_matrix.h5" and (input_path.parent / 'spatial').exists()):
                 return _parse_filtered_feature_bc_matrix_h5(input_path)
-            elif base_filename == "filtered_feature_bc_matrix.h5":
+            elif base_filename == "sample_filtered_feature_bc_matrix.h5":
                 return _parse_filtered_feature_bc_matrix_h5(input_path)
             elif base_filename == "sample_molecule_info.h5":
                 return _parse_molecule_info_h5(input_path)
