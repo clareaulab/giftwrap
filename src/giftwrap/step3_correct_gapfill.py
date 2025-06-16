@@ -16,6 +16,7 @@ def process_lines(lines: list[str]) -> tuple[str, bool]:
     probe_idx = split[1]
     probe_bc_idx = split[2]
     cell_barcode_idx = split[0]
+    umi = split[5]
     # Count the number to correct
     count = len(lines)
     # Get the gapfills
@@ -25,7 +26,7 @@ def process_lines(lines: list[str]) -> tuple[str, bool]:
     # only one sequence, don't correct
     # If there is complete consensus in the gap fill, don't correct
     if count < 2 or len(set(gapfill_seqs)) == 1:
-        return f"{cell_barcode_idx}\t{probe_idx}\t{probe_bc_idx}\t{gapfills[0][0]}\t{count}\t1.0\n", False
+        return f"{cell_barcode_idx}\t{probe_idx}\t{probe_bc_idx}\t{umi}\t{gapfills[0][0]}\t{count}\t1.0\n", False
 
     # Convert the quality scores to probabilities
     gapfill_probs = [phred_string_to_probs(q) for q in gapfill_quals]
@@ -60,7 +61,7 @@ def process_lines(lines: list[str]) -> tuple[str, bool]:
 
         # If there is only one unique sequence left, write it out
         if len(set(gapfill_seqs)) == 1:
-            return f"{cell_barcode_idx}\t{probe_idx}\t{probe_bc_idx}\t{gapfill_seqs[0]}\t{count}\t{len(gapfill_seqs)/count}\n", True
+            return f"{cell_barcode_idx}\t{probe_idx}\t{probe_bc_idx}\t{umi}\t{gapfill_seqs[0]}\t{count}\t{len(gapfill_seqs)/count}\n", True
 
     # Finally, compute the most likely sequence base-by-base
     seq_probs = [dict(A=list(), T=list(), C=list(), G=list()) for _ in range(len(gapfill_seqs[0]))]
@@ -105,7 +106,7 @@ def process_lines(lines: list[str]) -> tuple[str, bool]:
             supporting += (len(probs[most_likely_nuc]) / n_total) / len(seq_probs)
 
     # Compute the number of reads that contain the gapfill
-    return f"{cell_barcode_idx}\t{probe_idx}\t{probe_bc_idx}\t{most_likely_seq}\t{count}\t{gapfill_seqs.count(most_likely_seq)/count}\n", True
+    return f"{cell_barcode_idx}\t{probe_idx}\t{probe_bc_idx}\t{umi}\t{most_likely_seq}\t{count}\t{gapfill_seqs.count(most_likely_seq)/count}\n", True
 
 
 def barcode_umi_name_lines_generator(input_file_handle) -> tuple[list[str]]:
@@ -166,7 +167,7 @@ def run(output: str, cores: int, n_groups_per_batch: int):
             # Skip the header
             next(input_file)
             # Write a new header. Since we have deduplicated, we will drop the gapfill quality and the umi columns
-            f.write("cell_idx\tprobe_idx\tprobe_barcode\tgapfill\tpcr_duplicate_count\tpercent_supporting\n")
+            f.write("cell_idx\tprobe_idx\tprobe_barcode\tumi\tgapfill\tpcr_duplicate_count\tpercent_supporting\n")
             # Process the data
             lines_iterator = batched(barcode_umi_name_lines_generator(input_file), n_groups_per_batch)
 
