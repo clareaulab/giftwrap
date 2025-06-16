@@ -653,11 +653,14 @@ class FlexFormatInfo(TechnologyFormatInfo):
         super().__init__(barcode_dir, read1_length, read2_length)
         if barcode_list:
             barcodes = _parse_possible_barcodes(barcode_list)
+            if barcodes:
+                barcodes = barcodes.str[:16]  # Strip potential probe barcodes that are appended when multiplexed
         else:
             barcodes = None
         if barcodes is None:
             # Load the barcodes
             barcodes = pd.read_table(self._barcode_dir / "737K-fixed-rna-profiling.txt.gz", header=None, names=["barcode"], compression="gzip")["barcode"]
+
         # Strip the -Number from the barcode
         barcodes = barcodes.str.split("-").str[0]
         # Collect the universe of barcodes
@@ -1261,11 +1264,10 @@ def _parse_molecule_info_h5(filepath: Path) -> np.ndarray[str]:
     :return: A list of barcodes.
     """
     with h5py.File(filepath, "r") as f:
-        barcodes = f['barcodes'].asstr()[()]
+        barcodes = pd.Series(f['barcodes'].asstr()[()], dtype=str)
 
     # Remove -1 from the barcodes
-    barcodes = np.apply_along_axis(lambda bc: bc.split("-")[0], axis=0, arr=barcodes)
-    return barcodes.astype(str)
+    return barcodes.str.split("-").str[0].to_numpy(dtype=str)
 
 
 def _parse_filtered_feature_bc_matrix_h5(filepath: Path) -> np.ndarray[str]:
@@ -1275,11 +1277,10 @@ def _parse_filtered_feature_bc_matrix_h5(filepath: Path) -> np.ndarray[str]:
     :return: A list of barcodes.
     """
     with h5py.File(filepath, "r") as f:
-        barcodes = f['matrix']['barcodes'].asstr()[()]
+        barcodes = pd.Series(f['matrix']['barcodes'].asstr()[()], dtype=str)
 
     # Remove -1 from the barcodes
-    barcodes = np.apply_along_axis(lambda bc: bc.split("-")[0], axis=0, arr=barcodes)
-    return barcodes.astype(str)
+    return barcodes.str.split("-").str[0].to_numpy(dtype=str)
 
 
 def read_wta(

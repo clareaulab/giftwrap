@@ -196,12 +196,12 @@ def run(output: str, cores: int, n_groups_per_batch: int):
 
                 if last_job is not None:
                     process_data(last_job.get())
-                pbar.set_postfix(corrected=total_corrected, total=total_collapsed)
+                pbar.set_postfix(corrected=f"{total_corrected:,}", total=f"{total_collapsed:,}")
 
             # Process the last batch
             if job is not None:
                 process_data(job.get())
-                pbar.set_postfix(corrected=total_corrected, total=total_collapsed)
+                pbar.set_postfix(corrected=f"{total_corrected:,}", total=f"{total_collapsed:,}")
 
     print(f"{total_corrected} out of {total_collapsed} gapfills corrected.")
     # Save a backup of the original file
