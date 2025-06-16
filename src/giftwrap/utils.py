@@ -653,7 +653,7 @@ class FlexFormatInfo(TechnologyFormatInfo):
         super().__init__(barcode_dir, read1_length, read2_length)
         if barcode_list:
             barcodes = _parse_possible_barcodes(barcode_list)
-            if barcodes:
+            if barcodes is not None:
                 barcodes = barcodes.str[:16]  # Strip potential probe barcodes that are appended when multiplexed
         else:
             barcodes = None
