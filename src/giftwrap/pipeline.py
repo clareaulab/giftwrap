@@ -183,7 +183,7 @@ def main():
             + (['--overwrite'] if overwrite else [])
             + (["-r1", read1, "-r2", read2] if project is None else ["--project", project])
             + (['-m', str(multiplex)] if multiplex > 0 else [])
-            + (['-b', str(barcode)] if barcode > 1 else [])
+            + (['-b', str(barcode)] if barcode > 0 else [])
             + (['--skip_constant_seq'] if skip_constant_seq else [])
             + (['--allow_any_combination'] if args.allow_any_combination else [])
             + (['--unmapped_reads', args.unmapped_reads] if args.unmapped_reads is not None else [])
