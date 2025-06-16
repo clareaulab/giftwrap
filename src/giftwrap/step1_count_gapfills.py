@@ -485,11 +485,11 @@ def search_files(read1s, read2s, output_dir, tech_info,
                 )
                 if last_job is not None:  # Output the previous run, then continue reading the file while the next batch is being processed
                     process_data(last_job.get())
-                pbar.set_postfix({name.name: count for name, count in result_reason_counter.items()})
+                pbar.set_postfix({name.name: f"{count:,}" for name, count in result_reason_counter.items()})
 
             if job is not None:  # Process the final batch
                 process_data(job.get())
-                pbar.set_postfix({name.name: count for name, count in result_reason_counter.items()})
+                pbar.set_postfix({name.name: f"{count:,}" for name, count in result_reason_counter.items()})
 
     # If we were writing unmapped reads, we need to collect them
     collect_unmapped_fastq(unmapped_reads_prefix)

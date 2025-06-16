@@ -159,12 +159,12 @@ def run(output: str, threshold: int, cores: int, n_cells_per_batch: int):
 
                 if last_job is not None:
                     process_data(last_job.get())
-                pbar.set_postfix({"total": total, "corrected": total_corrected})
+                pbar.set_postfix({"total": f"{total:,}", "corrected": f"{total_corrected:,}"})
 
             # Process the last batch
             if job is not None:
                 process_data(job.get())
-                pbar.set_postfix({"total": total, "corrected": total_corrected})
+                pbar.set_postfix({"total": f"{total:,}", "corrected": f"{total_corrected:,}"})
 
     # Save a backup of the original file
     print("Backing up uncorrected file...", end="")
