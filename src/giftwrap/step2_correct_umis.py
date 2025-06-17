@@ -15,7 +15,7 @@ from .utils import maybe_multiprocess, batched, maybe_gzip, GzipNamedTemporaryFi
 def process_lines(lines: list[str], threshold: int, allow_chimeras: bool) -> tuple[list[str], int, int]:
     # First group by name and umi
     probe_bc_to_data = defaultdict(list)
-    probe_umi_to_lines = defaultdict(list)
+    probe_umi_to_lines = defaultdict(lambda: defaultdict(list))
     dropped = 0
     umi_len = 0
     for line in lines:
@@ -28,7 +28,7 @@ def process_lines(lines: list[str], threshold: int, allow_chimeras: bool) -> tup
         umi = split[5]
         umi_len = max(umi_len, len(umi))
         probe_bc_to_data[probe_bc].append((probe_id, umi))
-        probe_umi_to_lines[(probe_id, umi)].append(split)
+        probe_umi_to_lines[probe_bc][(probe_id, umi)].append(split)
 
     # Compute the threshold
     threshold = compute_max_distance(umi_len, threshold)
@@ -41,9 +41,10 @@ def process_lines(lines: list[str], threshold: int, allow_chimeras: bool) -> tup
         all_valid_umis = defaultdict(set)
         encountered_umis = set()
         probe_umi_pairs = probe_bc_to_data[probe_bc]
-        for (probe, umi) in sorted(probe_umi_pairs, key=lambda x: len(probe_umi_to_lines[x]), reverse=True):
-            lines = probe_umi_to_lines[(probe, umi)]
-            if not allow_chimeras and umi in encountered_umis:  # We already saw this UMI, so we can drop it
+        probe_umi_pairs_map = probe_umi_to_lines[probe_bc]
+        for (probe, umi) in sorted(probe_umi_pairs, key=lambda x: len(probe_umi_pairs_map[x]), reverse=True):
+            lines = probe_umi_pairs_map[(probe, umi)]
+            if not allow_chimeras and (umi in encountered_umis and umi not in all_valid_umis[probe]):  # We already saw this UMI, so we can drop it if chimera
                 dropped += len(lines)
                 continue  # Drop the duplicate UMIs
             if len(all_valid_umis[probe]) == 0:  # We have no umis yet, so we have to assume the first one is a real umi
@@ -91,20 +92,18 @@ def process_lines(lines: list[str], threshold: int, allow_chimeras: bool) -> tup
                             break
                         elif permuted_umi in encountered_umis:  # We have seen this UMI before, but not for this probe
                             if allow_chimeras:  # Only include if we allow chimeras
-                                encountered_umis.append(permuted_umi)
+                                encountered_umis.add(permuted_umi)
                                 # We have a match, so we can correct the umi in the lines
                                 final_lines.extend([line[:5] + [permuted_umi] for line in lines])
                                 corrected += len(lines)
-                            else:
-                                # We have seen this UMI before, but not for this probe, so we drop it
-                                dropped += len(lines)
-                            found_existing = True
-                            break
+                                found_existing = True
+                                break
 
                 if not found_existing:  # Still no match, so add to the list if there are no Ns
                     all_valid_umis[probe_bc].add(umi)  # No match, so add to the list
                     encountered_umis.add(umi)
                     final_lines.extend([line[:6] for line in lines])
+
                 # else:  # There is a fuzzy match
                 #     match_umi, score, match_umi_index = match
                 #     for line in lines:
