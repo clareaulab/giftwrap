@@ -1,4 +1,5 @@
 import os
+import itertools
 
 import pandas as pd
 
@@ -49,7 +50,7 @@ def intersect_wta(wta_adata: ad.AnnData, gapfill_adata: ad.AnnData) -> (ad.AnnDa
 
 def call_genotypes(adata: ad.AnnData,
                    flavor: str = "basic",
-                   threshold: float = 0.66,
+                   threshold: float = 0.5,
                    cores: int = 1) -> ad.AnnData:
     """
     Adds a "genotype" obsm to the AnnData object that contains the genotype calls for each cell, a "genotype_counts"
@@ -92,7 +93,7 @@ def call_genotypes(adata: ad.AnnData,
     N_cells = adata.shape[0]
     with mp as pool:
         for probe in (pbar := tqdm(probes, desc="Genotyping ")):
-            pbar.set_postfix_str(f"Probe {probe}...")
+            pbar.set_postfix_str(f"Probe {probe}")
             probe_genotypes = adata.var["gapfill"][adata.var["probe"] == probe].values
             if scipy.sparse.issparse(adata.X):
                 gapfill_counts = adata.X[:, (adata.var["probe"] == probe).values].toarray()
@@ -238,3 +239,256 @@ def transfer_genotypes(wta_adata: ad.AnnData, gapfill_adata: ad.AnnData) -> ad.A
         raise ValueError("This should never happen.")
 
     return wta_adata
+
+
+def impute_genotypes(adata: ad.AnnData,
+                     cluster_key: str,
+                     k: int = 100,
+                     threshold: float = 0.66,
+                     impute_all: bool = False,
+                     hold_out: float = 0.05,
+                     cores: int = 1) -> ad.AnnData:
+    """
+    Imputes the genotypes with the following procedure:
+        - For each cluster, independently:
+        - Compute a neighbors graph on the genotyped cells in the cluster.
+        - For each cell, select the closest k neighbors. If there are less than k neighbors, select all neighbors.
+        - For each probe, compute the distribution of the genotypes in the selected neighbors.
+        - Perform a test to determine whether the genotype is heterozygous.
+        - Finally, impute the genotype in cells with missing calls.
+    :param adata: The anndata object containing the genotypes. This object should have a "genotype" obsm.
+    :param cluster_key: The key in adata.obs that contains the cluster labels.
+    :param k: The number of neighbors to use for imputation.
+    :param threshold: The threshold for determining whether a genotype is heterozygous.
+    :param impute_all: Whether to impute all genotypes, or only missing genotypes.
+    :param hold_out: The fraction of cells to hold out for testing. This is used to compute the imputation accuracy.
+    :param cores: The number of cores to use for parallel processing. If <1, uses all available cores.
+    :return: The anndata object with the genotypes imputed.
+
+    The AnnData object will now have a "genotype_imputed" obsm containing the new genotypes and
+    a "genotype_imputed_certainty" obsm containing the likelihood of the genotype being correct according to the
+    neighborhood graph.
+    """
+    if "genotype" not in adata.obsm:
+        raise ValueError("The AnnData object does not contain genotypes. Please run call_genotypes first.")
+
+    hold_out = max(min(hold_out, 1.0), 0.0)
+    if hold_out == 0.0:
+        print("Info: Imputation accuracy will not be computed, as no cells are held out for testing.")
+        mask = None
+    else:
+        # Generate a random mask to hold out cells for testing
+        mask = np.random.rand(*adata.obsm["genotype"].shape) < hold_out
+        # Only hold out not currently NaN genotypes
+        mask = mask & (~adata.obsm["genotype"].isna().values)
+
+    if cores < 1:
+        cores = os.cpu_count()
+    elif cores == 1:
+        print("Info: if imputation takes too long, consider setting cores > 1.")
+
+    mp = maybe_multiprocess(cores)
+
+    # Split the anndata according to cluster identity
+    clusters = adata.obs[cluster_key].unique()
+    with mp as pool:
+        results = pool.starmap(
+            _impute_within_cluster,
+            tqdm([(adata, cluster_key, cluster, k, threshold, impute_all, mask) for cluster in clusters], desc="Imputing cluster genotypes...", total=len(clusters), unit="cluster"),
+        )
+
+    # Combine results
+    imputed_genotypes = pd.concat([r[0] for r in results])
+    imputed_certainty = pd.concat([r[1] for r in results])
+
+    if mask is not None:
+        correct_imputation_counts = [r[2] for r in results]
+        accuracy = sum(correct_imputation_counts) / mask.sum()
+        adata.uns['imputation_accuracy'] = accuracy
+        print(f"Imputation accuracy: {accuracy:.2f} ({mask.sum():,} out of {mask.size:,} cell/allele pairs held out)")
+
+    # Add to AnnData object
+    adata.obsm['genotype_imputed'] = imputed_genotypes.loc[adata.obs_names]
+    adata.obsm['genotype_imputed_certainty'] = imputed_certainty.loc[adata.obs_names]
+
+    return adata
+
+
+def _nan_aware_distance(x: np.array, y: np.array, distance_func = scipy.spatial.distance.euclidean) -> float:
+    """
+    Compute a distance between two arrays
+    :param x: Feature array 1.
+    :param y: Feature array 2.
+    :param distance_func: The distance function to use. Defaults to scipy.spatial.eucldean.
+    :return: The distance normalized to the number of features that are not present.
+        (i.e. the expected number of mismatches in unobserved genotypes).
+    """
+    nan_features1 = np.isnan(x)
+    nan_features2 = np.isnan(y)
+    nan_features = nan_features1 | nan_features2
+    if np.all(nan_features):
+        return np.nan  # Undefined if non-complementary
+    else:
+        return (distance_func(x[~nan_features], y[~nan_features]) / (~nan_features).sum()) * nan_features.sum()  # Normalize by the number of features that are not NaN then penalize by nan features
+
+
+def _impute_within_cluster(adata: ad.AnnData,
+                           cluster_key: str,
+                           cluster: str,
+                           k: int = 25,
+                           threshold: float = .66,
+                           impute_all: bool = False,
+                           mask: np.ndarray = None,
+                           ) -> tuple[pd.DataFrame, pd.DataFrame, float]:
+    """
+    Helper function to impute genotypes within a single cluster.
+    :param adata: The AnnData object containing cells from a single cluster.
+    :param cluster_key: The key in adata.obs that contains the cluster labels.
+    :param cluster: The cluster to impute genotypes for.
+    :param k: The number of neighbors to use for imputation.
+    :param threshold: The threshold for determining whether a genotype is heterozygous.
+    :param impute_all: Whether to impute all cells, or only missing genotypes.
+    :param mask: A matrix identifying cells x genotypes to hold out for testing.
+    :return: A tuple of (imputed genotypes DataFrame, imputation certainty DataFrame, number of correct imputed genotypes).
+    """
+    cluster_filter = adata.obs[cluster_key] == cluster
+    adata = adata[cluster_filter, :].copy()
+    orig_index = adata.obs_names
+    if mask is not None:
+        mask = mask[cluster_filter, :]
+        if mask.shape[0] == 0:
+            mask = None
+        else:
+            original_genotypes = adata.obsm["genotype"].copy()
+            adata.obsm["genotype"] = adata.obsm["genotype"].mask(mask, other=np.nan)
+
+    # Get cells with genotypes
+    has_genotype = ~adata.obsm['genotype'].isna().all(axis=1)
+    adata.obsm['genotype_certainty'] = pd.DataFrame(index=adata.obsm['genotype'].index, columns=adata.obsm['genotype'].columns, data=np.full((adata.shape[0], adata.obsm['genotype'].shape[1]), 0.))
+    unable_to_impute = ~has_genotype  # We need to add these cells back later with empty genotypes
+    to_genotype = adata[has_genotype].copy()
+    if to_genotype.shape[0] == 0:
+        # Can't genotype
+        return pd.DataFrame(index=adata.obs_names, columns=adata.obsm['genotype'].columns), \
+            pd.DataFrame(index=adata.obs_names, columns=adata.obsm['genotype'].columns)
+
+    # Expand the genotypes to one-hot and concatenate to one big matrix
+    genotypes_matrix = []  # Will be n_cells x n_genotypes
+    genotype_allele = []  # Will be n_genotypes x n_genotypes
+    genotype_labels = []  # Will be n_genotypes
+    for geno in to_genotype.obsm['genotype'].columns.values:
+        # De-concatenate genotypes (i.e. split CAG/GAG to two genotypes: CAG and GAG)
+        raw_genotypes = to_genotype.obsm['genotype'][geno].str.split("/").explode().unique()
+        # Convert nan strings back to NaN
+        raw_genotypes = np.where(raw_genotypes == "nan", np.nan, raw_genotypes)
+        allele_indicators = []
+        allele = []
+        for raw_genotype in raw_genotypes:
+            if raw_genotype == "nan" or pd.isna(raw_genotype):
+                continue
+            # Check if cells contain any of the raw genotypes
+            allele_indicators.append(
+                (to_genotype.obsm['genotype'][geno].str.split("/").apply(
+                    lambda x: raw_genotype in x if isinstance(x, list) else (np.nan if pd.isna(x) else x == raw_genotype)
+                )).astype(float)
+            )
+            allele.append(np.nan if raw_genotype == "nan" else raw_genotype)  # FIXME: Fix the string coercsion in the .str.split call chains
+        if len(allele_indicators) == 0:  # No genotypes found for this probe
+            genotypes_matrix.append(np.full((0, to_genotype.shape[0]), np.nan))
+            genotype_allele.append(np.full((0, to_genotype.shape[0]), np.nan))
+            genotype_labels.append(geno)
+        else:
+            genotypes_matrix.append(np.stack(allele_indicators))
+            genotype_allele.append(np.stack(allele))
+            genotype_labels.append(geno)
+
+    # To fill
+    distance_matrix = np.full((to_genotype.shape[0], to_genotype.shape[0]), np.nan)
+    # Set diagonal to 0
+    distance_matrix[np.diag_indices_from(distance_matrix)] = 0.0
+    # Compute all possible combinations
+    for i,j in itertools.combinations(range(to_genotype.shape[0]), 2):
+        if i == j:
+            continue
+        # Extract all genotypes from the nested data
+        cell_i_vector = np.concatenate([g[:, i] for g in genotypes_matrix], axis=0)
+        cell_j_vector = np.concatenate([g[:, j] for g in genotypes_matrix], axis=0)
+        distance_matrix[i,j] = _nan_aware_distance(cell_i_vector, cell_j_vector)
+        distance_matrix[j,i] = distance_matrix[i,j]
+
+    # Finally, for each cell compute the nearest neighbors to impute missing genotypes
+    # Get all indices with any NA (so that we can ignore cells with no missing genotypes
+    to_fill_mask = np.full((to_genotype.shape[0], to_genotype.obsm['genotype'].shape[1]), True) if impute_all else to_genotype.obsm['genotype'].isna().values
+    # Get indices with at least one genotype to impute
+    for idx in np.argwhere(np.any(to_fill_mask, axis=1)):
+        idx = idx.item()
+        genotypes_to_fill = to_fill_mask[idx, :]
+        # Get the nearest neighbors
+        neighbor_indices = np.argsort(distance_matrix[idx, :], axis=0)
+        for genotype_idx in np.argwhere(genotypes_to_fill):
+            genotype_idx = genotype_idx.item()
+            genotype_vector = genotypes_matrix[genotype_idx][:, neighbor_indices]  # Get the genotype vector for this genotype
+            if np.all(np.isnan(genotype_vector)):
+                # If all neighbors have NaN genotype, skip this genotype
+                continue
+            # Get the nearest neighbors that have a genotype in this position
+            nearest = genotype_vector[:, ~np.isnan(genotype_vector).all(0)][:, 1:k+1]  # Skip the first one, which is the cell itself
+            if nearest.size == 0:  # No neighbors to impute
+                continue
+            # Select the genotypes from the neighbors
+            possible_genotypes = genotype_allele[genotype_idx]
+            if len(possible_genotypes) == 0:  # No genotypes to impute
+                continue
+            genotype_counts = np.nansum(nearest, axis=1)  # Get the counts of the genotypes in the neighbors
+            # correct_genotype = original_genotypes[has_genotype].iloc[idx, genotype_idx]
+            # Explode the genotype strings if heterozygous (via /) and duplicate the counts accordingly
+            if any("/" in g for g in possible_genotypes):
+                new_genotypes = {}
+                for g, c in zip(possible_genotypes, genotype_counts):
+                    if pd.isna(g):
+                        continue
+                    # Split the genotype by / and duplicate the counts accordingly
+                    alleles = g.split("/")
+                    for allele in alleles:
+                        if allele not in new_genotypes:
+                            new_genotypes[allele] = 0
+                        new_genotypes[allele] += c
+                possible_genotypes = np.array(new_genotypes.keys())
+                genotype_counts = np.array(new_genotypes.values())
+            # Collect the cumulative proportion of counts >=50%
+            total_count = np.sum(genotype_counts)
+            if total_count == 0:
+                continue
+            sorted_indices = np.argsort(genotype_counts)[::-1]
+            cumulative_proportion = np.cumsum(genotype_counts[sorted_indices] / total_count)
+            best_idx = np.argmax(cumulative_proportion >= threshold)
+            if best_idx == 0:  # Scalar
+                new_genotype = possible_genotypes[sorted_indices[0]]
+            else:
+                new_genotype = "/".join(possible_genotypes[sorted_indices[:best_idx + 1]])
+            to_genotype.obsm['genotype'].iloc[idx, to_genotype.obsm['genotype'].columns.get_loc(genotype_labels[genotype_idx])] = str(new_genotype)
+            to_genotype.obsm['genotype_certainty'].iloc[idx, to_genotype.obsm['genotype_certainty'].columns.get_loc(genotype_labels[genotype_idx])] = float(cumulative_proportion[best_idx])
+
+    # Validate the imputed genotypes
+    correct_genotypes = 0.
+    if mask is not None:
+        # Check the imputed genotypes against the original genotypes
+        new_masked_genotypes = to_genotype.obsm['genotype'].values[mask]
+        old_masked_genotypes = original_genotypes.values[mask]
+
+        correct_genotypes += np.sum(
+            new_masked_genotypes == old_masked_genotypes
+        )
+
+        if not impute_all:  # Replace the imputed genotypes where we know the truth with the original genotypes
+            to_genotype.obsm['genotype'].loc[mask] = original_genotypes.loc[mask]
+
+    # Recompile the adata by adding the non-imputed cells back
+    adata = ad.concat([to_genotype, adata[unable_to_impute]], axis=0)
+    # Reorder the adata to match the original order
+    adata = adata[orig_index, :]
+
+    # Return the genotype and genotype_certainty dataframes
+    return (adata.obsm['genotype'].loc[adata.obs_names],
+            adata.obsm['genotype_certainty'].loc[adata.obs_names],
+            correct_genotypes)
