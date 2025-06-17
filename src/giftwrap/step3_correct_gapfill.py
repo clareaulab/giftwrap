@@ -142,6 +142,7 @@ def barcode_umi_name_lines_generator(input_file_handle) -> tuple[list[str]]:
             curr_umi = umi
             curr_probe = probe_idx
         lines.append(split)
+
     if len(lines) > 0:
         yield lines,
 
