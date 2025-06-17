@@ -20,18 +20,18 @@ keywords = ["GIFT-seq", "gapfill"]
 
 requires-python = ">=3.11"
 dependencies = [
-    "biopython>=1.84",
-    "scipy>=1.14.1",
-    "numpy==2.0",
-    "pandas>=2.2.2",
-    "rapidfuzz>=3.9.6",
-    "fuzzysearch>=0.7.3",
+    "biopython>=1.85",
+    "scipy>=1.15",
+    "numpy>=2.2.6",
+    "pandas>=2.3.0",
+    "rapidfuzz>=3.13",
+    "fuzzysearch>=0.8",
     "tqdm>=4.66.5",
-    "h5py>=3.11.0",
-    "anndata>=0.10.9",
-    "matplotlib>=3.9.2",
+    "h5py>=3.14",
+    "anndata>=0.11",
+    "matplotlib>=3.10",
     "openpyxl>=3.1.5",
-    "sankeyflow>=0.3.9",
+    "sankeyflow>=0.4.1",
     "diskcache>=5.6.3",
 ]
 
@@ -46,20 +46,22 @@ dependencies = [
 # Need protobuf for VisiumHD cell barcode parsing
 spatial = [
     "protobuf>=5.28.0",
-    "spatialdata>=0.3.0",
+    "spatialdata>=0.4.0",
+    "squidpy>=1.6.5"
 ]
 analysis = [
-    "scanpy>=1.9.8",
-    "igraph>=0.11.6",
-    "numba>=0.57.0",
+    "scanpy>=1.11",
+    "igraph>=0.10",
+    "numba>=0.61.0",
     "leidenalg>=0.10.2",
 ]
 all = [
     "protobuf>=5.28.0",
-    "spatialdata>=0.3.0",
-    "scanpy>=1.9.8",
-    "igraph>=0.11.6",
-    "numba>=0.57.0"
+    "spatialdata>=0.4.0",
+    "squidpy>=1.6.5",
+    "scanpy>=1.11",
+    "igraph>=0.10",
+    "numba>=0.61.0",
 ]
 
 [project.scripts]

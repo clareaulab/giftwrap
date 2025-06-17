@@ -137,6 +137,12 @@ def main():
         action="store_true",
         help="After processing, save a processed, flattened version of the data as a gzipped tsv file. Note that this is an inefficient storage format for large datasets."
     )
+    parser.add_argument(
+        '--allow_chimeras', '-ac',
+        required=False,
+        action='store_true',
+        help="Allow chimeric gapfills. If unset, umis that occur multiple times per cell will be collapsed to the most common probe. If set, there is no collapsing."
+    )
 
     args = parser.parse_args()
 
@@ -208,7 +214,8 @@ def main():
             sys.path[0] + "/giftwrap-correct-umis",
             "-o", str(output),
             "-c", str(cores)
-            ])# + (['--overwrite'] if overwrite else []))
+            ] + (['--allow_chimeras'] if args.allow_chimeras else [])
+        )
         if returncode != 0:
             print("Error: Failed to correct UMIs.", file=sys.stderr, flush=True)
             sys.exit(1)
@@ -227,7 +234,8 @@ def main():
             sys.path[0] + "/giftwrap-correct-gapfill",
             "-o", str(output),
             "-c", str(cores)
-        ])# + (['--overwrite'] if overwrite else []))
+        ]
+        )
         if returncode != 0:
             print("Error: Failed to correct gapfills.", file=sys.stderr, flush=True)
             sys.exit(1)
