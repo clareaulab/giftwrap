@@ -143,8 +143,20 @@ def process_read(r1, r2,
                  unmapped_reads_prefix,
                  fuzzysearch_fn) -> tuple[list[ReadProcessState], Optional[ReadData]]:
     ((r1_title, r1_seq, r1_quality), (r2_title, r2_seq, r2_quality)) = r1, r2
-    r1_len = len(r1_seq)
-    r2_len = len(r2_seq)
+    if tech_info.read1_length is None:
+        r1_len = len(r1_seq)
+    else:
+        r1_len = tech_info.read1_length
+    if tech_info.read2_length is None:
+        r2_len = len(r2_seq)
+    else:
+        r2_len = tech_info.read2_length
+
+    r1_seq = r1_seq[:r1_len]
+    r1_quality = r1_quality[:r1_len]
+
+    r2_seq = r2_seq[:r2_len]
+    r2_quality = r2_quality[:r2_len]
 
     states = [ReadProcessState.TOTAL_READS]
 
