@@ -143,6 +143,18 @@ def main():
         action='store_true',
         help="Allow chimeric gapfills. If unset, umis that occur multiple times per cell will be collapsed to the most common probe. If set, there is no collapsing."
     )
+    parser.add_argument(
+        "--r1_length",
+        type=int,
+        default=None,
+        help="The length of the R1 read. Can optimize the probe mapping speed and accuracy."
+    )
+    parser.add_argument(
+        "--r2_length",
+        type=int,
+        default=None,
+        help="The length of the R2 read. Can optimize the probe mapping speed and accuracy."
+    )
 
     args = parser.parse_args()
 
@@ -188,6 +200,8 @@ def main():
             + (['--tech_def', tech_def] if tech_def is not None else [])
             + (['--overwrite'] if overwrite else [])
             + (["-r1", read1, "-r2", read2] if project is None else ["--project", project])
+            + (['--r1_length', str(args.r1_length)] if args.r1_length is not None else [])
+            + (['--r2_length', str(args.r2_length)] if args.r2_length is not None else [])
             + (['-m', str(multiplex)] if multiplex > 0 else [])
             + (['-b', str(barcode)] if barcode > 0 else [])
             + (['--skip_constant_seq'] if skip_constant_seq else [])
