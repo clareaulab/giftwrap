@@ -103,6 +103,8 @@ def process_lines(lines: list[str], threshold: int, allow_chimeras: bool) -> tup
                     all_valid_umis[probe_bc].add(umi)  # No match, so add to the list
                     encountered_umis.add(umi)
                     final_lines.extend([line[:6] for line in lines])
+                else:
+                    dropped += len(lines)
 
                 # else:  # There is a fuzzy match
                 #     match_umi, score, match_umi_index = match
