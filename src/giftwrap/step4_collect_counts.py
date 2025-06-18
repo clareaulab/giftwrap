@@ -52,7 +52,7 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
         # Skip the header
         next(input_file)
         for line in input_file:
-            cell_idx, probe_idx, probe_bc_idx, gapfill, umi_count, percent_supporting = line.strip().split("\t")
+            cell_idx, probe_idx, probe_bc_idx, umi, gapfill, umi_count, percent_supporting = line.strip().split("\t")
             if int(cell_idx) not in barcode2h5_idx.values() or int(probe_bc_idx) != plex:
                 continue
             probe_name = probe_idx2name[int(probe_idx)]
