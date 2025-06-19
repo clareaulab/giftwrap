@@ -141,7 +141,7 @@ def main():
         '--allow_chimeras', '-ac',
         required=False,
         action='store_true',
-        help="Allow chimeric gapfills. If unset, umis that occur multiple times per cell will be collapsed to the most common probe. If set, there is no collapsing."
+        help="Allow chimeric gapfills. If unset, umis that occur multiple times per cell will be dropped except for the most common probe. If set, there is no collapsing."
     )
     parser.add_argument(
         "--r1_length",
