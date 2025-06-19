@@ -82,6 +82,7 @@ def process_lines(lines: list[str], threshold: int, allow_chimeras: bool) -> tup
                 probs = np.where(np.array([base == 'N' for base in umi]), 1.0, probs)
                 # Edit up to threshold positions to try finding an exact match
                 found_existing = False
+                added = False
                 for i in range(1, threshold + 1):
                     for permuted_umi in generate_permuted_seqs(umi, probs, i):
                         if permuted_umi in all_valid_umis[probe]:  # Found a match!
@@ -89,6 +90,7 @@ def process_lines(lines: list[str], threshold: int, allow_chimeras: bool) -> tup
                             final_lines.extend([line[:5] + [permuted_umi] for line in lines])
                             corrected += len(lines)
                             found_existing = True
+                            added = True
                             break
                         elif permuted_umi in encountered_umis:  # We have seen this UMI before, but not for this probe
                             if allow_chimeras:  # Only include if we allow chimeras
@@ -96,15 +98,17 @@ def process_lines(lines: list[str], threshold: int, allow_chimeras: bool) -> tup
                                 # We have a match, so we can correct the umi in the lines
                                 final_lines.extend([line[:5] + [permuted_umi] for line in lines])
                                 corrected += len(lines)
-                                found_existing = True
+                                added = True
                                 break
+                            found_existing = True
 
-                if not found_existing:  # Still no match, so add to the list if there are no Ns
-                    all_valid_umis[probe_bc].add(umi)  # No match, so add to the list
-                    encountered_umis.add(umi)
-                    final_lines.extend([line[:6] for line in lines])
-                else:
-                    dropped += len(lines)
+                if not added:  # Make sure we didn't already add this umi
+                    if not found_existing:  # Didn't find a match, so make it a new UMI
+                        all_valid_umis[probe_bc].add(umi)  # No match, so add to the list
+                        encountered_umis.add(umi)
+                        final_lines.extend([line[:6] for line in lines])
+                    else:  # We found a match, but it was not added (e.g. because we don't allow chimeras)
+                        dropped += len(lines)
 
                 # else:  # There is a fuzzy match
                 #     match_umi, score, match_umi_index = match
