@@ -13,10 +13,7 @@ from .utils import maybe_multiprocess, batched, maybe_gzip, GzipNamedTemporaryFi
 
 
 def process_lines(lines: list[str], threshold: int, allow_chimeras: bool) -> tuple[list[str], int, int]:
-    # First group by name and umi
-    probe_bc_to_data = defaultdict(list)
-    probe_umi_to_lines = defaultdict(lambda: defaultdict(list))
-    dropped = 0
+    probe_umi_to_lines = defaultdict(list)
     umi_len = 0
     for line in lines:
         line = line.strip()
@@ -27,95 +24,88 @@ def process_lines(lines: list[str], threshold: int, allow_chimeras: bool) -> tup
         probe_bc = split[2]
         umi = split[5]
         umi_len = max(umi_len, len(umi))
-        probe_bc_to_data[probe_bc].append((probe_id, umi))
-        probe_umi_to_lines[probe_bc][(probe_id, umi)].append(split)
+        probe_umi_to_lines[(probe_id, probe_bc, umi)].append(split)
 
     # Compute the threshold
     threshold = compute_max_distance(umi_len, threshold)
 
+    all_valid_umis = defaultdict(set)
     final_lines = []
     corrected = 0
 
+    # Nested structure probe_bc -> umi -> probe / count mappings
+    tracked_umis = defaultdict(lambda: defaultdict(lambda: defaultdict(int)))
     # Next we sort by count and iterate. Note that we remove the quality scores
-    for probe_bc in probe_bc_to_data:
-        all_valid_umis = defaultdict(set)
-        encountered_umis = set()
-        probe_umi_pairs = probe_bc_to_data[probe_bc]
-        probe_umi_pairs_map = probe_umi_to_lines[probe_bc]
-        for (probe, umi) in sorted(probe_umi_pairs, key=lambda x: len(probe_umi_pairs_map[x]), reverse=True):
-            lines = probe_umi_pairs_map[(probe, umi)]
-            if not allow_chimeras and (umi in encountered_umis and umi not in all_valid_umis[probe]):  # We already saw this UMI, so we can drop it if chimera
-                dropped += len(lines)
-                continue  # Drop the duplicate UMIs
-            if len(all_valid_umis[probe]) == 0:  # We have no umis yet, so we have to assume the first one is a real umi
-                all_valid_umis[probe].add(umi)
-                encountered_umis.add(umi)
-                final_lines.extend([line[:6] for line in lines])
-                continue
-            elif umi in all_valid_umis[probe]:  # Exact match, so this is a real umi
-                final_lines.extend([line[:6] for line in lines])
-                continue
-            elif umi in encountered_umis and umi not in all_valid_umis[probe]:  # We have seen this UMI before, but not for this probe
-                if allow_chimeras:
-                    # encountered_umis.add(umi)
-                    all_valid_umis[probe].add(umi)  # Add it to the valid UMIs for this probe
-                    final_lines.extend([line[:6] for line in lines])
-                else:
-                    # We have seen this UMI before, but not for this probe, so we drop it
-                    dropped += len(lines)
-                    continue  # Drop the duplicate UMIs
-            else:  # Now we need to see if there is a fuzzy match
-                # match = rapidfuzz.process.extractOne(
-                #     umi,
-                #     all_valid_umis[probe_bc],
-                #     scorer=rapidfuzz.distance.Levenshtein.distance,
-                #     score_cutoff=threshold
-                # )
-                # if match is None:  # No match
-                # Before promoting this to being a UMI, check the probability of each position being errant
-                # We can do this by checking the umi quality scores
-                qualities = np.array([phred_string_to_probs(line[6]) for line in lines]) # n_lines x n_bases (probability of error)
-                # We can now calculate the probability of the base position being incorrect. Note that these are all
-                # independent events
-                probs = np.prod(qualities, axis=0)
-                # Set all N positions to 100% error
-                probs = np.where(np.array([base == 'N' for base in umi]), 1.0, probs)
-                # Edit up to threshold positions to try finding an exact match
-                found_existing = False
-                added = False
-                for i in range(1, threshold + 1):
-                    for permuted_umi in generate_permuted_seqs(umi, probs, i):
-                        if permuted_umi in all_valid_umis[probe]:  # Found a match!
-                            # We have a match, so we can correct the umi in the lines
-                            final_lines.extend([line[:5] + [permuted_umi] for line in lines])
-                            corrected += len(lines)
-                            found_existing = True
-                            added = True
-                            break
-                        elif permuted_umi in encountered_umis:  # We have seen this UMI before, but not for this probe
-                            if allow_chimeras:  # Only include if we allow chimeras
-                                encountered_umis.add(permuted_umi)
-                                # We have a match, so we can correct the umi in the lines
-                                final_lines.extend([line[:5] + [permuted_umi] for line in lines])
-                                corrected += len(lines)
-                                added = True
-                                break
-                            found_existing = True
+    for (probe, probe_bc, umi), lines in sorted(probe_umi_to_lines.items(), key=lambda x: (int(x[0][0]), len(x[1])), reverse=True):
+        if len(all_valid_umis[probe_bc]) == 0:  # We have no umis yet, so we have to assume the first one is a real umi
+            all_valid_umis[probe_bc].add(umi)
+            final_lines.extend([line[:6] for line in lines])
+            tracked_umis[probe_bc][umi][probe] += len(lines)
+            continue
+        elif umi in all_valid_umis[probe_bc]:  # Exact match, so we don't need to do anything
+            final_lines.extend([line[:6] for line in lines])
+            tracked_umis[probe_bc][umi][probe] += len(lines)
+            continue
+        else:  # Now we need to see if there is a fuzzy match
+            # match = rapidfuzz.process.extractOne(
+            #     umi,
+            #     all_valid_umis[probe_bc],
+            #     scorer=rapidfuzz.distance.Levenshtein.distance,
+            #     score_cutoff=threshold
+            # )
+            # if match is None:  # No match
+            # Before promoting this to being a UMI, check the probability of each position being errant
+            # We can do this by checking the umi quality scores
+            qualities = np.array([phred_string_to_probs(line[6]) for line in lines]) # n_lines x n_bases (probability of error)
+            # We can now calculate the probability of the base position being incorrect. Note that these are all
+            # independent events
+            probs = np.prod(qualities, axis=0)
+            # Set all N positions to 100% error
+            probs = np.where(np.array([base == 'N' for base in umi]), 1.0, probs)
+            # Edit up to threshold positions to try finding an exact match
+            found_existing = False
+            for i in range(1, threshold + 1):
+                for permuted_umi in generate_permuted_seqs(umi, probs, i):
+                    if permuted_umi in all_valid_umis[probe_bc]:  # Found a match!
+                        final_lines.extend([line[:5] + [permuted_umi] for line in lines])
+                        corrected += len(lines)
+                        found_existing = True
+                        tracked_umis[probe_bc][permuted_umi][probe] += len(lines)
+                        break
 
-                if not added:  # Make sure we didn't already add this umi
-                    if not found_existing:  # Didn't find a match, so make it a new UMI
-                        all_valid_umis[probe_bc].add(umi)  # No match, so add to the list
-                        encountered_umis.add(umi)
-                        final_lines.extend([line[:6] for line in lines])
-                    else:  # We found a match, but it was not added (e.g. because we don't allow chimeras)
-                        dropped += len(lines)
+            if not found_existing:  # Still no match, so add to the list if there are no Ns
+                all_valid_umis[probe_bc].add(umi)  # No match, so add to the list
+                final_lines.extend([line[:6] for line in lines])
+                tracked_umis[probe_bc][umi][probe] += len(lines)
 
-                # else:  # There is a fuzzy match
-                #     match_umi, score, match_umi_index = match
-                #     for line in lines:
-                #         line[5] = match_umi
-                #     final_lines.extend(["\t".join(line[:6]) for line in lines])
-                #     corrected += len(lines)
+            # else:  # There is a fuzzy match
+            #     match_umi, score, match_umi_index = match
+            #     for line in lines:
+            #         line[5] = match_umi
+            #     final_lines.extend(["\t".join(line[:6]) for line in lines])
+            #     corrected += len(lines)
+
+    # Now that we have all valid umis, create a list of umis to filter if chimeric
+    dropped = 0
+    if not allow_chimeras:
+        to_drop = set()
+        for probe_bc, umi_to_probes in tracked_umis.items():
+            # If there are multiple probes for the same umi, we need to consider dropping
+            for umi, probes in umi_to_probes.items():
+                if len(probes) > 1:
+                    # If there are multiple probes, we need to select the most common one
+                    most_common_probe = max(probes.items(), key=lambda x: x[1])[0]
+                    for probe, count in probes.items():
+                        if probe != most_common_probe:
+                            to_drop.add((
+                                probe_bc, umi, probe
+                            ))
+                            dropped += count
+        # Now create a filter for the final_lines list
+        final_lines = filter(
+            lambda x: (x[2], x[5], x[1]) not in to_drop,
+            final_lines
+        )
 
     # With UMIs corrected, we will now re-sort this chunk according to probe bc, cell bc, umi
     final_lines = sorted(final_lines, key=lambda x: (x[2], x[0], x[5]))
@@ -182,7 +172,7 @@ def run(output: str, threshold: int, cores: int, n_cells_per_batch: int, allow_c
                     f.write("\n")
                     total_corrected += corrected
                     total_dropped += dropped
-                    total += len(final_lines)
+                    total += len(final_lines) + dropped
 
             # Note we parallelize the processing of reads
             # We first process a batch of reads while the next batch is being read
