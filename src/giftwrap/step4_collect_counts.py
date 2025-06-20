@@ -103,7 +103,7 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
             pbar = tqdm(total=n_lines, desc="Collecting counts", unit="umis")
             for line in input_file:
                 # Split the line
-                cell_idx, probe_idx, probe_bc_idx, umi, gapfill, umi_count, percent_supporting = line.strip().split("\t")
+                cell_idx, probe_idx, probe_bc_idx, umi, gapfill, umi_dup_count, percent_supporting = line.strip().split("\t")
                 cell_idx = int(cell_idx)
                 probe_idx = int(probe_idx)
                 pbar.update(1)

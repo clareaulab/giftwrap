@@ -201,6 +201,6 @@ First, install uv: https://github.com/astral-sh/uv
 
 Then set up the environment with: `uv sync --all-extras`
 
-Build the package with: `uvx --from build pyproject-build --installer uv`
+Build the package with: `uv build`
 
 Publish with uv `uv publish --token <your_token>`
