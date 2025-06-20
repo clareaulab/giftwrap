@@ -397,7 +397,7 @@ def summarize_counts(input: Path, summary_output: Path, summary_pdf_output: Path
         barcodes = None
         print("No cellranger output provided, unable to filter counts...")
 
-    if barcodes:
+    if barcodes is not None:
         print(f"Cellranger identified {barcodes.shape[0]} cells. Filtering counts...", end="")
         # Filter the counts file to only include cells in the cellranger output
         filter_h5_file(input, counts_output, barcodes)
