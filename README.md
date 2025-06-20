@@ -203,4 +203,4 @@ Then set up the environment with: `uv sync --all-extras`
 
 Build the package with: `uvx --from build pyproject-build --installer uv`
 
-Publish with twine (requires `TWINE_USERNAME` and `TWINE_PASSWORD` environment variables): `uvx twine upload dist/*`
+Publish with uv `uv publish --token <your_token>`
