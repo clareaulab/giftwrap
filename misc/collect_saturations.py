@@ -57,7 +57,7 @@ def main(dirs):
 if __name__ == '__main__':
     args = sys.argv[1:]
     if len(args) < 1:
-        print('Usage: python collect_saturations.py path/to/giftwrap_output_dir1/ path/to/giftwrap_output_dir1/...')
+        print('Usage: python collect_saturations.py path/to/giftwrap_output_dir1/ path/to/giftwrap_output_dir2/...')
         sys.exit(1)
     print("Note that this may take awhile depending on the number of experiments.")
     main(args)

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 from tqdm import tqdm
+from rich_argparse import RichHelpFormatter
 
 from .utils import maybe_multiprocess, batched, maybe_gzip, GzipNamedTemporaryFile, phred_string_to_probs, \
     permute_bases, generate_permuted_seqs, compute_max_distance
@@ -214,7 +215,7 @@ def run(output: str, threshold: int, cores: int, n_cells_per_batch: int, allow_c
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Correct cell UMIs and filter out identical values."
+        description="Correct cell UMIs and filter out identical values.", formatter_class=RichHelpFormatter
     )
     parser.add_argument(
         "--output", '-o',

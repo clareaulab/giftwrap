@@ -1,0 +1,130 @@
+site_name: GIFTwrap Documentation
+site_url: https://clareaulab.github.io/giftwrap
+repo_url: https://github.com/clareaulab/giftwrap
+theme:
+  name: material
+  font:
+    text: Roboto
+  language: en
+  icon:
+    repo: fontawesome/brands/github
+#  logo: assets/logo.png
+    logo: fontawesome/solid/microscope
+    favicon: fontawesome/solid/microscope
+  features:
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - toc.follow
+    - toc.integrate
+    - search.suggest
+    - search.highlight
+    - social
+    - navigation.footer
+
+plugins:
+  - search
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          inventories:
+            - https://docs.python.org/3/objects.inv
+            - https://numpy.org/doc/stable/objects.inv
+            - https://scanpy.readthedocs.io/en/stable/objects.inv
+            - https://pandas.pydata.org/pandas-docs/stable/objects.inv
+            - https://matplotlib.org/objects.inv
+            - https://anndata.readthedocs.io/en/stable/objects.inv
+            - https://spatialdata.scverse.org/en/stable/objects.inv
+          options:
+            line_length: 80
+            separate_signature: true
+            show_signature_annotations: true
+            merge_init_into_class: true
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            summary: true
+            docstring_options:
+              ignore_init_summary: true
+            docstring_section_style: list
+            show_root_heading: true
+            docstring_style: sphinx
+            parameter_headings: true
+            heading_level: 1
+            extensions:
+              - griffe_sphinx
+              - griffe_inherited_docstrings
+  - mkdocs-jupyter
+  - autorefs:
+      resolve_closest: true
+  - awesome-pages
+  - open-in-new-tab
+  - markdown-exec
+  - termynal
+  - privacy
+  - git-revision-date-localized:
+      enable_creation_date: true
+  - api-autonav:
+      modules: ['src/giftwrap']
+
+markdown_extensions:
+  - attr_list
+  - admonition
+  - pymdownx.tabbed
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.superfences
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - footnotes
+  - tables
+
+extra_javascript:
+  - assets/mathjax.js
+  - https://unpkg.com/mathjax@3/es5/tex-mml-chtml.js
+
+nav:
+    - Home: index.md
+    - Installation: installation.md
+    - File Formats: file_formats.md
+    - Tutorials:
+        - Getting Started: tutorials/getting_started.md
+        - Processing GIFT-Seq Data: tutorials/processing_giftseq_data.md
+        - Analyzing GIFT-Seq Data: tutorials/analyzing_giftseq_data.md
+        - Spatial GIFT-Seq: tutorials/spatial_giftseq.md
+        - Imputation of GIFT-Seq Data: tutorials/imputation.md
+        - Seurat Integration: tutorials/seurat_integration.md
+        - Extending GIFTwrap: tutorials/extending_giftwrap.md
+    - CLI Reference:
+        - giftwrap: cli/giftwrap.md
+        - giftwrap-count: cli/giftwrap_count.md
+        - giftwrap-correct-umis: cli/giftwrap_correct_umis.md
+        - giftwrap-correct-gapfill: cli/giftwrap_correct_gapfill.md
+        - giftwrap-collect: cli/giftwrap_collect.md
+        - giftwrap-summarize: cli/giftwrap_summarize.md
+        - giftwrap-generate-r: cli/giftwrap_generate_r.md
+        - giftwrap-generate-tech: cli/giftwrap_generate_tech.md
+        - giftwrap-convert-probes: cli/giftwrap_convert_probes.md
+        - giftwrap-diagnostic: cli/giftwrap_diagnostic.md
+    - API Reference
+    - Contributing: contributing.md
+
+extra:
+  consent:
+    title: Cookie Consent
+    description: This site uses cookies to enhance your experience. By continuing to visit this site, you agree to our use of cookies.
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/clareaulab/giftwrap
+    - icon: fontawesome/brands/bluesky
+      link: https://bsky.app/profile/caleblareau.bsky.social
+    - icon: fontawesome/brands/x-twitter
+      link: https://x.com/CalebLareau
+
+copyright: >
+  Copyright &copy; 2025 Lareau Lab –
+  <a href="#__consent">Change cookie settings</a>

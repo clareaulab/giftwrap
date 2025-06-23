@@ -4,6 +4,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+from rich_argparse import RichHelpFormatter
+
 
 def streaming_subprocess_run(args: list, **kwargs):
     """
@@ -23,8 +25,9 @@ def streaming_subprocess_run(args: list, **kwargs):
 def main():
     parser = argparse.ArgumentParser(
         description="Run the complete pipeline to generate gapfill counts data. Note that this is slightly opinionated "
-                    "for simplicity. For more control, run the individual scripts one by one (01_count_gapfills, "
-                    "02_correct_umis, 03_correct_gapfill, 04_collect_counts, 05_summarize_counts)."
+                    "for simplicity. For more control, run the individual scripts one by one (giftwrap-count, "
+                    "giftwrap-correct-umis, giftwrap-correct-gapfill, giftwrap-collect, giftwrap-summarize).",
+        formatter_class=RichHelpFormatter
     )
 
     # Input arguments
@@ -129,7 +132,7 @@ def main():
         '--allow_any_combination',
         required=False,
         action="store_true",
-        help="Allow any combination of probes to be counted. By default, only the probes that are in the gapfill set are counted"
+        help="Allow any combination of probes to be counted. By default, only the probes that are in the gapfill set are counted."
     )
     parser.add_argument(
         '--flatten',

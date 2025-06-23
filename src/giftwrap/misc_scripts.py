@@ -3,13 +3,15 @@ import argparse
 import inspect
 
 import pandas as pd
+from rich_argparse import RichHelpFormatter
 
 from .utils import FlexFormatInfo
 
 
 def print_R():
     parser = argparse.ArgumentParser(
-        description="Print an R script to read a giftwrap HDF5 file."
+        description="Print an R script to read a giftwrap HDF5 file.",
+        formatter_class=RichHelpFormatter
     )
     args = parser.parse_args()  # No args
     with open(Path(__file__).parent / "read_gf_h5.R", "r") as f:
@@ -29,7 +31,8 @@ def print_tech():
 
 def convert_probes():
     parser = argparse.ArgumentParser(
-        description="Convert a 10X Genomics cellranger-based probe file to a giftwrap probe file. Prints to stdout."
+        description="Convert a 10X Genomics cellranger-based probe file to a giftwrap probe file. Prints to stdout.",
+        formatter_class=RichHelpFormatter
     )
     parser.add_argument(
         "--input",

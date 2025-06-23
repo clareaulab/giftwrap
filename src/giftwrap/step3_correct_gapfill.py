@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 from tqdm import tqdm
+from rich_argparse import RichHelpFormatter
 
 from .utils import maybe_multiprocess, batched, maybe_gzip, GzipNamedTemporaryFile, phred_string_to_probs
 
@@ -222,7 +223,7 @@ def run(output: str, cores: int, n_groups_per_batch: int):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Correct and deduplicate gap fills."
+        description="Correct and deduplicate gap fills.", formatter_class=RichHelpFormatter
     )
 
     parser.add_argument(

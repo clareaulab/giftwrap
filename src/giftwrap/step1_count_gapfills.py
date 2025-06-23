@@ -14,6 +14,7 @@ import pandas as pd
 from tqdm import tqdm
 import fuzzysearch
 import rapidfuzz
+from rich_argparse import RichHelpFormatter
 
 from .utils import maybe_multiprocess, batched, read_manifest, sort_tsv_file, FlexFormatInfo, VisiumHDFormatInfo, \
     VisiumFormatInfo, TechnologyFormatInfo, phred_string_to_probs, compute_max_distance, read_probes_input, read_fastqs
@@ -780,7 +781,7 @@ def run(probes,
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Quantify the genotypes of Gap-filling probes."
+        description="Quantify the genotypes of Gap-filling probes.", formatter_class=RichHelpFormatter
     )
     parser.add_argument(
         "--probes", '-p',
