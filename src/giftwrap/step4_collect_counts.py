@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import scipy
 from tqdm import tqdm
+from rich_argparse import RichHelpFormatter
 
 from .utils import read_manifest, read_barcodes, maybe_multiprocess, maybe_gzip, write_sparse_matrix, \
     _tx_barcode_to_oligo, compile_flatfile
@@ -220,7 +221,8 @@ def run(output: str, cores: int, overwrite: bool, was_multiplexed: bool, flatten
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Collect counts into a single h5 file. Or multiple if the run was detected to be multiplexed."
+        description="Collect counts into a single h5 file. Or multiple if the run was detected to be multiplexed.",
+        formatter_class = RichHelpFormatter
     )
 
     parser.add_argument(

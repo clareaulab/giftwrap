@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import spearmanr, gaussian_kde
 from sankeyflow import Sankey
+from rich_argparse import RichHelpFormatter
 
 from .utils import filter_h5_file, read_h5_file, read_wta, sequencing_saturation, sequence_saturation_curve, maybe_gzip
 from .analysis.tools import collapse_gapfills
@@ -510,7 +511,7 @@ def run(output, overwrite, cellranger_output, flatten):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate summary statistics for counts."
+        description="Generate summary statistics for counts.", formatter_class=RichHelpFormatter
     )
 
     parser.add_argument(

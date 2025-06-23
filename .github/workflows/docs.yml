@@ -1,0 +1,41 @@
+# .github/workflows/docs.yml
+name: Generate Docs
+on:
+  release:
+    types: [published]
+  push:
+    paths:
+      - 'mkdocs.yml'
+      - 'docs/**'
+
+permissions:
+  id-token: write
+  contents: write
+
+jobs:
+  build-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0         # ensures tags are present for versioning tools
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: "Set up Python"
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: "pyproject.toml"
+
+      # ② Sync just the docs group (+ project code)
+      - name: Install doc deps
+        run: uv sync --no-default-groups --group docs
+
+      # ③ Build & publish with MkDocs
+      - name: Deploy docs
+        run: |
+          uv run mkdocs gh-deploy --force

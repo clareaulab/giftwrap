@@ -3,6 +3,7 @@ import gzip
 from pathlib import Path
 import functools
 
+from rich_argparse import RichHelpFormatter
 import pandas as pd
 from tqdm import tqdm
 import fuzzysearch
@@ -224,7 +225,8 @@ def run(probes, project, output, make_unparsed_fastq, correct_barcodes, fuzzy_se
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Quick and basic script to quantify *reads* without error correction for diagnosing potential issues. This is currently only applicable for Flex."
+        description="Quick and basic script to quantify *reads* without error correction for diagnosing potential issues. This is currently only applicable for Flex.",
+        formatter_class=RichHelpFormatter
     )
 
     # No bells and whistles
