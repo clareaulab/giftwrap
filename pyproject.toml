@@ -37,8 +37,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/lareauc/giftwrap"
-Documentation = "https://github.com/lareauc/giftwrap"
+Homepage = "https://clareaulab.github.io/giftwrap"
+Documentation = "https://clareaulab.github.io/giftwrap"
 Repository = "https://github.com/lareauc/giftwrap"
 Issues = "https://github.com/lareauc/giftwrap/issues"
 

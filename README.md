@@ -6,6 +6,8 @@ This package provides tools for dealing with GIFT-seq data. The typical workflow
 `giftwrap`. Ideally, the WTA panel should be generated beforehand to allow for basic analysis and QC. Additionally, 
 this package provides programmatic utilities for dealing with this data.
 
+For detailed documentation and tutorials, please refer to the [documentation website](https://clareaulab.github.io/giftwrap).
+
 # Installation
 Since the package provides a CLI, it is recommended to install it with `pipx` or `uvx` if you do not plan to use the
 python API, so that the CLI is available on your PATH and does not interfere with your current environment. In this case
