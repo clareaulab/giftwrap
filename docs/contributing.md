@@ -12,7 +12,7 @@ This project is managed using the [uv](https://docs.astral.sh/uv/) tooling syste
 To install the project dependencies, run the following command:
 
 ```bash
-uv sync --all-extras
+uv sync --all-extras --all-groups
 ```
 
 Note that when adding/updating packages with `uv add` or updating the `pyproject.toml` file, you should run `uv sync` to ensure that all dependencies are correctly installed and the `uv.lock` file is updated.

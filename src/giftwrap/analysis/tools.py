@@ -23,7 +23,7 @@ def collapse_gapfills(adata: ad.AnnData) -> ad.AnnData:
     new_obs = adata.obs.copy()
     new_var = adata.var.groupby("probe").first().reset_index().drop(columns=["gapfill"]).set_index("probe")
     for i, probe in enumerate(new_var.index.values):
-        new_X[:, i] = adata.X[:, adata.var["probe"] == probe].sum(axis=1).flatten()
+        new_X[:, i] = adata[:, adata.var["probe"] == probe].X.sum(axis=1).flatten()
     # Do the same for layers
     new_layers = dict()
     for layer in adata.layers.keys():
@@ -96,9 +96,9 @@ def call_genotypes(adata: ad.AnnData,
             pbar.set_postfix_str(f"Probe {probe}")
             probe_genotypes = adata.var["gapfill"][adata.var["probe"] == probe].values
             if scipy.sparse.issparse(adata.X):
-                gapfill_counts = adata.X[:, (adata.var["probe"] == probe).values].toarray()
+                gapfill_counts = adata[:, adata.var["probe"] == probe].X.toarray()
             else:
-                gapfill_counts = adata.X[:, adata.var["probe"] == probe]
+                gapfill_counts = adata[:, adata.var["probe"] == probe].X
 
             # Chunk the gapfill counts into the number of cores
             gapfill_counts = np.array_split(gapfill_counts, cores)
