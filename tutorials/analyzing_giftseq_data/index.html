@@ -22,7 +22,7 @@
     
     
       
-        <title>Analyzing GIFT-Seq Data - GIFTwrap Documentation</title>
+        <title>Analyzing GIFT-seq Data with GIFTwrap - GIFTwrap Documentation</title>
       
     
     
@@ -71,6 +71,11 @@
     <label class="md-overlay" for="__drawer"></label>
     <div data-md-component="skip">
       
+        
+        <a href="#analyzing-gift-seq-data-with-giftwrap" class="md-skip">
+          Skip to content
+        </a>
+      
     </div>
     <div data-md-component="announce">
       
@@ -103,7 +108,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Analyzing GIFT-Seq Data
+              Analyzing GIFT-seq Data with GIFTwrap
             
           </span>
         </div>
@@ -550,6 +555,21 @@
       <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
       
       
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    Analyzing GIFT-Seq Data
+    
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
       
       <a href="./" class="md-nav__link md-nav__link--active">
         
@@ -562,6 +582,34 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#getting-started" class="md-nav__link">
+    <span class="md-ellipsis">
+      Getting Started
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
       
     </li>
   
@@ -1477,9 +1525,11 @@
   
 
 
-  <h1>Analyzing GIFT-Seq Data</h1>
-
-
+<h1 id="analyzing-gift-seq-data-with-giftwrap">Analyzing GIFT-seq Data with GIFTwrap</h1>
+<p>In addition to providing a command line interface for working with raw GIFT-seq data, GIFTwrap also provides a Python API designed to integrate well with the scverse ecosystem to enable robust analysis of GIFT-seq data. This tutorial will walk through some basic analyses in Python, however we also offer basic R integration as described <a href="../seurat_integration/">here</a>. We will also not cover spatial analysis in this tutorial, for information regarding spatial-specific analysis, please refer to the <a href="../spatial_giftseq/">spatial tutorial</a>.</p>
+<h2 id="getting-started">Getting Started</h2>
+<p>To get started, ensure that GIFTwrap is installed in your Python environment, note that analysis requires scanpy and related components to also be installed in your environment, so we recommend <a href="../../installation/">installing GIFTwrap with the <code>analysis</code> extra</a>.</p>
+<p>We will also be working with the counts.1.filtered.h5 file from the GIFTwrap pipeline, though counts.1.h5 is also acceptable since the file format is the same.</p>
 
 
 
@@ -1502,7 +1552,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="June 23, 2025 04:08:06 UTC">June 23, 2025</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="June 24, 2025 15:22:39 UTC">June 24, 2025</span>
   </span>
 
     
