@@ -30,6 +30,13 @@ def main():
         formatter_class=RichHelpFormatter
     )
 
+    parser.add_argument(
+        "--version", "-v",
+        action="version",
+        version=f"%(prog)s {sys.modules['giftwrap'].__version__}",
+        help="Show the version of the GIFTwrap pipeline."
+    )
+
     # Input arguments
     parser.add_argument(
         "--probes", '-p',
@@ -181,7 +188,7 @@ def main():
 
     # Get the version of this package
     print("GIFTwrap Pipeline Version:", sys.modules['giftwrap'].__version__, flush=True)
-    print("Called with arguments:", " ".join(sys.argv), flush=True)
+    print("Called as:", " ".join(sys.argv), flush=True)
 
     wta_args = []
     if cellranger_output is not None and len(cellranger_output) > 0:

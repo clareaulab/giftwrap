@@ -4,6 +4,7 @@ import os
 import os.path as osp
 import gzip
 import shutil
+import sys
 from collections import namedtuple, Counter
 from enum import Enum
 from pathlib import Path
@@ -782,6 +783,12 @@ def run(probes,
 def main():
     parser = argparse.ArgumentParser(
         description="Quantify the genotypes of Gap-filling probes.", formatter_class=RichHelpFormatter
+    )
+    parser.add_argument(
+        "--version", "-v",
+        action="version",
+        version=f"%(prog)s {sys.modules['giftwrap'].__version__}",
+        help="Show the version of the GIFTwrap pipeline."
     )
     parser.add_argument(
         "--probes", '-p',

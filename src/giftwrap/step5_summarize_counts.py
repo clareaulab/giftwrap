@@ -1,4 +1,5 @@
 import argparse
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -512,6 +513,13 @@ def run(output, overwrite, cellranger_output, flatten):
 def main():
     parser = argparse.ArgumentParser(
         description="Generate summary statistics for counts.", formatter_class=RichHelpFormatter
+    )
+
+    parser.add_argument(
+        "--version", "-v",
+        action="version",
+        version=f"%(prog)s {sys.modules['giftwrap'].__version__}",
+        help="Show the version of the GIFTwrap pipeline."
     )
 
     parser.add_argument(

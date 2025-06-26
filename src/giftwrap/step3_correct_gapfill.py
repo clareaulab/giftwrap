@@ -2,6 +2,7 @@ import argparse
 import functools
 import os
 import shutil
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -224,6 +225,13 @@ def run(output: str, cores: int, n_groups_per_batch: int):
 def main():
     parser = argparse.ArgumentParser(
         description="Correct and deduplicate gap fills.", formatter_class=RichHelpFormatter
+    )
+
+    parser.add_argument(
+        "--version", "-v",
+        action="version",
+        version=f"%(prog)s {sys.modules['giftwrap'].__version__}",
+        help="Show the version of the GIFTwrap pipeline."
     )
 
     parser.add_argument(

@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 import argparse
 import inspect
@@ -13,6 +14,12 @@ def print_R():
         description="Print an R script to read a giftwrap HDF5 file.",
         formatter_class=RichHelpFormatter
     )
+    parser.add_argument(
+        "--version", "-v",
+        action="version",
+        version=f"%(prog)s {sys.modules['giftwrap'].__version__}",
+        help="Show the version of the GIFTwrap pipeline."
+    )
     args = parser.parse_args()  # No args
     with open(Path(__file__).parent / "read_gf_h5.R", "r") as f:
         print(f.read(), end="")
@@ -22,6 +29,12 @@ def print_R():
 def print_tech():
     parser = argparse.ArgumentParser(
         description="An example python file for defining a custom technology."
+    )
+    parser.add_argument(
+        "--version", "-v",
+        action="version",
+        version=f"%(prog)s {sys.modules['giftwrap'].__version__}",
+        help="Show the version of the GIFTwrap pipeline."
     )
     args = parser.parse_args()  # No args
     print("from giftwrap import FlexFormatInfo, PrefixTree")
@@ -33,6 +46,12 @@ def convert_probes():
     parser = argparse.ArgumentParser(
         description="Convert a 10X Genomics cellranger-based probe file to a giftwrap probe file. Prints to stdout.",
         formatter_class=RichHelpFormatter
+    )
+    parser.add_argument(
+        "--version", "-v",
+        action="version",
+        version=f"%(prog)s {sys.modules['giftwrap'].__version__}",
+        help="Show the version of the GIFTwrap pipeline."
     )
     parser.add_argument(
         "--input",
