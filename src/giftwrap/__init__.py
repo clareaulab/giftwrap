@@ -19,6 +19,19 @@ try:
     )
 except: pass
 
+try:
+    import importlib_metadata
+except ImportError:
+    try:
+        import importlib.metadata as importlib_metadata
+    except ImportError:
+        importlib_metadata = None
+
+if importlib_metadata is not None:
+    __version__ = importlib_metadata.version("giftwrap")
+else:
+    __version__ = "unknown"
+
 from .utils import read_h5_file, filter_h5_file, TechnologyFormatInfo, PrefixTree, sequence_saturation_curve, sequencing_saturation
 from .analysis import preprocess as pp, plots as pl, tools as tl, spatial as sp
 
