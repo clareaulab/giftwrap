@@ -1,5 +1,6 @@
 import argparse
 import os
+import sys
 from pathlib import Path
 
 import h5py
@@ -223,6 +224,13 @@ def main():
     parser = argparse.ArgumentParser(
         description="Collect counts into a single h5 file. Or multiple if the run was detected to be multiplexed.",
         formatter_class = RichHelpFormatter
+    )
+
+    parser.add_argument(
+        "--version", "-v",
+        action="version",
+        version=f"%(prog)s {sys.modules['giftwrap'].__version__}",
+        help="Show the version of the GIFTwrap pipeline."
     )
 
     parser.add_argument(

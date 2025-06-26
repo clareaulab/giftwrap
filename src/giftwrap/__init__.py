@@ -28,7 +28,7 @@ except ImportError:
         importlib_metadata = None
 
 if importlib_metadata is not None:
-    __version__ = importlib_metadata.version("giftwrap")
+    __version__ = importlib_metadata.version("giftwrap-sc")
 else:
     __version__ = "unknown"
 

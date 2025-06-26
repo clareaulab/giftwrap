@@ -2,6 +2,7 @@ import argparse
 import functools
 import os
 import shutil
+import sys
 from collections import defaultdict
 from pathlib import Path
 
@@ -216,6 +217,12 @@ def run(output: str, threshold: int, cores: int, n_cells_per_batch: int, allow_c
 def main():
     parser = argparse.ArgumentParser(
         description="Correct cell UMIs and filter out identical values.", formatter_class=RichHelpFormatter
+    )
+    parser.add_argument(
+        "--version", "-v",
+        action="version",
+        version=f"%(prog)s {sys.modules['giftwrap'].__version__}",
+        help="Show the version of the GIFTwrap pipeline."
     )
     parser.add_argument(
         "--output", '-o',

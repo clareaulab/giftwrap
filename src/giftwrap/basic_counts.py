@@ -229,6 +229,13 @@ def main():
         formatter_class=RichHelpFormatter
     )
 
+    parser.add_argument(
+        "--version", "-v",
+        action="version",
+        version=f"%(prog)s {sys.modules['giftwrap'].__version__}",
+        help="Show the version of the GIFTwrap pipeline."
+    )
+
     # No bells and whistles
 
     # Input arguments
