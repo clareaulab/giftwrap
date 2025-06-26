@@ -871,7 +871,7 @@ wheels = [
 
 [[package]]
 name = "giftwrap-sc"
-version = "0.1.1"
+version = "0.2.0.dev0"
 source = { editable = "." }
 dependencies = [
     { name = "anndata" },
@@ -902,16 +902,11 @@ all = [
 analysis = [
     { name = "igraph" },
     { name = "leidenalg" },
+    { name = "logomaker" },
     { name = "numba" },
+    { name = "pyfamsa" },
     { name = "scanpy" },
 ]
-spatial = [
-    { name = "protobuf" },
-    { name = "spatialdata" },
-    { name = "squidpy" },
-]
-
-[package.dev-dependencies]
 docs = [
     { name = "griffe-inherited-docstrings" },
     { name = "griffe-sphinx" },
@@ -928,6 +923,11 @@ docs = [
     { name = "pymdown-extensions" },
     { name = "termynal" },
 ]
+spatial = [
+    { name = "protobuf" },
+    { name = "spatialdata" },
+    { name = "squidpy" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -935,11 +935,24 @@ requires-dist = [
     { name = "biopython", specifier = ">=1.85" },
     { name = "diskcache", specifier = ">=5.6.3" },
     { name = "fuzzysearch", specifier = ">=0.8" },
+    { name = "griffe-inherited-docstrings", marker = "extra == 'docs'", specifier = ">=1.1.1" },
+    { name = "griffe-sphinx", marker = "extra == 'docs'", specifier = ">=0.1.0" },
     { name = "h5py", specifier = ">=3.14" },
     { name = "igraph", marker = "extra == 'all'", specifier = ">=0.10" },
     { name = "igraph", marker = "extra == 'analysis'", specifier = ">=0.10" },
     { name = "leidenalg", marker = "extra == 'analysis'", specifier = ">=0.10.2" },
+    { name = "logomaker", marker = "extra == 'analysis'", specifier = ">=0.8.7" },
+    { name = "markdown-exec", extras = ["ansi"], marker = "extra == 'docs'", specifier = ">=1.10.3" },
     { name = "matplotlib", specifier = ">=3.10" },
+    { name = "mkdocs-api-autonav", marker = "extra == 'docs'", specifier = ">=0.3.0" },
+    { name = "mkdocs-autorefs", marker = "extra == 'docs'", specifier = ">=1.4.2" },
+    { name = "mkdocs-awesome-nav", marker = "extra == 'docs'", specifier = ">=3.1.2" },
+    { name = "mkdocs-awesome-pages-plugin", marker = "extra == 'docs'", specifier = ">=2.10.1" },
+    { name = "mkdocs-git-revision-date-localized-plugin", marker = "extra == 'docs'", specifier = ">=1.4.7" },
+    { name = "mkdocs-jupyter", marker = "extra == 'docs'", specifier = ">=0.25.1" },
+    { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.6.14" },
+    { name = "mkdocs-open-in-new-tab", marker = "extra == 'docs'", specifier = ">=1.0.8" },
+    { name = "mkdocstrings", extras = ["python"], marker = "extra == 'docs'", specifier = ">=0.29.1" },
     { name = "numba", marker = "extra == 'all'", specifier = ">=0.61.0" },
     { name = "numba", marker = "extra == 'analysis'", specifier = ">=0.61.0" },
     { name = "numpy", specifier = ">=2.2.6" },
@@ -947,6 +960,8 @@ requires-dist = [
     { name = "pandas", specifier = ">=2.3.0" },
     { name = "protobuf", marker = "extra == 'all'", specifier = ">=5.28.0" },
     { name = "protobuf", marker = "extra == 'spatial'", specifier = ">=5.28.0" },
+    { name = "pyfamsa", marker = "extra == 'analysis'", specifier = ">=0.5.3.post1" },
+    { name = "pymdown-extensions", marker = "extra == 'docs'", specifier = ">=10.15" },
     { name = "rapidfuzz", specifier = ">=3.13" },
     { name = "rich-argparse", specifier = ">=1.7.1" },
     { name = "sankeyflow", specifier = ">=0.4.1" },
@@ -957,27 +972,10 @@ requires-dist = [
     { name = "spatialdata", marker = "extra == 'spatial'", specifier = ">=0.4.0" },
     { name = "squidpy", marker = "extra == 'all'", specifier = ">=1.6.5" },
     { name = "squidpy", marker = "extra == 'spatial'", specifier = ">=1.6.5" },
+    { name = "termynal", marker = "extra == 'docs'", specifier = ">=0.13.0" },
     { name = "tqdm", specifier = ">=4.66.5" },
 ]
-provides-extras = ["spatial", "analysis", "all"]
-
-[package.metadata.requires-dev]
-docs = [
-    { name = "griffe-inherited-docstrings", specifier = ">=1.1.1" },
-    { name = "griffe-sphinx", specifier = ">=0.1.0" },
-    { name = "markdown-exec", extras = ["ansi"], specifier = ">=1.10.3" },
-    { name = "mkdocs-api-autonav", specifier = ">=0.3.0" },
-    { name = "mkdocs-autorefs", specifier = ">=1.4.2" },
-    { name = "mkdocs-awesome-nav", specifier = ">=3.1.2" },
-    { name = "mkdocs-awesome-pages-plugin", specifier = ">=2.10.1" },
-    { name = "mkdocs-git-revision-date-localized-plugin", specifier = ">=1.4.7" },
-    { name = "mkdocs-jupyter", specifier = ">=0.25.1" },
-    { name = "mkdocs-material", specifier = ">=9.6.14" },
-    { name = "mkdocs-open-in-new-tab", specifier = ">=1.0.8" },
-    { name = "mkdocstrings", extras = ["python"], specifier = ">=0.29.1" },
-    { name = "pymdown-extensions", specifier = ">=10.15" },
-    { name = "termynal", specifier = ">=0.13.0" },
-]
+provides-extras = ["spatial", "analysis", "all", "docs"]
 
 [[package]]
 name = "gitdb"
@@ -1424,6 +1422,20 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/2f/83/97b29fe05cb6ae28d2dbd30b81e2e402a3eed5f460c26e9eaa5895ceacf5/locket-1.0.0.tar.gz", hash = "sha256:5c0d4c052a8bbbf750e056a8e65ccd309086f4f0f18a2eac306a8dfa4112a632", size = 4350, upload-time = "2022-04-20T22:04:44.312Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/db/bc/83e112abc66cd466c6b83f99118035867cecd41802f8d044638aa78a106e/locket-1.0.0-py2.py3-none-any.whl", hash = "sha256:b6c819a722f7b6bd955b80781788e4a66a55628b858d347536b7e81325a3a5e3", size = 4398, upload-time = "2022-04-20T22:04:42.23Z" },
+]
+
+[[package]]
+name = "logomaker"
+version = "0.8.7"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "matplotlib" },
+    { name = "numpy" },
+    { name = "pandas" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/22/07/21b30aa773a38df7fa15e9bf8afa85594633c0ba014f9acd7c01dacc2cd6/logomaker-0.8.7.tar.gz", hash = "sha256:63783ce6e24449d6f1f01ce29c4ae1b91f6e54bc198e5da40ad18fcd0efc3302", size = 13176745, upload-time = "2025-03-25T19:08:25.727Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d5/1f/9be29e34615a4325a0ff6da18c55994cb546dcff4423c91f80f101a9858c/logomaker-0.8.7-py3-none-any.whl", hash = "sha256:8a65a5e5136a08823d199fbb5a9443674062a1c223236301accde19b0e401762", size = 13186440, upload-time = "2025-03-25T19:08:23.12Z" },
 ]
 
 [[package]]
@@ -2682,6 +2694,32 @@ wheels = [
 ]
 
 [[package]]
+name = "pyfamsa"
+version = "0.5.3.post1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "scoring-matrices" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5f/d6/53ba2cc9cb2e200598641ab3b1a41173b9794033873813945f3f5e3c4507/pyfamsa-0.5.3.post1.tar.gz", hash = "sha256:26e95de13adce18e923847591681f085a35fab20eac76887deb6ad12f1b6a06c", size = 7737325, upload-time = "2025-03-04T00:33:04.229Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b0/a6/7c11444866a1d9d6a6472f526ef20390c558ba0f39ce8b428bb74a896ec7/pyfamsa-0.5.3.post1-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:a704539a2eef1276f0f6743adeab42ad7018c39fa35506f3cbb352fa481f095c", size = 1487223, upload-time = "2025-03-04T00:31:29.692Z" },
+    { url = "https://files.pythonhosted.org/packages/4b/88/a811ed2a0f903cc8e5ab31f0abd85a344cfb9ee763c69c1553b56e830050/pyfamsa-0.5.3.post1-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:30fb07eb038f82ff115807478903c2063dd55f3661df5155791775fdba878d7e", size = 1470619, upload-time = "2025-03-04T00:31:32.805Z" },
+    { url = "https://files.pythonhosted.org/packages/19/5e/4fb8ce0a3b443c83d8b592ca12db5f0a1a7cefe457f2bc285bbfd0496031/pyfamsa-0.5.3.post1-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:5452479b8add49eaaad435ef064b7bab32ecb22840f117ce5a268b0b8b62c54a", size = 1757721, upload-time = "2025-03-04T00:31:34.516Z" },
+    { url = "https://files.pythonhosted.org/packages/02/46/b72ef9b95b3cafb8869c089e629ce3aa75e808a2f4116fb1e3d4903372ef/pyfamsa-0.5.3.post1-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:378485ec1528c6acaa3841b4280d2485a0531125015fdf1f57297a40327bc3a8", size = 1703560, upload-time = "2025-03-04T00:31:36.683Z" },
+    { url = "https://files.pythonhosted.org/packages/9d/56/66fb18a7e478386ce7bfff65b1c5d26e520883cd619733e82b92577ab30c/pyfamsa-0.5.3.post1-cp311-cp311-win_amd64.whl", hash = "sha256:5c46dbfd8e2eb5fb25866a8332c1203c3d0cb801db004bf5ec2d9e693d5e4d04", size = 1441201, upload-time = "2025-03-04T00:31:38.159Z" },
+    { url = "https://files.pythonhosted.org/packages/67/a2/d697a297e0a0fc54b8db70ac2be8520203f6d8b1db8e0d5287b251e4c69e/pyfamsa-0.5.3.post1-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:7a3ca348b6de590f974038cc749442d09c22c495a8eec58da6436c660ffd1af8", size = 1490268, upload-time = "2025-03-04T00:31:39.619Z" },
+    { url = "https://files.pythonhosted.org/packages/86/ff/acb5c9b23b194cafe55083fa0dfb48ed9d14fc2cb995c2f7ca71f9577b96/pyfamsa-0.5.3.post1-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:bd7c1329b4936fbebd0ea63bde5c8eda69e95e5535707514e9fd05578cb69f8d", size = 1470664, upload-time = "2025-03-04T00:31:41.391Z" },
+    { url = "https://files.pythonhosted.org/packages/ce/f8/58d153551be716cca57444c3ce6aee8f8b2c5b4cd610e38ef99787e250fc/pyfamsa-0.5.3.post1-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:d97a2a1ada9b4d830c3f17d8f926b04f29ca15cf9a33dca9ed89e4af0a4f7f38", size = 1751659, upload-time = "2025-03-04T00:31:43.104Z" },
+    { url = "https://files.pythonhosted.org/packages/40/ba/fccb494fde8ddfb96a298a2288185134e21ae1a5f0df0718f54163a4dbff/pyfamsa-0.5.3.post1-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:043c3a8b5d0265bf2f8c3ca1dd0f46bb2de578049985783555fd9b01b54998fe", size = 1699671, upload-time = "2025-03-04T00:31:46.526Z" },
+    { url = "https://files.pythonhosted.org/packages/b9/82/82ec54b552e169fc25d3737d21f1f0fb7f35f553047491bb02119f7ef5b8/pyfamsa-0.5.3.post1-cp312-cp312-win_amd64.whl", hash = "sha256:b6b8b8e78930074bcceb0e0bf3fc48518c4dcef415c985f26f97aea3c3491407", size = 1439689, upload-time = "2025-03-04T00:31:48.822Z" },
+    { url = "https://files.pythonhosted.org/packages/2d/aa/8a87396da281dbe07fb2706c9dbe343f633c65f5a1b856186693bd03cf5c/pyfamsa-0.5.3.post1-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:03fbe2c80e9e56b80fab1ac8e148502e6b0de3f084b52ba209510af364fba7b0", size = 1488961, upload-time = "2025-03-04T00:31:50.736Z" },
+    { url = "https://files.pythonhosted.org/packages/2f/45/feed433723a6d7a51044d00013b8eef978763a16a3a67b071505db05e0a8/pyfamsa-0.5.3.post1-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:db62cf72912874bbd7ef6e7a3116a8725e7558ce0d8a78d5e611989cea30edf4", size = 1469355, upload-time = "2025-03-04T00:31:52.371Z" },
+    { url = "https://files.pythonhosted.org/packages/f8/fd/9f566f3827cde4f916ddb25bd33402c833db65e5b53126c7da2f8a838591/pyfamsa-0.5.3.post1-cp313-cp313-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:66ca732c2b28cd81d4e136d7ec1233f1f172f514fb4a62c20d3a7360a73fbcae", size = 1751402, upload-time = "2025-03-04T00:31:53.938Z" },
+    { url = "https://files.pythonhosted.org/packages/66/00/d976e27bc507c832aee32367eb675dd2a1505038bc97d304bf107db51147/pyfamsa-0.5.3.post1-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:8acb09c826225d6fdab959fafdabfe2fb5b061cd0a28ebdcf3ab8b725fa787d4", size = 1699439, upload-time = "2025-03-04T00:31:55.467Z" },
+    { url = "https://files.pythonhosted.org/packages/5b/d4/39e725426e5dc7b2c4c5f292afd4c4c99e61200bd7ccce46f172203ccf4d/pyfamsa-0.5.3.post1-cp313-cp313-win_amd64.whl", hash = "sha256:28e9dac040b94c11523dccfe891120565542d5ecbb73b2f4bc95ff2917399404", size = 1439159, upload-time = "2025-03-04T00:31:57.011Z" },
+]
+
+[[package]]
 name = "pygments"
 version = "2.19.1"
 source = { registry = "https://pypi.org/simple" }
@@ -3280,6 +3318,29 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/b7/8e/038ccfe29d272b30086b25a4960f757f97122cb2ec42e62b460d02fe98e9/scipy-1.15.3-cp313-cp313t-musllinux_1_2_aarch64.whl", hash = "sha256:40e54d5c7e7ebf1aa596c374c49fa3135f04648a0caabcb66c52884b943f02b4", size = 36393132, upload-time = "2025-05-08T16:08:15.34Z" },
     { url = "https://files.pythonhosted.org/packages/10/7e/5c12285452970be5bdbe8352c619250b97ebf7917d7a9a9e96b8a8140f17/scipy-1.15.3-cp313-cp313t-musllinux_1_2_x86_64.whl", hash = "sha256:5e721fed53187e71d0ccf382b6bf977644c533e506c4d33c3fb24de89f5c3ed5", size = 38979503, upload-time = "2025-05-08T16:08:21.513Z" },
     { url = "https://files.pythonhosted.org/packages/81/06/0a5e5349474e1cbc5757975b21bd4fad0e72ebf138c5592f191646154e06/scipy-1.15.3-cp313-cp313t-win_amd64.whl", hash = "sha256:76ad1fb5f8752eabf0fa02e4cc0336b4e8f021e2d5f061ed37d6d264db35e3ca", size = 40308097, upload-time = "2025-05-08T16:08:27.627Z" },
+]
+
+[[package]]
+name = "scoring-matrices"
+version = "0.3.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/a4/a7/8ef81b00d7e4289c7afd3211270cf0448a5430d583ae274e34113bbe6f7b/scoring_matrices-0.3.2.tar.gz", hash = "sha256:c18c4f848ec6fde776bab06ed4d48852a46e74072546260e6c083d8baf01b2b5", size = 54583, upload-time = "2025-06-16T11:15:36.339Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fb/4b/47a7d77a269a42e829d916c34a03d5982b1da71be5ff9bb20b1ed970a6ac/scoring_matrices-0.3.2-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:ed0b4045a536f232da92b8a04037d66ada46a41a38c5fb68add14f6021d7c8e3", size = 110776, upload-time = "2025-06-16T11:15:02.78Z" },
+    { url = "https://files.pythonhosted.org/packages/1b/b8/7c8bdcc9c0e56c929637f991698995ec30355640cc83b3d8365b04e09f22/scoring_matrices-0.3.2-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:853a09e018866ac802ce3cfcf0d5e51c0634adc749e40dc92a626aa754c35d97", size = 109872, upload-time = "2025-06-16T11:15:04.378Z" },
+    { url = "https://files.pythonhosted.org/packages/93/54/630e061bebc6caff78186f1007f97bf74ae93271fd9961391a386ed53c02/scoring_matrices-0.3.2-cp311-cp311-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:9da02e300fd07d3807334f83ce34c0065c7a63f0539e7644c85c460d49f884b7", size = 127698, upload-time = "2025-06-16T11:15:05.565Z" },
+    { url = "https://files.pythonhosted.org/packages/b1/23/7c807a6ef796e0fa96cce9e500a8e522d02716e9ece2289c22118f29b32b/scoring_matrices-0.3.2-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:4f9484842cde26d7d16186505bb0e58526f0cbf6239b55908c83f54bf3dec1df", size = 131313, upload-time = "2025-06-16T11:15:06.829Z" },
+    { url = "https://files.pythonhosted.org/packages/b5/5a/947510ba974aafc7c4f00bf3d61eed956e0836081ff51a3ea9e809f08b5d/scoring_matrices-0.3.2-cp311-cp311-win_amd64.whl", hash = "sha256:10271f07009d3c711f9aa1fa9bf3a7062434d7d03f45c1f2086d346b7b1b45ff", size = 111819, upload-time = "2025-06-16T11:15:08.003Z" },
+    { url = "https://files.pythonhosted.org/packages/40/71/2cc7b3f9adb02d92783c8d812ed6bce39eff00aade7101a6ec2ef12f4d22/scoring_matrices-0.3.2-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:8be49549c50119209e319f3d6e0a30540eff315a0197afa7155eb91d6b6cec3f", size = 111401, upload-time = "2025-06-16T11:15:09.93Z" },
+    { url = "https://files.pythonhosted.org/packages/92/1b/4fb1b66c5c2a85f7ee2b24ffc3c484c2021a7d5c87d9c0da81f2507973f5/scoring_matrices-0.3.2-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:bfcb124907c3605bdb4a6fabbd748dd86ec9b1829d2aa91b55f40321ddfa055c", size = 108565, upload-time = "2025-06-16T11:15:12.161Z" },
+    { url = "https://files.pythonhosted.org/packages/3a/7a/00c5394c59e92e604f8abde9f68a418cc8b3491d1db3239d31683c190a96/scoring_matrices-0.3.2-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:d2d34ee2fb6fdf4412f311a2921886fc1fb64ee22124a2efd79e908860064eae", size = 120230, upload-time = "2025-06-16T11:15:13.419Z" },
+    { url = "https://files.pythonhosted.org/packages/ab/77/607077bfb46609da13ccb8c127d3a6b7346904c28321b341ab2ea1e75ce9/scoring_matrices-0.3.2-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:8e4a34ff44d43bc6a8f88db80289dc0ac8089e316b80c328d403910512731a63", size = 126078, upload-time = "2025-06-16T11:15:15.184Z" },
+    { url = "https://files.pythonhosted.org/packages/79/73/8cb20a3a3d9fba8783ea8ce6c5d4b0d68b1518d54fdf306e8a3bd129f43f/scoring_matrices-0.3.2-cp312-cp312-win_amd64.whl", hash = "sha256:292c14b48e0c9258547123b8dd3b4003f0b7e82461784c0263f0b2c82c48b960", size = 109122, upload-time = "2025-06-16T11:15:16.426Z" },
+    { url = "https://files.pythonhosted.org/packages/78/ec/b1b84d32ffe1c73af8473561a14ebf434624d0e5276a2c65b92f97c0901e/scoring_matrices-0.3.2-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:60bb538df4c8bdaaf3f46488f6392957176e23e3658d6f941f3cbc4f02b1a5ef", size = 113021, upload-time = "2025-06-16T11:15:18.024Z" },
+    { url = "https://files.pythonhosted.org/packages/e7/93/5abc99fc3dde6fa33e78ea0c5b5b32b418e497b4c2a2ea363b6f3231aec5/scoring_matrices-0.3.2-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:0429f154c270c7b87ef97b64583021a436f446907eec8bdcd19d44209c4771b5", size = 110292, upload-time = "2025-06-16T11:15:19.22Z" },
+    { url = "https://files.pythonhosted.org/packages/e1/d7/2621afdd665d3f0bff0d1028f7988e8f9a5e842a6a0c2c66f2d7e674491e/scoring_matrices-0.3.2-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:622bfa12c1f72d69c45ccf5bec7c80e3f4b9d0711f9ef560d973c1b571215c32", size = 121271, upload-time = "2025-06-16T11:15:20.419Z" },
+    { url = "https://files.pythonhosted.org/packages/30/8c/ebeaeb6b7c81744ebf4b4f41a95c26021da9f21e698d412dbd525ecfe327/scoring_matrices-0.3.2-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:f03f58a896e1a25fbb2dc549b360d3e1887b5f18dc3833b1cb4b51df8966fedb", size = 127611, upload-time = "2025-06-16T11:15:21.66Z" },
+    { url = "https://files.pythonhosted.org/packages/74/8d/9a86723c34a4d804c96829d394393f3328e89d06337c5f3dec335266e633/scoring_matrices-0.3.2-cp313-cp313-win_amd64.whl", hash = "sha256:66e0030b250e76b9b12f3a5b1aeab1f9e81ae3d289ae0b5a2aed3da7837d2135", size = 111673, upload-time = "2025-06-16T11:15:22.815Z" },
 ]
 
 [[package]]

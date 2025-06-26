@@ -54,6 +54,8 @@ analysis = [
     "igraph>=0.10",
     "numba>=0.61.0",
     "leidenalg>=0.10.2",
+    "pyfamsa>=0.5.3.post1",
+    "logomaker>=0.8.7",
 ]
 all = [
     "protobuf>=5.28.0",
@@ -64,7 +66,6 @@ all = [
     "numba>=0.61.0",
 ]
 
-[dependency-groups]
 docs = [
     "griffe-inherited-docstrings>=1.1.1",
     "griffe-sphinx>=0.1.0",
