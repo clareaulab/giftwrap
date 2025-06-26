@@ -67,7 +67,7 @@ def main():
         '--barcode', '-b',
         required=False,
         type=int,
-        default=1,
+        default=0,
         help="The barcode number to use for the Flex run. Mutually exclusive with --multiplex. Defaults BC01"
     )
     parser.add_argument(
@@ -178,6 +178,10 @@ def main():
 
     print("Gapfill counts pipeline started.")
     print("================================", flush=True)
+
+    # Get the version of this package
+    print("GIFTwrap Pipeline Version:", sys.modules['giftwrap'].__version__, flush=True)
+    print("Called with arguments:", " ".join(sys.argv), flush=True)
 
     wta_args = []
     if cellranger_output is not None and len(cellranger_output) > 0:
