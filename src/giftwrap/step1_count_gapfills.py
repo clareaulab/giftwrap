@@ -28,11 +28,12 @@ class ReadProcessState(Enum):
     FILTERED_NO_LHS = 2
     FILTERED_NO_PROBE_BARCODE = 3
     FILTERED_NO_CELL_BARCODE = 4
-    CORRECTED_RHS = 5
-    CORRECTED_LHS = 6
-    CORRECTED_BARCODE = 7
-    EXACT = 8
-    TOTAL_READS = 9  # Placeholder so that we can count the total number of reads
+    FILTERED_INCORRECT_PROBE_BARCODE = 5
+    CORRECTED_RHS = 6
+    CORRECTED_LHS = 7
+    CORRECTED_BARCODE = 8
+    EXACT = 9
+    TOTAL_READS = 10  # Placeholder so that we can count the total number of reads
 
 
 ReadData = namedtuple("ReadData", ["probe_id", "probe_barcode", "gapfill", "gapfill_quality", "cell_barcode", "umi", "umi_quality", "coordinate_x", "coordinate_y"])
@@ -245,13 +246,13 @@ def process_read(r1, r2,
         # We will need to search for the probe barcode
         if has_constant_seq and tech_info.has_probe_barcode and (multiplex > 1 or barcode > 0):
             probe_bc_search_space = r2_seq[constant_end + tech_info.probe_barcode_start:constant_end + tech_info.probe_barcode_start + tech_info.probe_barcode_length]
-            if len(probe_bc_search_space) == 0:  # Short circuit
+            if len(probe_bc_search_space) == 0:  # Short circuit if there is no probe barcode
                 return [ReadProcessState.TOTAL_READS, ReadProcessState.FILTERED_NO_PROBE_BARCODE], None
 
             if multiplex <= 1:  # Singleplex, so we search for the specified barcode
                 probe_barcode = tech_info.probe_barcodes[barcode-1]
                 if rapidfuzz.distance.Levenshtein.distance(probe_bc_search_space, probe_barcode) > compute_max_distance(len(probe_bc_search_space), max_distance):
-                    return [ReadProcessState.TOTAL_READS, ReadProcessState.FILTERED_NO_PROBE_BARCODE], None
+                    return [ReadProcessState.TOTAL_READS, ReadProcessState.FILTERED_INCORRECT_PROBE_BARCODE], None
             else:  # Multiplexed, so we need to search for the barcode
                 probe_barcode_match = rapidfuzz.process.extractOne(
                     probe_bc_search_space,
