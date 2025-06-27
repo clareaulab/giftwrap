@@ -1,5 +1,6 @@
 import os
 import itertools
+from collections import defaultdict
 
 import pandas as pd
 
@@ -492,3 +493,355 @@ def _impute_within_cluster(adata: ad.AnnData,
     return (adata.obsm['genotype'].loc[adata.obs_names],
             adata.obsm['genotype_certainty'].loc[adata.obs_names],
             correct_genotypes)
+
+
+def correct_off_by_one_gapfills(adata: ad.AnnData,
+                                probes: list[str] = None,
+                                cores: int = 1) -> ad.AnnData:
+    """
+    It has been observed that some gapfills may have a single base deletion randomly at the ligation junction between
+    the end of the gapfilled sequence and the start of the RHS. This function attempts to compute this correction by
+    comparing all collected gapfill sequences for each probe within its cell and collapsing any single nucleotide
+    truncated gapfills into the most likely full-length gapfill sequence.
+
+    If there are multiple candidates for the full-length gapfill sequence, we will redistribute the UMIs approximately
+    equally according to the relative proportions of those sequences in the cell.
+
+    Note that this works with raw probe sequences, not collapsed genotypes!
+    :param adata: The AnnData object containing the gapfills.
+    :param probes: A whitelist of probes to correct. If None, all probes will be corrected.
+    :param cores: The number of cores to use for parallel processing. If <1, uses all available cores.
+    :return: The AnnData object with the corrected gapfills. Note that probe/gapfill combinations that no longer have
+        valid cells will be removed from the AnnData object.
+    """
+    if cores < 1:
+        cores = os.cpu_count()
+    elif cores == 1:
+        print("Info: if correction takes too long, consider setting cores > 1.")
+
+    probes = adata.var["probe"].unique().tolist() if probes is None else probes
+    mp = maybe_multiprocess(cores)
+
+    if cores == 1:
+        adata_list = [adata]
+    else:
+        split_indices = np.array_split(np.arange(adata.shape[0]), cores)
+        adata_list = [adata[adata.obs_names[indices], :] for indices in split_indices]
+
+    with mp as pool:
+        results = pool.starmap(
+            _correct_off_by_one_job,
+            tqdm([(adata_chunk.copy(), probes) for adata_chunk in adata_list], desc="Correcting off-by-one gapfills", total=len(adata_list), unit="chunk")
+        )
+
+    # Combine the results
+    combined_adata = ad.concat(results, axis=0, merge='unique', uns_merge='unique', index_unique=None)
+    # Remove probes/gapfill pairs that no longer have valid cells
+    original_n_vars = combined_adata.var.shape[0]
+    combined_adata = combined_adata[:, combined_adata.X.sum(axis=0) > 0].copy()
+    new_n_vars = combined_adata.var.shape[0]
+
+    print(f"Removed {original_n_vars - new_n_vars} probes/gapfill pairs that no longer have valid cells after correction.")
+
+    return combined_adata
+
+
+def _correct_off_by_one_job(adata: ad.AnnData, probes: list[str]) -> ad.AnnData:
+    """
+    For every cell, compute an alignment of all gapfills for each probe and identify gapfills which may have had a
+    single base deletion at the ligation junction.
+    """
+    import rapidfuzz
+
+    for cell in adata.obs_names:
+        for probe in probes:
+            subset_adata = adata[cell, (adata.var["probe"] == probe)]
+            if subset_adata.shape[1] < 2 or subset_adata.X.sum() < 2:
+                continue  # There aren't multiple gapfills for this probe in this cell, skip it
+            # Remove combos with no UMIs
+            gapfills = subset_adata.var_names[subset_adata.X.sum(axis=0) > 0]
+            if len(gapfills) < 2:  # There aren't multiple gapfills for this probe in this cell, skip it
+                continue
+
+            # Get the length of the gapfills
+            gapfill_lengths = subset_adata.var[gapfills].apply(lambda x: len(x['gapfill']), axis=1).values
+            # Only retain gapfills that are pairwise off-by-one
+            gapfills_to_check = list()
+            for length in np.unique(gapfill_lengths):
+                # Find the gapfills are one base shorter than the current length
+                shorter_gapfills = gapfills[gapfill_lengths == length - 1]
+                if len(shorter_gapfills) == 0:
+                    continue
+                gapfills_to_check.append((gapfills[gapfill_lengths == length], shorter_gapfills))
+            if len(gapfills_to_check) == 0:
+                continue
+
+            # Finally we perform potential corrections
+            for longer_gapfills, shorter_gapfills in gapfills_to_check:
+                # If there is 1 longer gapfill and multiple shorter gapfills, we can no longer assume that the
+                # shorter gapfills are truncated versions of the longer gapfill, so we skip this case
+                if len(longer_gapfills) == 1 and len(shorter_gapfills) > 1:
+                    continue
+                # Collect the counts of the gapfills
+                longer_counts = subset_adata[:, longer_gapfills].X.toarray().flatten()
+                shorter_counts = subset_adata[:, shorter_gapfills].X.toarray().flatten()
+                # The longer counts must be greater than the shorter counts if this was truly a rare base deletion error
+                if longer_counts.sum() <= shorter_counts.sum():
+                    continue
+                # Finally, we can compute alignments
+                # Map each gapfill to its count
+                longer_gapfill_counts = {gapfill: count for gapfill, count in zip(longer_gapfills, longer_counts)}
+                shorter_gapfill_counts = {gapfill: count for gapfill, count in zip(shorter_gapfills, shorter_counts)}
+
+                aligned_longer, aligned_shorter = _compute_alignments(
+                    ref_frequencies=longer_gapfill_counts,
+                    alt_frequencies=shorter_gapfill_counts,
+                    align=True,  # Align the motifs
+                    threads=1,  # Use a single thread for alignment
+                )
+
+                # We will be conservative and only correct if there were gaps introduced into the longer sequence
+                # since that would indicate there is too much uncertainty in the gapfill sequence.
+                # the specific correction we are performing requires that the shorter gapfill is truncated by one base
+                # exactly
+                if any('-' in motif for motif in aligned_longer.keys()):
+                    continue
+
+                # Finally, we can try to correct the gapfills
+                # If there is exactly one shorter and one longer gapfill, we can directly correct it
+                if len(aligned_longer) == 1 and len(aligned_shorter) == 1:
+                    longer_gapfill = next(iter(aligned_longer.keys()))
+                    shorter_gapfill = next(iter(aligned_shorter.keys()))
+                    # Correct the shorter gapfill to the longer gapfill
+                    shorter_count = aligned_shorter[shorter_gapfill]
+                    adata[cell, shorter_gapfill].X = 0.
+                    adata[cell, longer_gapfill].X += shorter_count
+                elif len(aligned_longer) == 1 and len(aligned_shorter) > 1:
+                    # Should never happen
+                    raise ValueError("There are multiple shorter gapfills for a single longer gapfill, this should not happen.")
+                else:
+                    # We will map each short gapfill to its longest counterpart
+                    # When multiple have the same distance, we will redistribute the counts
+                    for shorter_gapfill, shorter_count in aligned_shorter.items():
+                        # Compute the edit distance to the longer gapfills
+                        min_distance = float('inf')
+                        longer_gapfills = []
+                        for longer_gapfill, longer_count in aligned_longer.items():
+                            distance = rapidfuzz.distance.Levenshtein.distance(
+                                shorter_gapfill, longer_gapfill
+                            )
+                            if distance < min_distance:
+                                min_distance = distance
+                                longer_gapfills = [longer_gapfill]
+                            elif distance == min_distance:
+                                longer_gapfills.append(longer_gapfill)
+
+                        if len(longer_gapfills) == 0:
+                            raise ValueError("We lost our longer gapfills, this should not happen.")
+                        elif len(longer_gapfills) == 1:
+                            # Exactly one, directly convert
+                            longer_gapfill = longer_gapfills[0]
+                            adata[cell, shorter_gapfill].X = 0.
+                            adata[cell, longer_gapfill].X += shorter_count
+                        else:
+                            # Redistribute relative to the counts of the longer gapfills
+                            longer_counts = np.array([aligned_longer[lg] for lg in longer_gapfills])
+                            relative_counts = longer_counts / longer_counts.sum()
+                            new_counts = (relative_counts * shorter_count).round().astype(int)
+                            # Set the counts for the shorter gapfill to 0
+                            adata[cell, shorter_gapfill].X = 0.
+                            # Add the new counts to the longer gapfills
+                            for longer_gapfill, new_count in zip(longer_gapfills, new_counts):
+                                adata[cell, longer_gapfill].X += new_count
+
+    # Finally, we can return the corrected adata
+    return adata
+
+
+# Utility functions for generating genotype frequencies and aligning gapfill motifs
+
+def _generate_genotype_frequencies(gapfill_adata: ad.AnnData,
+                                   probe: str,
+                                   genotype_mode: str | None) -> tuple[str, dict[str, float]]:
+    """
+    Generate genotype frequencies for a given probe in the gapfill adata object.
+    """
+    final_genotypes_available = 'genotype' in gapfill_adata.obsm
+    if not final_genotypes_available:
+        print("Warning: No genotypes called in gapfill_adata. Using raw probe frequencies.")
+
+    genotype2count = defaultdict(int)
+    if final_genotypes_available:
+        if genotype_mode is None or genotype_mode == 'genotype':  # From genotype obsm just count number of cells
+            # Count the number of cells for each genotype
+            value_counts = gapfill_adata.obsm['genotype'][probe].value_counts()
+            for genotype, count in value_counts.items():
+                if genotype != 'nan' and (genotype == genotype):
+                    if "/" in genotype:  # If the genotype is a composite, split it
+                        splitted = genotype.split('/')
+                        for sub_genotype in splitted:
+                            genotype2count[sub_genotype] += count  # We don't divide by the number of sub-genotypes because they are still positive for a given genotype
+                    else:
+                        genotype2count[genotype] += count
+            frequency_name = 'Cells with Genotype'
+        else:  # From genotype obsm, collect number of supporting reads
+            # Count the number of UMIs for each genotype
+            genotypes = gapfill_adata.obsm['genotype'][probe]
+            counts = gapfill_adata.obsm['genotype_counts'][probe]
+            for genotype, count in zip(genotypes, counts):
+                if genotype != 'nan' and (genotype == genotype):
+                    if "/" in genotype:  # If the genotype is a composite, split it
+                        splitted = genotype.split('/')
+                        for sub_genotype in splitted:
+                            genotype2count[sub_genotype] += count / len(splitted)
+                    else:
+                        genotype2count[genotype] += count
+            frequency_name = 'UMIs with Genotype'
+    else:
+        var_mask = (gapfill_adata.var['probe'] == probe).values
+        gapfills = gapfill_adata[:, var_mask].var['gapfill'].values
+        if genotype_mode is None or genotype_mode == 'raw':  # From raw probe frequencies, count the umis
+            for mask, gapfill in zip(gapfill_adata.obs_names, gapfills):
+                if gapfill != 'nan' and (gapfill == gapfill):
+                    genotype2count[gapfill] += gapfill_adata[mask, var_mask].X.sum()
+            frequency_name = 'UMIs with Gapfill'
+        else:  # From raw probes, split captured genotypes by the relative abundance of the gapfills per cell.
+            # Normalize counts
+            normalization_constant = gapfill_adata[:, var_mask].X.sum(axis=1)
+            for mask, gapfill in zip(gapfill_adata.obs_names, gapfills):
+                if gapfill != 'nan' and (gapfill == gapfill):
+                    # Get the counts for this cell
+                    counts = gapfill_adata[mask, var_mask].X.toarray().flatten()
+                    # Normalize by the total number of UMIs in the cell
+                    normalized_counts = counts / normalization_constant[mask]
+                    for genotype, count in zip(gapfill_adata.var_names[var_mask], normalized_counts):
+                        if genotype != 'nan' and (genotype == genotype):
+                            genotype2count[genotype] += count
+            frequency_name = 'Relative Gapfill Frequencies'
+
+    return frequency_name, genotype2count
+
+
+def _compute_alignments(
+        ref_frequencies: dict[str, float],
+        alt_frequencies: dict[str, float] | None,
+        align: bool = True,
+        threads: int = 1,
+) -> tuple[dict[str, float], dict[str, float] | None]:
+    """
+    Compute alignments for the motif plot.
+    :param ref_frequencies: A dictionary of reference frequencies for the probe.
+    :param alt_frequencies: If provided, a dictionary of alternative frequencies for the probe.
+    :param align: Whether to align the motifs using pyFAMSA.
+    :param threads: The number of threads to use for alignment.
+    :return: A tuple containing the aligned reference frequencies and the aligned alternative frequencies (if provided).
+    """
+    if align:
+        try:
+            import pyfamsa
+            import scoring_matrices
+        except ImportError:
+            print("pyFAMSA is not installed. Skipping motif alignment.")
+            align = False
+    if not align:  # No alignment, just return the frequencies as they are padded to the same length
+        # Pad the motifs with gaps to the same length
+        if alt_frequencies is None:
+            max_length = max(len(motif) for motif in ref_frequencies.keys())
+            ref_frequencies = {motif.ljust(max_length, '-') : freq for motif, freq in ref_frequencies.items()}
+            return ref_frequencies, None
+        else:
+            max_length = max(max(len(motif) for motif in ref_frequencies.keys()),
+                             max(len(motif) for motif in alt_frequencies.keys()))
+            ref_frequencies = {motif.ljust(max_length, '-') : freq for motif, freq in ref_frequencies.items()}
+            alt_frequencies = {motif.ljust(max_length, '-') : freq for motif, freq in alt_frequencies.items()}
+            return ref_frequencies, alt_frequencies
+
+
+    # Align the motifs using pyFAMSA
+    aligner = pyfamsa.Aligner(
+        threads=threads,
+        guide_tree='nj',  # Use neighbor-joining to build the guide tree
+        tree_heuristic=None,  # We don't need a heuristic for the tree since it should be small
+        keep_duplicates=True,
+        refine=True,  # Refine the alignment
+        scoring_matrix=scoring_matrices.ScoringMatrix.from_name('BLOSUM62'),
+    )
+    # Sort the references by frequency (descending)
+    sorted_ref = dict(sorted(ref_frequencies.items(), key=lambda x: x[1], reverse=True))
+
+    if alt_frequencies is None:  # Only need to worry about one group
+        if len(sorted_ref) < 2:  # Skip alignment
+            print("Not enough motifs to align. Skipping alignment.")
+            return _compute_alignments(
+                ref_frequencies=sorted_ref,
+                alt_frequencies=None,
+                align=False,
+            )
+        # Align the motifs
+        sequences = [
+            pyfamsa.Sequence(f">{i} {freq}".encode(), seq.encode())
+            for i, (seq, freq) in enumerate(sorted_ref.items())
+        ]
+        msa = aligner.align(sequences)
+        return {
+            seq.sequence.decode(): float(seq.id.decode().split(" ")[1])
+            for seq in msa
+        }, None  # No alternative frequencies to return
+    else: # Need to align both groups
+        sorted_alt = dict(sorted(alt_frequencies.items(), key=lambda x: x[1], reverse=True))
+        distinct_motifs = set(sorted_ref.keys()).union(set(sorted_alt.keys()))
+        if len(distinct_motifs) < 2:
+            print("Not enough motifs to align. Skipping alignment.")
+            return _compute_alignments(
+                ref_frequencies=sorted_ref,
+                alt_frequencies=sorted_alt,
+                align=False,
+            )
+        if len(sorted_ref) < 2 or len(sorted_alt) < 2:  # We need to align them together to be able to get matching lengths
+            all_sequences = [
+                pyfamsa.Sequence(f">ref_{i} {freq}".encode(), seq.encode())
+                for i, (seq, freq) in enumerate(sorted_ref.items())
+            ] + [
+                pyfamsa.Sequence(f">alt_{i} {freq}".encode(), seq.encode())
+                for i, (seq, freq) in enumerate(sorted_alt.items())
+            ]
+            # Align the motifs
+            msa = aligner.align(all_sequences)
+            # Parse the aligned sequences back into dictionaries
+            ref_frequencies_aligned = {
+                seq.sequence.decode(): float(seq.id.decode().split(" ")[1])
+                for seq in msa if seq.id.decode().startswith('ref_')
+            }
+            alt_frequencies_aligned = {
+                seq.sequence.decode(): float(seq.id.decode().split(" ")[1])
+                for seq in msa if seq.id.decode().startswith('alt_')
+            }
+
+            return ref_frequencies_aligned, alt_frequencies_aligned
+        else:  # Align individually, then align the two together
+            ref_sequences = [
+                pyfamsa.Sequence(f">ref_{i} {freq}".encode(), seq.encode())
+                for i, (seq, freq) in enumerate(sorted_ref.items())
+            ]
+            alt_sequences = [
+                pyfamsa.Sequence(f">alt_{i} {freq}".encode(), seq.encode())
+                for i, (seq, freq) in enumerate(sorted_alt.items())
+            ]
+
+            ref_msa = aligner.align(ref_sequences)
+            alt_msa = aligner.align(alt_sequences)
+
+            total_msa = aligner.align_profiles(
+                ref_msa,
+                alt_msa
+            )
+
+            ref_frequencies_aligned = {
+                seq.sequence.decode(): float(seq.id.decode().split(" ")[1])
+                for seq in total_msa if seq.id.decode().startswith('ref_')
+            }
+            alt_frequencies_aligned = {
+                seq.sequence.decode(): float(seq.id.decode().split(" ")[1])
+                for seq in total_msa if seq.id.decode().startswith('alt_')
+            }
+            return ref_frequencies_aligned, alt_frequencies_aligned
