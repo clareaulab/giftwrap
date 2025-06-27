@@ -25,13 +25,14 @@ def _check_genotypes(adata: ad.AnnData):
 
 
 def plot_logo(gapfill_adata: ad.AnnData,
-               probe: str,
-               groupby: str = None,
-               group: str = None,
-               compare_to: str = None,
-               genotype_mode: Literal['genotype', 'raw'] = None,
-               align: bool = True,
-               threads: int = 1) -> tuple['logomaker.Logo', plt.Axes]:
+              probe: str,
+              groupby: str = None,
+              group: str = None,
+              compare_to: str = None,
+              genotype_mode: Literal['genotype', 'raw'] = None,
+              align: bool = True,
+              reverse_complement_gapfill: bool = False,
+              threads: int = 1) -> tuple['logomaker.Logo', plt.Axes]:
     """
     Generate a logo plot for a single probe in the gapfill adata object.
 
@@ -55,6 +56,8 @@ def plot_logo(gapfill_adata: ad.AnnData,
         will be plotted by the total number of UMIs for each genotype. By default, we use 'genotype' if genotypes
         have been called, otherwise 'raw'.
     :param align: Whether to align the logos using pyFAMSA.
+    :param reverse_complement_gapfill: If True, the gapfill sequences will be reverse complemented before plotting.
+        I.e. we plot the mRNA sequence itself, rather than the cDNA sequence.
     :param threads: The number of threads to use for alignment. Default is 1.
     :return: The logo object and its matplotlib axes.
     """
@@ -147,6 +150,18 @@ def plot_logo(gapfill_adata: ad.AnnData,
                 if nucleotide in data:
                     data[nucleotide][i] += freq
         data = pd.DataFrame(data).set_index('Relative Position (bp)')
+
+    if reverse_complement_gapfill:  # Reverse the positions and then reverse complement the columns
+        # First, reverse the positions and relabel the positions
+        data = data.iloc[::-1]
+        data.index = pd.Index(list(range(len(data.index))), name='Relative Position (bp)')
+        # Then complement the columns
+        data = data.rename(columns={
+            'A': 'T',
+            'C': 'G',
+            'G': 'C',
+            'T': 'A'
+        })
 
     # Now we need to plot the logo with logomaker
     logo = logomaker.Logo(
