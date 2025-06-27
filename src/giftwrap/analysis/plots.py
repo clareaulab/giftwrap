@@ -1,3 +1,7 @@
+"""
+This module provides plotting functions for visualizing gapfill and genotype data in AnnData objects.
+"""
+
 from typing import Literal
 
 import anndata as ad

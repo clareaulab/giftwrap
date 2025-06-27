@@ -1,3 +1,9 @@
+"""
+This module contains functions for spatial analysis of Visium GIFT-seq data.
+
+Note: This module requires that the 'spatial' extra was installed with GIFTwrap.
+"""
+
 from __future__ import annotations
 
 import anndata as ad

@@ -1,3 +1,10 @@
+"""
+GIFTwrap: A Python package for analyzing GIFT-seq data.
+
+The package provides both a CLI for transforming FASTQ files to counts matrices,
+as well as a Python API for analysis.
+"""
+
 # Random patches to assist with package compatibility
 import numpy as np
 np.float_ = np.float64
