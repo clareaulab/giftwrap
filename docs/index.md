@@ -22,7 +22,7 @@ Please review our tutorials and examples to get started with using the `giftwrap
 
 - [Getting Started](tutorials/getting_started.md)
 - [Processing GIFT-seq Data](tutorials/processing_giftseq_data.md)
-- [Analyzing GIFT-seq Data](tutorials/analyzing_giftseq_data.md)
+- [Analyzing GIFT-seq Data](tutorials/analyzing_giftseq_data.ipynb)
 - [Imputing Genotypes](tutorials/imputation.md)
 - [Spatial Analysis](tutorials/spatial_giftseq.md)
 - [Seurat Integration](tutorials/seurat_integration.md)

@@ -3,6 +3,8 @@ site_url: https://clareaulab.github.io/giftwrap
 repo_url: https://github.com/clareaulab/giftwrap
 theme:
   name: material
+  palette:
+    scheme: slate
   font:
     text: Roboto
   language: en
@@ -55,7 +57,13 @@ plugins:
             extensions:
               - griffe_sphinx
               - griffe_inherited_docstrings
-  - mkdocs-jupyter
+  - mkdocs-jupyter:
+      execute: true
+      no_input: true
+      theme: dark
+      remove_tag_config:
+        remove_input_tags:
+          - hide_code
   - autorefs:
       resolve_closest: true
   - awesome-pages
@@ -109,7 +117,7 @@ nav:
     - Tutorials:
         - Getting Started: tutorials/getting_started.md
         - Processing GIFT-Seq Data: tutorials/processing_giftseq_data.md
-        - Analyzing GIFT-Seq Data: tutorials/analyzing_giftseq_data.md
+        - Analyzing GIFT-Seq Data: tutorials/analyzing_giftseq_data.ipynb
         - Spatial GIFT-Seq: tutorials/spatial_giftseq.md
         - Imputation of GIFT-Seq Data: tutorials/imputation.md
         - Seurat Integration: tutorials/seurat_integration.md
