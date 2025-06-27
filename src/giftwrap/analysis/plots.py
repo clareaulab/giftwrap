@@ -165,18 +165,6 @@ def plot_logo(gapfill_adata: ad.AnnData,
     return logo, logo.ax
 
 
-def dendrogram(gapfill_adata: ad.AnnData, groupby: str, **kwargs):
-    """
-    Generate a dendrogram of the gapfills. Similar to dendrograms in sc.pl.dendrogram.
-        Note, this requires sc.tl.dendrogram to be run first.
-    :param gapfill_adata: The gapfill adata object.
-    :param groupby: The groupby column to use.
-    :param kwargs: Arguments passed to sc.pl.dendrogram.
-    :return: The figure/axes.
-    """
-    return sc.pl.dendrogram(gapfill_adata, groupby, **kwargs)
-
-
 def dotplot(gapfill_adata: ad.AnnData, probe: str, groupby: str, **kwargs):
     """
     Generate a dotplot of the gapfills for a single probe. Similar to dotplots in sc.pl.dotplot.
