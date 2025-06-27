@@ -103,7 +103,7 @@ def plot_logo(gapfill_adata: ad.AnnData,
             for i, nucleotide in enumerate(logo):
                 if nucleotide in ref_data:
                     ref_data[nucleotide][i] += freq
-        ref_data = pd.DataFrame(ref_data).set_index('relative_position')
+        ref_data = pd.DataFrame(ref_data).set_index('Relative Position (bp)')
         alt_data = {
             'Relative Position (bp)': list(range(seq_length)),
             'A': [0. for _ in range(seq_length)],
@@ -116,7 +116,7 @@ def plot_logo(gapfill_adata: ad.AnnData,
             for i, nucleotide in enumerate(logo):
                 if nucleotide in alt_data:
                     alt_data[nucleotide][i] += freq
-        alt_data = pd.DataFrame(alt_data).set_index('relative_position')
+        alt_data = pd.DataFrame(alt_data).set_index('Relative Position (bp)')
 
         # Normalize by total frequencies per position then subtract alt data from ref data
         ref_data = ref_data.div(ref_data.sum(axis=1), axis=0)
@@ -142,7 +142,7 @@ def plot_logo(gapfill_adata: ad.AnnData,
             for i, nucleotide in enumerate(logo):
                 if nucleotide in data:
                     data[nucleotide][i] += freq
-        data = pd.DataFrame(data).set_index('relative_position')
+        data = pd.DataFrame(data).set_index('Relative Position (bp)')
 
     # Now we need to plot the logo with logomaker
     logo = logomaker.Logo(

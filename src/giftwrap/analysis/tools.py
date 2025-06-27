@@ -708,12 +708,12 @@ def _generate_genotype_frequencies(gapfill_adata: ad.AnnData,
         else:  # From raw probes, split captured genotypes by the relative abundance of the gapfills per cell.
             # Normalize counts
             normalization_constant = gapfill_adata[:, var_mask].X.sum(axis=1)
-            for mask, gapfill in zip(gapfill_adata.obs_names, gapfills):
+            for i, (mask, gapfill) in enumerate(zip(gapfill_adata.obs_names, gapfills)):
                 if gapfill != 'nan' and (gapfill == gapfill):
                     # Get the counts for this cell
                     counts = gapfill_adata[mask, var_mask].X.toarray().flatten()
                     # Normalize by the total number of UMIs in the cell
-                    normalized_counts = counts / normalization_constant[mask]
+                    normalized_counts = counts / normalization_constant[i]
                     for genotype, count in zip(gapfill_adata.var_names[var_mask], normalized_counts):
                         if genotype != 'nan' and (genotype == genotype):
                             genotype2count[genotype] += count
@@ -810,11 +810,11 @@ def _compute_alignments(
             # Parse the aligned sequences back into dictionaries
             ref_frequencies_aligned = {
                 seq.sequence.decode(): float(seq.id.decode().split(" ")[1])
-                for seq in msa if seq.id.decode().startswith('ref_')
+                for seq in msa if seq.id.decode().startswith('>ref_')
             }
             alt_frequencies_aligned = {
                 seq.sequence.decode(): float(seq.id.decode().split(" ")[1])
-                for seq in msa if seq.id.decode().startswith('alt_')
+                for seq in msa if seq.id.decode().startswith('>alt_')
             }
 
             return ref_frequencies_aligned, alt_frequencies_aligned
@@ -838,10 +838,10 @@ def _compute_alignments(
 
             ref_frequencies_aligned = {
                 seq.sequence.decode(): float(seq.id.decode().split(" ")[1])
-                for seq in total_msa if seq.id.decode().startswith('ref_')
+                for seq in total_msa if seq.id.decode().startswith('>ref_')
             }
             alt_frequencies_aligned = {
                 seq.sequence.decode(): float(seq.id.decode().split(" ")[1])
-                for seq in total_msa if seq.id.decode().startswith('alt_')
+                for seq in total_msa if seq.id.decode().startswith('>alt_')
             }
             return ref_frequencies_aligned, alt_frequencies_aligned
