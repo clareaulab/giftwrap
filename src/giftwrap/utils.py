@@ -1327,6 +1327,14 @@ def read_wta(
                 return _parse_filtered_feature_bc_matrix_h5(input_path)
             elif base_filename == "sample_molecule_info.h5":
                 return _parse_molecule_info_h5(input_path)
+            else:  # Try parsing successively
+                try:
+                    return _parse_barcodes_tsv(input_path)
+                except:
+                    try:
+                        return _parse_filtered_feature_bc_matrix_h5(input_path)
+                    except:
+                        return _parse_molecule_info_h5(input_path)
         raise FileNotFoundError("Barcodes file not found.")
 
     try:
