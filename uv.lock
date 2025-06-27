@@ -929,6 +929,11 @@ spatial = [
     { name = "squidpy" },
 ]
 
+[package.dev-dependencies]
+docs = [
+    { name = "mkdocs-panzoom-plugin" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "anndata", specifier = ">=0.11" },
@@ -976,6 +981,9 @@ requires-dist = [
     { name = "tqdm", specifier = ">=4.66.5" },
 ]
 provides-extras = ["spatial", "analysis", "all", "docs"]
+
+[package.metadata.requires-dev]
+docs = [{ name = "mkdocs-panzoom-plugin", specifier = ">=0.2.2" }]
 
 [[package]]
 name = "gitdb"
@@ -1798,6 +1806,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/0a/0e/f72a506a21bdb27b807124e00c688226848a388d1fd3980b80ae3cc27203/mkdocs_open_in_new_tab-1.0.8.tar.gz", hash = "sha256:3e0dad08cc9938b0b13097be8e0aa435919de1eeb2d1a648e66b5dee8d57e048", size = 5791, upload-time = "2024-11-18T13:15:13.977Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/21/94/44f3c868495481c868d08eea065c82803f1affd8553d3383b782f497613c/mkdocs_open_in_new_tab-1.0.8-py3-none-any.whl", hash = "sha256:051d767a4467b12d89827e1fea0ec660b05b027c726317fe4fceee5456e36ad2", size = 7717, upload-time = "2024-11-18T13:15:12.286Z" },
+]
+
+[[package]]
+name = "mkdocs-panzoom-plugin"
+version = "0.2.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "beautifulsoup4" },
+    { name = "mkdocs" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/6d/05/d9d43218a5ec13e5238a7052112f7086fcb9caea3526056eebc3fead4939/mkdocs_panzoom_plugin-0.2.2.tar.gz", hash = "sha256:c0375537b3b051971ff201960660700dfa05923304ba0feca796bb6c77eea47c", size = 20064, upload-time = "2025-05-16T17:19:20.804Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/93/f2/45f097bff83f69e8e2c72d5962e5905ee2f66e720a999d203557569c271a/mkdocs_panzoom_plugin-0.2.2-py3-none-any.whl", hash = "sha256:eeee46aa091b32e89fe44657a8ffb5e128e539aedd6309d9cf7f428d05fed5c5", size = 20625, upload-time = "2025-05-16T17:19:19.505Z" },
 ]
 
 [[package]]

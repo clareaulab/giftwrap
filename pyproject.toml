@@ -109,3 +109,8 @@ exclude = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/giftwrap"]
+
+[dependency-groups]
+docs = [
+    "mkdocs-panzoom-plugin>=0.2.2",
+]

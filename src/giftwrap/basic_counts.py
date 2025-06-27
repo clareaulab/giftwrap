@@ -1,7 +1,12 @@
+import warnings, os
+warnings.filterwarnings("ignore", category=FutureWarning)
+os.environ.setdefault("PYTHONWARNINGS", "ignore::FutureWarning")  # inherit to subprocesses
+
 import argparse
 import gzip
 from pathlib import Path
 import functools
+import sys
 
 from rich_argparse import RichHelpFormatter
 import pandas as pd

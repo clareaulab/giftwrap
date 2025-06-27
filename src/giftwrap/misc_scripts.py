@@ -1,3 +1,7 @@
+import warnings, os
+warnings.filterwarnings("ignore", category=FutureWarning)
+os.environ.setdefault("PYTHONWARNINGS", "ignore::FutureWarning")  # inherit to subprocesses
+
 import sys
 from pathlib import Path
 import argparse
