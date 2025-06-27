@@ -1,3 +1,8 @@
+"""
+This module provides various tools for analyzing and manipulating a GIFT-seq dataset. Most true analysis tools live
+here.
+"""
+
 import os
 import itertools
 from collections import defaultdict

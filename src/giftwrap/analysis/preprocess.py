@@ -1,3 +1,8 @@
+"""
+This module provides functions to handle basic preprocessing tasks of GIFT-seq data including
+filtering and correcting gapfills and genotypes.
+"""
+
 import anndata as ad
 import numpy as np
 
