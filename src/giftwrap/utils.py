@@ -1,8 +1,11 @@
+import warnings, os
+warnings.filterwarnings("ignore", category=FutureWarning)
+os.environ.setdefault("PYTHONWARNINGS", "ignore::FutureWarning")  # inherit to subprocesses
+
 import functools
 import gzip
 import io
 import json
-import os
 import shutil
 import subprocess
 from abc import ABC, abstractmethod

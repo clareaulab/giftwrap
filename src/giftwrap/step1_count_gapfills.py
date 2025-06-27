@@ -1,6 +1,9 @@
+import warnings, os
+warnings.filterwarnings("ignore", category=FutureWarning)
+os.environ.setdefault("PYTHONWARNINGS", "ignore::FutureWarning")  # inherit to subprocesses
+
 import argparse
 import functools
-import os
 import os.path as osp
 import gzip
 import shutil
@@ -853,7 +856,7 @@ def main():
         required=False,
         type=str,
         default="Flex",
-        choices=["Flex", "Visium-v1", "Visium-v2", 'Visium-v3', 'Visium-v4', 'Visium-v5', 'VisiumHD', "Custom"],
+        choices=["Flex", 'VisiumHD', "Visium-v1", "Visium-v2", 'Visium-v3', 'Visium-v4', 'Visium-v5', "Custom"],
         help="The technology used to generate the gap-filling probes. Default is Flex. If 'Custom', you must provide the --tech_def argument."
     )
     parser.add_argument(

@@ -17,6 +17,8 @@ The `giftwrap` pipeline will run the following major steps:
 4. **Counting UMIs**: The final processing step is to demultiplex counts by probe barcode (if multiplexed), followed by the counting of distinct UMIs for each cell barcode. The pipeline simply first scans all possible probe/gapfill sequence combinations (defining the number of features in the final counts matrix), then for each cell barcode: count the number of distinct UMIs that map to each probe/gapfill sequence combination. While collecting this data, we also collect the metadata and output a set of counts matrices (n_cells x n_features) to describe both counts and the number of supporting reads for each cell barcode/feature combination. The output is an h5 file, which has a data structure similar to that used by cellranger. This file can be loaded using the `giftwrap` Python API at this point. 
 5. **Quality Control**: Finally, various quality control metrics are computed to quantify the quality of the data and its efficiency at genotyping. Note that if cellranger was run on the whole transcriptome data, the quality control metrics will be computed only for the observed transcriptome cell barcodes with a filtered h5 file containing only those cell barcodes. Furthermore, additional metrics will be computed to compare the capture rate of genes observed in the transcriptome data to the genes observed in the GIFT-seq data. 
 
+For a more detailed overview of GIFTwrap workflow, [refer to the GIFTwrap workflow below](./processing_giftseq_data.md#giftwrap-workflow).
+
 ## Running the GIFTwrap Pipeline
 The recommended way to run the GIFTwrap pipeline is through the [`giftwrap`](../cli/giftwrap.md) command, which automatically runs all the previously described steps in sequence. View the [GIFTwrap CLI documentation](../cli/index.md) for more details on how to run each step individually and their associated options.
 
@@ -209,3 +211,278 @@ $ giftwrap --project /path/to/files/sample_id --probes /path/to/probes.csv --out
 
 ## Conclusion
 The `giftwrap` command provides a powerful and flexible way to process GIFT-seq data. Additional options and greater customization can be achieved by running the individual steps of the pipeline manually, but this pipeline should cover most common use cases. For more details on the experimental design and considerations, please refer to the [GIFT-seq publication](...). If you have any questions or issues, don't hesitate to reach out via the [GIFTwrap GitHub repository](https://github.com/clareaulab/giftwrap).
+
+
+## GIFTwrap Workflow
+```mermaid
+---
+config:
+  theme: redux
+  layout: dagre
+  look: neo
+---
+%%{init: {'themeVariables': { 'edgeLabelBackground': 'white'}}}%%
+flowchart LR
+ subgraph s1["giftwrap-count"]
+    direction TB
+        n2["GIFT-seq FastQs"]
+        n3["WTA<br>Provided?"]
+        n4@{ label: "<span style=\"padding-left:\">Use Called Cells<br>For Cell Barcode<br>Whitelist<span style=\"padding-left:\">t</span></span>" }
+        n5@{ label: "<span style=\"padding-left:\">Use Default<br>Cell Barcode<br>Whitelist</span>" }
+        n6["LHS<br>Sequences<br>Differ?"]
+        n28["Sort All Recorded Reads By:<br>Probe BC, Cell BC, Probe ID"]
+        s2["s2"]
+  end
+ subgraph s2["<div style="width:54em; height:2em; display:flex; justify-content: flex-start; align-items:flex-end;"><strong>For each read</strong></div>"]
+    direction TB
+        n7["Fuzzy Match LHS,<br>Prioritizing Longer<br>LHS Sequences"]
+        n8["Fuzzy Match LHS<br>Based on First N<br>Nucleotides in R2"]
+        n9["Match?"]
+        n10["Fuzzy Search Remaining<br>R2 for the Constant<br>Sequence"]
+        n11["Discard Read"]
+        n12["Present<br>Or Ignored?"]
+        n13["Discard Read"]
+        n14["Multiplexed?"]
+        n15["Fuzzy Match<br>Probe Barcode"]
+        n16["Expected<br>Barcode<br>Matched?"]
+        n17["Discard Read"]
+        n18["Fuzzy Search<br>for a Paired<br>RHS Sequence"]
+        n19["Expected RHS<br>Matched?"]
+        n20["Grab Sequence<br>Between LHS and<br>RHS as Gapfill"]
+        n21["Discard Read"]
+        n22["Split R1 Into<br>Expected UMI<br>and Cell Barcode<br>Sequences"]
+        n23["Fuzzy Search Cell<br>Barcode Against<br>Whitelist"]
+        n24["Matched<br>Cell Barcode?"]
+        n25["Record Mapped<br>Read"]
+        n26["Discard Read"]
+  end
+ subgraph s3["giftwrap-correct-umis"]
+    direction TB
+        s4["s4"]
+        n27["Group Reads By<br>Probe Barcode and<br>Cell Barcode"]
+        n29["Iterate Over Reads<br>Within Each Cell"]
+  end
+ subgraph s4["<div style="width:52em; height:2em; display:flex; justify-content: flex-start; align-items:flex-end;"><strong>For each Probe BC/Cell BC pair</strong></div>"]
+    direction TB
+        n35["Sort UMIs<br>By Number of<br>Reads Captured"]
+        n31["Observed<br>UMIs"]
+        n30["Test Raw<br>UMI Sequence"]
+        n40["Probe/UMI<br>Chimeras<br>Allowed?"]
+        n32["Accept UMI"]
+        n33["Collect PHRED<br>Quality Scores<br>for Each UMI Base"]
+        n36["Test Up to 1 Edit<br>Prioritized by Quality"]
+        n37["Matches Existing<br>Probe / UMI Pair?"]
+        n38["Accept Corrected UMI"]
+        n39["Accept Uncorrected<br>UMI As Newly<br>Observed"]
+        n41["Save All Collected<br>Probe/UMI Pairs"]
+        n42["Sort All Probes<br>Observed For<br>Each UMI"]
+        n43["Only 1 Probe<br>for a UMI?"]
+        n44["Sort the Probes<br>By Number of<br>Reads"]
+        n45["Save the<br>Probe/UMI Pair"]
+        n46["Discard Reads Not<br>Mapping to the Most<br>Commonly Observed<br>Probe/UMI Pair"]
+  end
+ subgraph s5["giftwrap-correct-gapfill"]
+    direction TB
+        s6["s6"]
+        n47["Group Reads by<br>Probe BC/Cell BC/UMI<br>Tuples"]
+  end
+ subgraph s6["<div style="width:44em; height:2em; display:flex; justify-content: flex-start; align-items:flex-end;"><strong>For each Probe BC/Cell BC/Probe/UMI tuple</strong></div>"]
+    direction TB
+        n48["More Than<br>One Read?"]
+        n51["Are All<br>Gapfills the<br>Same Length?"]
+        n50["Accept Collected<br>Gapfill Sequence"]
+        n52["Collect the<br>Frequency of<br>Nucleotides for<br>Each Position"]
+        n53["Count the Total<br>Number of Reads<br>Supporting Each<br>Gapfill Sequence<br>Length"]
+        n54["Retain Gapfill<br>Reads That Match<br>the Most Common<br>Gapfill Sequence<br>Length"]
+        n55["Only One<br>Remaining<br>Read?"]
+        n56["Accept Collected<br>Gapfill Sequence"]
+        n57["Select the<br>Most Frequent<br>Nucleotide Per<br>Position"]
+        n58["Accept the<br>Corrected<br>Gapfill Sequence"]
+        n59["Compute Estimated<br>Number of Reads<br>Supporting the<br>Corrected Gapfill"]
+  end
+ subgraph s7["giftwrap-collect"]
+        s8["s8"]
+        n60["Group Reads by<br>Probe BC"]
+  end
+ subgraph s8["<div style="width:19em; height:-2em; display:flex; justify-content: flex-start; align-items:flex-end;"><strong>For each Probe BC</strong></div>"]
+        n61["Collect All<br>Possible Observed<br>Probe/Gapfill Sequence<br>Combinations"]
+        n62["Collect All UMIs<br>Supporting Each<br>Cell BC/Probe/Gapfill<br>Combination"]
+        n63["Write to<br>GIFTwrap .h5<br>Counts File"]
+        n64["Output .h5 File"]
+  end
+ subgraph s9["giftwrap-summarize"]
+        n65["Compute Summary<br>Statistics"]
+        n66["Was Cellranger<br>WTA Data<br>Provided?"]
+        n67["Filter final .h5<br>File to Contain<br>Only Cell Barcodes<br>Observed in the<br>WTA Dataset"]
+        n68["Exit"]
+        n69["Compute Summary<br>Statistics to<br>Evaluate Genotyping<br>Efficicency"]
+  end
+    n2 --> n3
+    n3 -- Yes --> n4
+    n3 -- No --> n5
+    n4 --> n6
+    n5 --> n6
+    n6 -- Yes --> n7
+    n6 -- No --> n8
+    n7 --> n9
+    n9 -- Yes --> n10
+    n9 -- No --> n11
+    n8 --> n9
+    n10 --> n12
+    n12 -- No --> n13
+    n12 -- Yes --> n14
+    n14 -- Yes --> n15
+    n15 --> n16
+    n16 -- No --> n17
+    n16 -- yes --> n18
+    n14 -- No --> n18
+    n18 --> n19
+    n19 -- Yes --> n20
+    n19 -- No --> n21
+    n20 --> n22
+    n22 --> n23
+    n23 --> n24
+    n24 -- Yes --> n25
+    n24 -- No --> n26
+    n25 --> n28
+    n27 --> n29
+    n29 --> n35
+    n31 --> n30 & n40
+    n30 -- No UMIs<br>Observed Yet --> n32
+    n30 -- UMI Has Not Been<br>Observed for<br>the Given Probe --> n33
+    n30 -- Exact Match to<br>Observed UMI --> n32
+    n35 --> n30
+    n32 -- Save UMI --> n31
+    n33 --> n36
+    n36 --> n37
+    n37 -- Yes --> n38
+    n38 -- Save UMI --> n31
+    n37 -- No --> n39
+    n39 -- Save UMI --> n31
+    n40 -- Yes --> n41
+    n40 -- No --> n42
+    n42 --> n43
+    n43 -- No --> n44
+    n43 -- Yes --> n45
+    n44 --> n46
+    n47 --> n48
+    n48 -- Yes --> n51
+    n48 -- No --> n50
+    n51 -- Yes --> n52
+    n51 -- No --> n53
+    n53 --> n54
+    n54 --> n55
+    n55 -- Yes --> n56
+    n55 -- No --> n52
+    n52 --> n57
+    n57 --> n58
+    n58 --> n59
+    n56 --> n59
+    n50 --> n59
+    n60 --> n61
+    n61 --> n62
+    n62 --> n63
+    n63 --> n64
+    n65 --> n66
+    n66 -- Yes --> n67
+    n66 -- No --> n68
+    n67 --> n69
+    s1 ==> s3
+    s3 ==> s5
+    s5 ==> s7
+    s7 ==> s9
+    n2@{ shape: docs, pos: "t"}
+    n3@{ shape: diam}
+    n4@{ shape: rect}
+    n5@{ shape: rect}
+    n6@{ shape: diam}
+    n9@{ shape: diam}
+    n12@{ shape: diam}
+    n14@{ shape: diam}
+    n16@{ shape: diam}
+    n19@{ shape: diam}
+    n24@{ shape: diam}
+    n31@{ shape: cyl}
+    n37@{ shape: diam}
+    n43@{ shape: diam}
+    n48@{ shape: diam}
+    n51@{ shape: diam}
+    n55@{ shape: diam}
+    n64@{ shape: doc, pos: "b"}
+    n66@{ shape: diam}
+    style s2 fill:#00C853
+    style s4 fill:#FFD600
+    style s6 fill:#2962FF
+    style s8 fill:#D50000
+    style s1 fill:#C8E6C9
+    style s3 fill:#FFF9C4
+    style s5 fill:#BBDEFB
+    style s7 fill:#FFCDD2
+    style s9 fill:#E1BEE7
+    style n2 fill:#f0f0f0
+    style n3 fill:#f0f0f0
+    style n4 fill:#f0f0f0
+    style n5 fill:#f0f0f0
+    style n6 fill:#f0f0f0
+    style n7 fill:#f0f0f0
+    style n8 fill:#f0f0f0
+    style n9 fill:#f0f0f0
+    style n10 fill:#f0f0f0
+    style n11 fill:#f0f0f0
+    style n12 fill:#f0f0f0
+    style n13 fill:#f0f0f0
+    style n14 fill:#f0f0f0
+    style n15 fill:#f0f0f0
+    style n16 fill:#f0f0f0
+    style n17 fill:#f0f0f0
+    style n18 fill:#f0f0f0
+    style n19 fill:#f0f0f0
+    style n20 fill:#f0f0f0
+    style n21 fill:#f0f0f0
+    style n22 fill:#f0f0f0
+    style n23 fill:#f0f0f0
+    style n24 fill:#f0f0f0
+    style n25 fill:#f0f0f0
+    style n26 fill:#f0f0f0
+    style n27 fill:#f0f0f0
+    style n28 fill:#f0f0f0
+    style n29 fill:#f0f0f0
+    style n30 fill:#f0f0f0
+    style n31 fill:#f0f0f0
+    style n32 fill:#f0f0f0
+    style n33 fill:#f0f0f0
+    style n35 fill:#f0f0f0
+    style n36 fill:#f0f0f0
+    style n37 fill:#f0f0f0
+    style n38 fill:#f0f0f0
+    style n39 fill:#f0f0f0
+    style n40 fill:#f0f0f0
+    style n41 fill:#f0f0f0
+    style n42 fill:#f0f0f0
+    style n43 fill:#f0f0f0
+    style n44 fill:#f0f0f0
+    style n45 fill:#f0f0f0
+    style n46 fill:#f0f0f0
+    style n47 fill:#f0f0f0
+    style n48 fill:#f0f0f0
+    style n50 fill:#f0f0f0
+    style n51 fill:#f0f0f0
+    style n52 fill:#f0f0f0
+    style n53 fill:#f0f0f0
+    style n54 fill:#f0f0f0
+    style n55 fill:#f0f0f0
+    style n56 fill:#f0f0f0
+    style n57 fill:#f0f0f0
+    style n58 fill:#f0f0f0
+    style n59 fill:#f0f0f0
+    style n60 fill:#f0f0f0
+    style n61 fill:#f0f0f0
+    style n62 fill:#f0f0f0
+    style n63 fill:#f0f0f0
+    style n64 fill:#f0f0f0
+    style n65 fill:#f0f0f0
+    style n66 fill:#f0f0f0
+    style n67 fill:#f0f0f0
+    style n68 fill:#f0f0f0
+    style n69 fill:#f0f0f0
+```
