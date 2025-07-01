@@ -214,6 +214,9 @@ The `giftwrap` command provides a powerful and flexible way to process GIFT-seq 
 
 
 ## GIFTwrap Workflow
+Below is a high-level overview of the entire GIFTwrap workflow, which is automatically executed via the `giftwrap` command.
+This diagram illustrates the main steps involved in processing GIFT-seq data, from reading the FastQ files to generating the final counts matrix.
+
 ```mermaid
 ---
 config:
@@ -225,7 +228,7 @@ config:
 flowchart LR
  subgraph s1["giftwrap-count"]
     direction TB
-        n2["GIFT-seq FastQs"]
+        n2["GIFT-seq FASTQs"]
         n3["WTA<br>Provided?"]
         n4@{ label: "<span style=\"padding-left:\">Use Called Cells<br>For Cell Barcode<br>Whitelist<span style=\"padding-left:\">t</span></span>" }
         n5@{ label: "<span style=\"padding-left:\">Use Default<br>Cell Barcode<br>Whitelist</span>" }

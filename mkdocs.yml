@@ -3,8 +3,8 @@ site_url: https://clareaulab.github.io/giftwrap
 repo_url: https://github.com/clareaulab/giftwrap
 theme:
   name: material
-  palette:
-    scheme: slate
+#  palette:
+#    scheme: slate
   font:
     text: Roboto
   language: en
@@ -60,7 +60,7 @@ plugins:
   - mkdocs-jupyter:
       execute: true
       no_input: true
-      theme: dark
+#      theme: dark
       remove_tag_config:
         remove_input_tags:
           - hide_code
