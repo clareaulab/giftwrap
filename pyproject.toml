@@ -47,7 +47,7 @@ Issues = "https://github.com/lareauc/giftwrap/issues"
 # Need protobuf for VisiumHD cell barcode parsing
 spatial = [
     "protobuf>=5.28.0",
-    "spatialdata>=0.4.0",
+    "spatialdata>=0.5.0",
     "squidpy>=1.6.5"
 ]
 analysis = [
@@ -60,7 +60,7 @@ analysis = [
 ]
 all = [
     "protobuf>=5.28.0",
-    "spatialdata>=0.4.0",
+    "spatialdata>=0.5.0",
     "squidpy>=1.6.5",
     "scanpy>=1.11",
     "igraph>=0.10",

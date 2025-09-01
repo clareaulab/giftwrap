@@ -6,10 +6,13 @@ Note: This module requires that the 'spatial' extra was installed with GIFTwrap.
 
 from __future__ import annotations
 
+import functools
+
 import anndata as ad
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
 import scipy
 
 import giftwrap.analysis.tools as tl
@@ -162,7 +165,7 @@ def join_with_wta(wta: 'sd.SpatialData', gf_adata: ad.AnnData) -> 'sd.SpatialDat
 
     return wta
 
-
+@functools.singledispatch
 def plot_genotypes(sdata: 'sd.SpatialData',
                    probe: str,
                    dataset_id: str = "",
@@ -191,6 +194,94 @@ def plot_genotypes(sdata: 'sd.SpatialData',
     ax.set_ylabel("Spatial 2")
 
     return ax
+
+
+@plot_genotypes.register
+def _(adata: ad.AnnData,
+      probe: str,
+      dataset_id: str = "",
+      image_name: str = "hires_image",
+      resolution: int = 2) -> 'plt.Axes':
+    """
+    Backup function for plotting genotypes from an AnnData object. The preferred method is to use the SpatialData object.
+    :param adata: The AnnData object containing the spatial data.
+    :param probe: The probe to plot.
+    :param dataset_id: The dataset ID to use for plotting. Ignored.
+    :param image_name: The name of the image to plot. Ignored.
+    :param resolution: The resolution of the data (2, 8, or 16 microns).
+    :return: The matplotlib Axes object.
+    """
+    assert_spatial(adata)
+    # Prepare colors
+    cmap = plt.get_cmap('tab10')
+    genotypes = adata.obsm['genotype'][probe]
+    genotype_value_counts = genotypes.value_counts(dropna=True)
+    unique_genos = genotypes.dropna().unique().tolist()
+    unique_genos = ['NA'] + list(sorted(unique_genos, key=lambda x: -genotype_value_counts.get(x, 0)))
+    category_colors = {geno: cmap(i) for i, geno in enumerate(unique_genos)}
+    category_colors['NA'] = (*category_colors['NA'][:3], 0.3)
+
+    # Compute the image
+    size = max(adata.obs['array_row'].max(), adata.obs['array_col'].max()) + 1
+    image = np.zeros((size, size, 4), dtype=np.float32)
+    array_rows = adata.obs['array_row'].values.astype(int)
+    array_cols = adata.obs['array_col'].values.astype(int)
+    genotypes_array = genotypes.values
+
+    # Replace NaN with 'NA'
+    genotypes_array = np.where(pd.isna(genotypes_array), 'NA', genotypes_array)
+    image[array_cols, array_rows] = [category_colors[geno] for geno in genotypes_array]
+
+    # Downsample the image if needed
+    if resolution != 2:
+        image = _downsample_image(image, factor=resolution // 2)
+
+    fig, ax = plt.subplots(figsize=(10, 10))
+    ax.imshow(image)
+    ax.set_title(probe)
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    legend_handles = [Patch(color=category_colors[geno], label=geno) for geno in unique_genos]
+    # Add legend
+    ax.legend(handles=legend_handles, title="Genotype", bbox_to_anchor=(1.05, 1), loc='upper left')
+    ax.axis('off')
+
+    return ax
+
+
+def _downsample_image(image, factor=2):
+    # Get the dimensions of the original image
+    N = image.shape[0]
+    assert image.shape[1] == N, "Image must be NxN"
+    assert image.shape[2] == 4, "Image must have 4 channels"
+
+    # Create an empty downsampled image of size N/2 x N/2 x 4
+    downsampled_image = np.zeros((N // factor, N // factor, 4), dtype=image.dtype)
+
+    # Loop through each pixel in the downsampled image
+    for i in range(N // factor):
+        for j in range(N // factor):
+            # Calculate the corresponding position in the original image
+            original_i = i * factor
+            original_j = j * factor
+
+            # Get the 2x2 block of pixels in the original image
+            block = image[original_i:original_i+factor, original_j:original_j+factor]
+
+            # Filter out white pixels
+            block = block[~np.all(block == [0.0, 0.0, 0.0, 0.0], axis=-1)]
+            block = block[(block[:, 3] > 0.5) | (np.all(block[:,3] <= 0.5, axis=0))]
+
+            # If there are non-white pixels, take the average
+            if block.size > 0:
+                mean_img = np.mean(block, axis=0)
+                # mean_img[-1] = 1.0
+                downsampled_image[i, j] = mean_img
+            else:
+                downsampled_image[i, j] = [0.0, 0.0, 0.0, 0.0]  # Default to white if no color pixels
+
+    return downsampled_image
 
 
 def impute_genotypes(sdata: 'sd.SpatialData',
