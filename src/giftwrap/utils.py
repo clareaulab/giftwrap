@@ -1,3 +1,4 @@
+import tempfile
 import warnings, os
 warnings.filterwarnings("ignore", category=FutureWarning)
 os.environ.setdefault("PYTHONWARNINGS", "ignore::FutureWarning")  # inherit to subprocesses
@@ -13,7 +14,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 import itertools
 import contextlib
-from typing import Literal, Optional, Union
+from typing import Literal, Optional, Union, Iterable
 import multiprocessing
 
 import math
@@ -24,293 +25,324 @@ import anndata as ad
 import scipy
 import diskcache as dc
 from Bio.SeqIO.QualityIO import FastqGeneralIterator
+from prefixtrie import PrefixTrie, load_shared_trie, create_shared_trie
 
 
-class PrefixTree:
-    """
-    Dynamically expanding tree (up to N mismatches) of strings based on prefixes.
-    Note that indels are not considered since it would be extremely slow to search.
-    This is based on the trie data structure.
-    Note that this supports memory sharing.
-    """
-
-    __slots__ = ['_root', '_size', 'allow_indels', '_cache', '_prefix_only_search']
-
-    def __init__(self,
-                 contents: list[str],
-                 allow_indels: bool = False,
-                 prefix_only_search: bool = True):
-        """
-        Initialize the tree with a list of contents.
-        :param contents: The list of contents.
-        :param allow_indels: Whether to allow insertions/deletions in the search.
-            Equivalent to edit distance when true, equivalent to hamming distance when false.
-        :param prefix_only_search: If true, the tree will only allow for insertions at the start of the string. And will attempt to only match the longest prefix in the query.
-        """
-        self.allow_indels = allow_indels
-        self._root = dict()
-        self._size = 0
-        self._prefix_only_search = prefix_only_search
-
-        # initialize cache for lookups
-        self._cache = dc.Cache()
-
-        for content in contents:
-            self.add(content)
-
-    @property
-    def root(self) -> dict:
-        return self._root
-
-    def add(self, content: str):
-        """
-        Add a content to the tree.
-        """
-        node = self.root
-        for char in content:
-            if char not in node:
-                node[char] = dict()
-            node = node[char]
-        if '$' not in node:  # This end node did not exist yet
-            node['$'] = content  # Store the full content at the end as a short cut
-            self._size += 1
-
-    # Recursive function to find the best match as fast as possible
-    # Note that we do not allow for insertions and deletions, only substitutions
-    def _search(self,
-                full_content: str,
-                curr_node: dict,
-                content_index: int,
-                max_mismatches: int,
-                curr_mismatches: int,
-                visited: dict,
-                curr_depth: int = 0,
-                start_index: int = 0) -> Optional[tuple[str, int, int]]:
-        if id(curr_node) in visited:  # Already visited this node
-            if curr_mismatches >= visited[id(curr_node)]:  # Skip if we have already visited this node with a better score than is possible
-                return None
-        # Check for end cases
-        if curr_mismatches > max_mismatches:
-            visited[id(curr_node)] = max_mismatches+1
-            return None
-        if content_index > len(full_content):
-            visited[id(curr_node)] = max_mismatches+1  # Mark this node as visited
-            return None
-        remaining_mismatches = max_mismatches - curr_mismatches
-
-        best_score = None
-        best = None
-
-        if content_index == len(full_content):  # We reached the end of the content, is there an end of word here?
-            if '$' in curr_node:  # This will always be the best match
-                # Add to visited
-                self._insert_if_better(visited, id(curr_node), curr_mismatches)
-                return curr_node['$'], curr_mismatches, start_index
-            elif not (self.allow_indels and remaining_mismatches <= 0):  # Stop early if we can't insert/delete
-                visited[id(curr_node)] = max_mismatches+1  # Mark this node as visited
-                return None  # We have reached the end of the content and have no more mismatches to spare
-
-        # See if a match exists or perform mismatches if this is not the end of the content
-        if content_index < len(full_content):
-            if full_content[content_index] in curr_node:
-                # Continue the search
-                res = self._search(full_content, curr_node[full_content[content_index]], content_index + 1, max_mismatches, curr_mismatches, visited, curr_depth + 1, start_index)
-                if res is not None:
-                    if best_score is None or res[1] < best_score:
-                        best = res
-                        best_score = res[1]
-                    self._insert_if_better(visited, id(curr_node), res[1])
-                    return best
-
-            # No match, try mismatches
-            for char in curr_node:
-                if char == full_content[content_index]:  # Ignore already scanned characters
-                    continue
-                elif char == '$':  # End of word, but not end of the query. Continue to see if there are other matches
-                    continue
-                # Continue the search, but with a mismatch
-                res = self._search(full_content, curr_node[char], content_index + 1, max_mismatches, curr_mismatches + 1, visited, curr_depth + 1, start_index)
-                if res is not None:
-                    if best is None or res[1] < best_score:
-                        best = res
-                        best_score = res[1]
-                        # Break early if we have a perfect match with this substitution
-                        if best_score == curr_mismatches+1:
-                            break
-
-        if best_score is None or best_score > max_mismatches or (self.allow_indels and (best_score - curr_mismatches) > 1):
-            # No match found, or invalid match found, or the match that was found had more than one mismatch.
-            # Meaning we can theoretically improve the score with indels
-            if not self.allow_indels:
-                visited[id(curr_node)] = max_mismatches+1
-                return None  # No need to continue if we don't allow indels
-
-            # If we are prefix-matching, the query string may be too long
-            if self.allow_indels and self._prefix_only_search:
-                if '$' in curr_node and curr_mismatches <= max_mismatches:
-                    # By this point, we should have already found a match if it existed
-                    self._insert_if_better(visited, id(curr_node), curr_mismatches)
-                    return curr_node['$'], curr_mismatches, start_index
-                elif curr_depth == 0:  # This is the top-level door, try removing the current position without penalty, but reduce the number of further mismatches
-                    res = self._search(full_content[1:], curr_node, content_index, max_mismatches-1, curr_mismatches, visited, curr_depth, start_index + 1)
-                    if res is not None:
-                        if best is None or res[1] < best_score:
-                            best = res
-                            best_score = res[1]
-                        # Break early if we have a perfect match with this deletion
-                        if best_score == curr_mismatches:
-                            self._insert_if_better(visited, id(curr_node), best_score)
-                            return best
-            else:
-                # First test deleting this position (i.e. the string has an insertion)
-                res = self._search(full_content, curr_node, content_index + 1, max_mismatches, curr_mismatches + 1, visited, curr_depth + 1, start_index)  # Not updating start index since we are considering this an error
-                if res is not None:
-                    if best is None or res[1] < best_score:
-                        best = res
-                        best_score = res[1]
-                    # Break early if we have a perfect match with this deletion
-                    if best_score == curr_mismatches+1:
-                        self._insert_if_better(visited, id(curr_node), best_score)
-                        return best
-
-                # Now test inserting a character
-                for char in curr_node:
-                    if char == '$':
-                        continue
-                    res = self._search(full_content, curr_node[char], content_index, max_mismatches, curr_mismatches + 1, visited, curr_depth + 1, start_index)
-                    if res is not None:
-                        if best is None or res[1] < best_score:
-                            best = res
-                            best_score = res[1]
-                        # Break early if we have a perfect match with this insertion
-                        if best_score == curr_mismatches+1:
-                            self._insert_if_better(visited, id(curr_node), best_score)
-                            return best
-
-        self._insert_if_better(visited, id(curr_node), best_score)
-
-        return best
-
-    def search(self, content: str, max_mismatches: int) -> Optional[tuple[str, int, int]]:
-        """
-        Search the tree for a content with a maximum number of mismatches.
-
-        Returns None if no content is found with the given number of mismatches.
-        Else returns a tuple of: Corrected Content, Number of Mismatches, Start Index within the Given String the match begins on
-        """
-        cached = self._cache.get((content, max_mismatches), default=-1)
-        if cached != -1:
-            return cached
-
-        res = self._search(content, self.root, 0, max_mismatches, 0, dict())
-
-        self._cache[(content, max_mismatches)] = res
-
-        if res is not None and res[1] <= max_mismatches:
-            return res
-        return None
-
-    def _insert_if_better(self, dictionary, key, value):
-        if value is None:
-            return False
-
-        if key not in dictionary:
-            dictionary[key] = value
-            return True
-        elif value < dictionary[key]:
-            dictionary[key] = value
-            return True
-        return False
-
-    def __contains__(self, content: str) -> bool:
-        """
-        Check if exact content is in the tree.
-        """
-        node = self.root
-        for char in content:
-            if char not in node:
-                return False
-            node = node[char]
-        return '$' in node
-
-    def values(self) -> list[str]:
-        """
-        Return all values in the tree.
-        """
-        vals = []
-        self._values(self.root, vals)
-        return vals
-
-    def _values(self, node: dict, vals: list[str]):
-        """
-        Recursively extract all values from the tree.
-        """
-        if '$' in node:
-            vals.append(node['$'])
-        for char in node:
-            if char == '$':
-                continue
-            self._values(node[char], vals)
-
-    def size(self) -> int:
-        return self._size
-
-    def __len__(self):
-        return self.size()
-
-
-class SequentialPrefixTree(PrefixTree):
-    """
-    A prefix tree that can be searched sequentially. I.e. for matching pairs of barcodes.
-    """
-
-    def __init__(self, trees: list[PrefixTree]):
-        """
-        Initialize a prefix tree which sequentially matches strings.
-        :param trees: The trees to use.
-        """
-        assert len(trees) > 1, "Must have at least two trees."
-        assert all([tree._prefix_only_search for tree in trees]), "All trees must be prefix only search."
-        self._trees = trees
-        super().__init__([], allow_indels=trees[0].allow_indels, prefix_only_search=trees[0]._prefix_only_search)
-        self._size = math.prod(map(len, trees))
-
-    def values(self) -> list[str]:
-        """
-        Return all values in the tree.
-        """
-        return list(itertools.product(*[tree.values() for tree in self._trees]))
-
-    def search(self, content: str, max_mismatches: int) -> Optional[tuple[str, int, int]]:
-        curr_content = content
-        corrected_content = ""
-        remaining_mismatches = max_mismatches
-        first_start = None
-        for tree in self._trees:
-            if len(curr_content) == 0 or remaining_mismatches < 0:
-                return None
-            res = tree.search(curr_content, remaining_mismatches)
-            if res is None:
-                return None
-            corrected_content += res[0]
-            remaining_mismatches -= res[1]
-            curr_content = curr_content[res[2] + len(res[0]):]
-            if first_start is None:
-                first_start = res[2]
-
-        return corrected_content, max_mismatches - remaining_mismatches, first_start
-
-    # These functions don't make sense here:
-
-    @property
-    def root(self):
-        raise NotImplementedError()
-
-    def add(self, content: str):
-        raise NotImplementedError()
-
-    def __contains__(self, content: str) -> bool:
-        raise NotImplementedError()  # TODO
+# class PrefixTree:
+#     """
+#     Dynamically expanding tree (up to N mismatches) of strings based on prefixes.
+#     Note that by default indels are not considered since it would be extremely slow to search.
+#     This is based on the trie data structure.
+#     Note that this supports memory sharing.
+#     """
+#
+#     __slots__ = ['_root', '_size', 'allow_indels', '_cache', '_prefix_only_search', '_next_id']
+#
+#     def __init__(self,
+#                  contents: Iterable[str],
+#                  allow_indels: bool = False,
+#                  prefix_only_search: bool = True):
+#         """
+#         Initialize the tree with a list of contents.
+#         :param contents: The list of contents.
+#         :param allow_indels: Whether to allow insertions/deletions in the search.
+#             Equivalent to edit distance when true, equivalent to hamming distance when false.
+#         :param prefix_only_search: If true, the tree will only allow for insertions at the start of the string. And will attempt to only match the longest prefix in the query.
+#         """
+#         self.allow_indels = allow_indels
+#         self._root = {
+#             '#': 0  # Root node ID, used for caching
+#         }
+#         self._size = 0
+#         self._next_id = 1
+#         self._prefix_only_search = prefix_only_search
+#
+#         # # initialize cache for lookups
+#         # os.makedirs("giftwrap_cache", exist_ok=True)
+#         # _cache_dir = tempfile.mkdtemp(
+#         #     dir="giftwrap_cache",
+#         #     prefix="prefix_tree_cache_"
+#         # )
+#         # self._cache = dc.Cache(
+#         #     directory=_cache_dir,
+#         # )
+#         # self._cache_cache = dict()  # Cache for the cache, to avoid I/O overhead
+#         self._cache = dict()
+#
+#         for content in contents:
+#             self.add(content)
+#
+#     @property
+#     def root(self) -> dict:
+#         return self._root
+#
+#     def add(self, content: str):
+#         """
+#         Add a content to the tree.
+#         """
+#         node = self.root
+#         for char in content:
+#             if char not in node:
+#                 node[char] = {'#': self._next_id}  # Use a unique ID for each node
+#                 self._next_id += 1
+#             node = node[char]
+#         if '$' not in node:  # This end node did not exist yet
+#             node['$'] = content  # Store the full content at the end as a short cut
+#             self._size += 1
+#
+#     # Recursive function to find the best match as fast as possible
+#     # Note that we do not allow for insertions and deletions, only substitutions
+#     # To match spaceranger behavior, we will have to check for errors from first bases down
+#     def _search(self,
+#                 full_content: str,
+#                 curr_node: dict,
+#                 content_index: int,
+#                 max_mismatches: int,
+#                 curr_mismatches: int,
+#                 visited: dict,
+#                 curr_depth: int = 0,
+#                 start_index: int = 0,
+#                 flen: Optional[int] = None) -> Optional[tuple[str, int, int]]:
+#         if flen is None:
+#             flen = len(full_content)
+#         node_id = curr_node['#']
+#         if node_id in visited:  # Already visited this node
+#             if curr_mismatches >= visited[node_id]:  # Skip if we have already visited this node with a better score than is possible
+#                 return None
+#         # Check for end cases
+#         if curr_mismatches > max_mismatches:
+#             # visited[node_id] = max_mismatches+1
+#             return None
+#         if content_index > flen:
+#             # visited[node_id] = max_mismatches+1  # Mark this node as visited
+#             return None
+#         remaining_mismatches = max_mismatches - curr_mismatches
+#
+#         best_score = None
+#         best = None
+#
+#         if content_index == flen:  # We reached the end of the content, is there an end of word here?
+#             if '$' in curr_node:  # This will always be the best match
+#                 # Add to visited
+#                 self._insert_if_better(visited, node_id, curr_mismatches)
+#                 return curr_node['$'], curr_mismatches, start_index
+#             elif not (self.allow_indels and remaining_mismatches <= 0):  # Stop early if we can't insert/delete
+#                 visited[node_id] = max_mismatches+1  # Mark this node as visited
+#                 return None  # We have reached the end of the content and have no more mismatches to spare
+#
+#         # See if a match exists or perform mismatches if this is not the end of the content
+#         if content_index < flen:
+#             # First test with no corrections allowed
+#             if full_content[content_index] in curr_node:
+#                 # Continue the search
+#                 res = self._search(full_content,
+#                                    curr_node[full_content[content_index]],
+#                                    content_index + 1,
+#                                    curr_mismatches,  # Don't allow further mismatches
+#                                    curr_mismatches,
+#                                    visited,
+#                                    curr_depth + 1,
+#                                    start_index,
+#                                    flen)
+#                 if res is not None:
+#                     if best_score is None or res[1] < best_score:
+#                         best = res
+#                         best_score = res[1]
+#                     self._insert_if_better(visited, node_id, res[1])
+#                     return best
+#
+#             # No match, try mismatches
+#             for char in curr_node:
+#                 if char == '$':  # End of word, but not end of the query. Continue to see if there are other matches
+#                     continue
+#                 elif char == '#':  # This is the node ID, skip it
+#                     continue
+#                 # Continue the search, but with a mismatch
+#                 res = self._search(full_content, curr_node[char], content_index + 1, max_mismatches, curr_mismatches + (char != full_content[content_index]), visited, curr_depth + 1, start_index, flen)
+#                 if res is not None:
+#                     if best is None or res[1] < best_score:
+#                         best = res
+#                         best_score = res[1]
+#                         # Break early if we have a perfect match with this substitution
+#                         if best_score == curr_mismatches+1:
+#                             break
+#
+#         if best_score is None or best_score > max_mismatches or (self.allow_indels and (best_score - curr_mismatches) > 1):
+#             # No match found, or invalid match found, or the match that was found had more than one mismatch.
+#             # Meaning we can theoretically improve the score with indels
+#             if not self.allow_indels:
+#                 visited[node_id] = max_mismatches+1
+#                 return None  # No need to continue if we don't allow indels
+#
+#             # If we are prefix-matching, the query string may be too long
+#             if self.allow_indels and self._prefix_only_search:
+#                 if '$' in curr_node and curr_mismatches <= max_mismatches:
+#                     # By this point, we should have already found a match if it existed
+#                     self._insert_if_better(visited, node_id, curr_mismatches)
+#                     return curr_node['$'], curr_mismatches, start_index
+#                 elif curr_depth == 0:  # This is the top-level, try removing the current position without penalty, but reduce the number of further mismatches
+#                     res = self._search(full_content[1:], curr_node, content_index, max_mismatches-1, curr_mismatches, visited, curr_depth, start_index + 1, flen-1)
+#                     if res is not None:
+#                         if best is None or res[1] < best_score:
+#                             best = res
+#                             best_score = res[1]
+#                         # Break early if we have a perfect match with this deletion
+#                         if best_score == curr_mismatches:
+#                             self._insert_if_better(visited, node_id, best_score)
+#                             return best
+#             else:
+#                 # First test deleting this position (i.e. the string has an insertion)
+#                 res = self._search(full_content, curr_node, content_index + 1, max_mismatches, curr_mismatches + 1, visited, curr_depth + 1, start_index, flen)  # Not updating start index since we are considering this an error
+#                 if res is not None:
+#                     if best is None or res[1] < best_score:
+#                         best = res
+#                         best_score = res[1]
+#                     # Break early if we have a perfect match with this deletion
+#                     if best_score == curr_mismatches+1:
+#                         self._insert_if_better(visited, node_id, best_score)
+#                         return best
+#
+#                 # Now test inserting a character
+#                 for char in curr_node:
+#                     if char == '$':
+#                         continue
+#                     elif char == '#':
+#                         continue
+#                     res = self._search(full_content, curr_node[char], content_index, max_mismatches, curr_mismatches + 1, visited, curr_depth + 1, start_index, flen)
+#                     if res is not None:
+#                         if best is None or res[1] < best_score:
+#                             best = res
+#                             best_score = res[1]
+#                         # Break early if we have a perfect match with this insertion
+#                         if best_score == curr_mismatches+1:
+#                             self._insert_if_better(visited, node_id, best_score)
+#                             return best
+#
+#         self._insert_if_better(visited, node_id, best_score)
+#
+#         return best
+#
+#     def search(self, content: str, max_mismatches: int) -> Optional[tuple[str, int, int]]:
+#         """
+#         Search the tree for a content with a maximum number of mismatches.
+#
+#         Returns None if no content is found with the given number of mismatches.
+#         Else returns a tuple of: Corrected Content, Number of Mismatches, Start Index within the Given String the match begins on
+#         """
+#         cached = self._cache.get((content, max_mismatches), -1)
+#         if cached != -1:
+#             return cached
+#
+#         res = self._search(content, self.root, 0, max_mismatches, 0, dict())
+#
+#         self._cache[(content, max_mismatches)] = res
+#
+#         if res is not None and res[1] <= max_mismatches:
+#             return res
+#         return None
+#
+#     @staticmethod
+#     def _insert_if_better(dictionary, key, value):
+#         if value is None:
+#             return False
+#
+#         if key not in dictionary:
+#             dictionary[key] = value
+#             return True
+#         elif value < dictionary[key]:
+#             dictionary[key] = value
+#             return True
+#         return False
+#
+#     def __contains__(self, content: str) -> bool:
+#         """
+#         Check if exact content is in the tree.
+#         """
+#         node = self.root
+#         for char in content:
+#             if char not in node:
+#                 return False
+#             node = node[char]
+#         return '$' in node
+#
+#     def values(self) -> list[str]:
+#         """
+#         Return all values in the tree.
+#         """
+#         vals = []
+#         self._values(self.root, vals)
+#         return vals
+#
+#     def _values(self, node: dict, vals: list[str]):
+#         """
+#         Recursively extract all values from the tree.
+#         """
+#         if '$' in node:
+#             vals.append(node['$'])
+#         for char in node:
+#             if char == '$':
+#                 continue
+#             self._values(node[char], vals)
+#
+#     def size(self) -> int:
+#         return self._size
+#
+#     def __len__(self):
+#         return self.size()
+#
+#
+# class SequentialPrefixTree(PrefixTree):
+#     """
+#     A prefix tree that can be searched sequentially. I.e. for matching pairs of barcodes.
+#     """
+#
+#     def __init__(self, trees: list[PrefixTree]):
+#         """
+#         Initialize a prefix tree which sequentially matches strings.
+#         :param trees: The trees to use.
+#         """
+#         assert len(trees) > 1, "Must have at least two trees."
+#         assert all([tree._prefix_only_search for tree in trees]), "All trees must be prefix only search."
+#         self._trees = trees
+#         super().__init__([], allow_indels=trees[0].allow_indels, prefix_only_search=trees[0]._prefix_only_search)
+#         self._size = math.prod(map(len, trees))
+#
+#     def values(self) -> list[str]:
+#         """
+#         Return all values in the tree.
+#         """
+#         return list(itertools.product(*[tree.values() for tree in self._trees]))
+#
+#     def search(self, content: str, max_mismatches: int) -> Optional[tuple[str, int, int]]:
+#         curr_content = content
+#         corrected_content = ""
+#         remaining_mismatches = max_mismatches
+#         first_start = None
+#         for tree in self._trees:
+#             if len(curr_content) == 0 or remaining_mismatches < 0:
+#                 return None
+#             res = tree.search(curr_content, remaining_mismatches)
+#             if res is None:
+#                 return None
+#             corrected_content += res[0]
+#             remaining_mismatches -= res[1]
+#             curr_content = curr_content[res[2] + len(res[0]):]
+#             if first_start is None:
+#                 first_start = res[2]
+#
+#         return corrected_content, max_mismatches - remaining_mismatches, first_start
+#
+#     # These functions don't make sense here:
+#
+#     @property
+#     def root(self):
+#         raise NotImplementedError()
+#
+#     def add(self, content: str):
+#         raise NotImplementedError()
+#
+#     def __contains__(self, content: str) -> bool:
+#         raise NotImplementedError()  # TODO
 
 
 #Based on: https://docs.python.org/3/library/itertools.html#itertools.batched
@@ -390,7 +422,10 @@ class TechnologyFormatInfo(ABC):
     Generic class to hold metadata related to parsing Read1 and Read2.
     """
 
-    def __init__(self, barcode_dir: Optional[str] = None, read1_length: Optional[int] = None, read2_length: Optional[int] = None):
+    def __init__(self,
+                 barcode_dir: Optional[str] = None,
+                 read1_length: Optional[int] = None,
+                 read2_length: Optional[int] = None):
         self._read1_length = read1_length
         self._read2_length = read2_length
 
@@ -563,27 +598,24 @@ class TechnologyFormatInfo(ABC):
 
     @property
     @functools.lru_cache(maxsize=1)
-    def barcode_tree(self) -> PrefixTree:
+    def barcode_tree(self) -> PrefixTrie:
         """
         Return a prefix tree (trie) of the cell barcodes for fast mismatch searches.
         :return: The tree.
         """
-        return PrefixTree(self.cell_barcodes)
+        return PrefixTrie(self.cell_barcodes)
 
     @functools.lru_cache(1024)
-    def correct_barcode(self, read: str, max_mismatches: int, start_idx: int, end_idx: int) -> tuple[Optional[str], bool]:
+    def correct_barcode(self, read: str, max_mismatches: int, start_idx: int, end_idx: int) -> tuple[Optional[str], int]:
         """
         Given a probable barcode string, attempt to correct the sequence.
         :param read: The barcode-containing sequence.
         :param max_mismatches: The maximum number of mismatches to allow.
         :param start_idx: The start index of the barcode in the read.
         :param end_idx: The end index of the barcode in the read.
-        :return: The corrected barcode, or None if no match was found.
+        :return: The corrected barcode, or None if no match was found and the number of corrections required.
         """
-        res = self.barcode_tree.search(read[start_idx:end_idx], max_mismatches)
-        if res is not None:
-            return res[0], res[1] > 0
-        return None, False
+        return self.barcode_tree.search(read[start_idx:end_idx], max_mismatches)
 
 
 _tx_barcode_oligos = {s: (i+1) for i, s in enumerate([
@@ -667,12 +699,35 @@ class FlexFormatInfo(TechnologyFormatInfo):
         # Strip the -Number from the barcode
         barcodes = barcodes.str.split("-").str[0]
         # Collect the universe of barcodes
-        self._barcodes = PrefixTree(list(barcodes.unique()))
-
+        # self._barcodes = PrefixTrie(list(barcodes.unique()))
+        # Shared memory prefix trie
+        self._barcodes, self._trie_name = create_shared_trie(list(barcodes.unique()))
         self._probe_barcodes = _tx_barcode_oligos
 
         self._index_to_probe_barcodes = _tx_barcode_to_oligo
 
+    # Custom pickling for multiprocessing
+    def __getstate__(self):
+        state = dict()
+        # Remove the barcode tree from the state
+        state['_trie_name'] = self._trie_name
+        state['_barcodes'] = None
+        state['_read1_length'] = self._read1_length
+        state['_read2_length'] = self._read2_length
+        state['_barcode_dir'] = self._barcode_dir
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        # Recreate the barcode tree from shared memory
+        self._barcodes = load_shared_trie(self._trie_name)
+
+    # Clean up shared memory on deletion
+    def __del__(self):
+        try:
+            self._barcodes.cleanup_shared_memory()
+        except: pass
+        self._barcodes = None
 
     @property
     def umi_start(self) -> int:
@@ -736,7 +791,7 @@ class FlexFormatInfo(TechnologyFormatInfo):
         raise NotImplementedError()
 
     @property
-    def barcode_tree(self) -> PrefixTree:
+    def barcode_tree(self) -> PrefixTrie:
         return self._barcodes
 
 
@@ -761,8 +816,35 @@ class VisiumFormatInfo(TechnologyFormatInfo):
         if barcodes is None:
             # TODO: I am assuming that X is first and Y is second
             barcodes = pd.read_table(self._barcode_dir / f"visium-v{version}_coordinates.txt", header=None, names=["barcode", 'x', 'y'])
-        self._barcodes = PrefixTree(barcodes["barcode"].tolist())
+        # self._barcodes = PrefixTrie(barcodes["barcode"].tolist())
+        # Shared memory prefix trie
+        self._barcodes, self._trie_name = create_shared_trie(barcodes["barcode"].tolist())
         self._barcode_coordinates = {row["barcode"]: (row["x"], row["y"]) for _, row in barcodes.iterrows()}
+        self._version = version
+
+    # Custom pickling for multiprocessing
+    def __getstate__(self):
+        state = dict()
+        # Remove the barcode tree from the state
+        state['_trie_name'] = self._trie_name
+        state['_barcodes'] = None
+        state['_read1_length'] = self._read1_length
+        state['_read2_length'] = self._read2_length
+        state['_barcode_dir'] = self._barcode_dir
+        state['_version'] = self._version
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        # Recreate the barcode tree from shared memory
+        self._barcodes = load_shared_trie(self._trie_name)
+
+    # Clean up shared memory on deletion
+    def __del__(self):
+        try:
+            self._barcodes.cleanup_shared_memory()
+        except: pass
+        self._barcodes = None
 
     @property
     def umi_start(self) -> int:
@@ -820,7 +902,7 @@ class VisiumFormatInfo(TechnologyFormatInfo):
         raise NotImplementedError()
 
     @property
-    def barcode_tree(self) -> PrefixTree:
+    def barcode_tree(self) -> PrefixTrie:
         return self._barcodes
 
 
@@ -832,20 +914,18 @@ class VisiumHDFormatInfo(TechnologyFormatInfo):
                  read1_length: Optional[int] = 43,
                  read2_length: Optional[int] = 50,
                  barcode_list: Optional[list[Path]] = None):
-        if barcode_dir is None and barcode_list is None:
-            raise ValueError("Either barcode_dir or barcode_list must be provided.")
-
         super().__init__(barcode_dir, read1_length, read2_length)
+
         xy_whitelist = None
-        if barcode_list:
+        if barcode_list is not None:
             barcodes = _parse_possible_barcodes(barcode_list)
-            if barcodes:
+            if barcodes is not None:
                 xy_whitelist = set()
                 # Parse the coordinates from the barcode strings
                 for bc in barcodes:
-                    y, x = bc.split("-")[0].split("_")[1:]
-                    y = int(y)
+                    y, x = bc.split("-")[0].split("_")[-2:]
                     x = int(x)
+                    y = int(y)
                     xy_whitelist.add((x, y))
 
         # Load the barcodes, note that this REQUIRES spaceranger to be installed
@@ -896,21 +976,67 @@ class VisiumHDFormatInfo(TechnologyFormatInfo):
 
         # Assemble all possible barcodes
         self._barcode_coordinates = dict()
-        self._bc1_tree = PrefixTree(slide_def.two_part.bc1_oligos)
-        self._bc2_tree = PrefixTree(slide_def.two_part.bc2_oligos)
         self._bc_lengths = set()
+        bc1s = set()
+        bc2s = set()
         # _barcode_tree = PrefixTree([], allow_indels=True)  # Allow for indels as per 10X:
         # https://www.10xgenomics.com/support/software/space-ranger/latest/algorithms-overview/gene-expression#:~:text=using%20the%20edit%20distance%2C%20which%20allows%20for%20insertions%2C%20deletions%2C%20and%20substitutions.%20Up%20to%20four%20edits%20are%20permissible%20to%20correct%20a%20barcode%20to%20the%20whitelist.
         for x, bc1 in enumerate(slide_def.two_part.bc1_oligos):
             for y, bc2 in enumerate(slide_def.two_part.bc2_oligos):
-                if (x, y) not in xy_whitelist:
-                    continue   # Skip if not in the whitelist
+                if xy_whitelist is not None:
+                    if (x, y) not in xy_whitelist:
+                        continue   # Skip if not in the whitelist
+                bc1s.add(bc1)  # Add barcodes if coordinate passed whitelist
+                bc2s.add(bc2)
                 self._bc_lengths.add(len(bc1))
                 self._bc_lengths.add(len(bc2))
                 cell_bc = bc1 + bc2
                 self._barcode_coordinates[cell_bc] = (x, y)
                 # _barcode_tree.add(cell_bc)
+        self._bc_lengths = list(sorted(self._bc_lengths))
         # self._barcode_tree = SequentialPrefixTree([bc1_tree, bc2_tree])
+        # self._bc1_tree = PrefixTrie(bc1s, allow_indels=True)
+        # self._bc2_tree = PrefixTrie(bc2s, allow_indels=True)
+        self._bc1_tree, self._bc1_tree_name = create_shared_trie(list(bc1s), allow_indels=True)
+        self._bc2_tree, self._bc2_tree_name = create_shared_trie(list(bc2s), allow_indels=True)
+
+    # Custom pickling for multiprocessing
+    def __getstate__(self):
+        state = dict()
+        # Remove the barcode tree from the state
+        state['_bc1_tree_name'] = self._bc1_tree_name
+        state['_bc2_tree_name'] = self._bc2_tree_name
+        state['_bc1_tree'] = None
+        state['_bc2_tree'] = None
+        state['_read1_length'] = self._read1_length
+        state['_read2_length'] = self._read2_length
+        state['_barcode_dir'] = self._barcode_dir
+        state['_barcode_coordinates'] = self._barcode_coordinates
+        state['_bc_lengths'] = self._bc_lengths
+        state['_max_offset'] = self._max_offset
+        state['_min_offset'] = self._min_offset
+        state['_segment1_length'] = self._segment1_length
+        state['_segment1_offset'] = self._segment1_offset
+        state['_segment2_length'] = self._segment2_length
+        state['_segment2_offset'] = self._segment2_offset
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        # Recreate the barcode trees from shared memory
+        self._bc1_tree = load_shared_trie(self._bc1_tree_name)
+        self._bc2_tree = load_shared_trie(self._bc2_tree_name)
+
+    # Clean up shared memory on deletion
+    def __del__(self):
+        try:
+            self._bc1_tree.cleanup_shared_memory()
+        except: pass
+        try:
+            self._bc2_tree.cleanup_shared_memory()
+        except: pass
+        self._bc1_tree = None
+        self._bc2_tree = None
 
     @property
     def umi_start(self) -> int:
@@ -990,11 +1116,10 @@ class VisiumHDFormatInfo(TechnologyFormatInfo):
         return len(self._barcode_coordinates)
 
     @property
-    def barcode_tree(self) -> PrefixTree:
+    def barcode_tree(self) -> PrefixTrie:
         # NOTE: VisiumHD is weird, with hierarchical barcode lengths
         # return SequentialPrefixTree([self._bc1_tree, self._bc2_tree])
         raise NotImplementedError()
-
 
     @functools.lru_cache(1)
     def get_lengths_to_search(self):
@@ -1008,7 +1133,7 @@ class VisiumHDFormatInfo(TechnologyFormatInfo):
                 search_lengths.append(adjusted_less)
             if adjusted_more not in search_lengths:
                 search_lengths.append(adjusted_more)
-        search_lengths.sort()
+        search_lengths.sort(reverse=True)
         return search_lengths
 
     @property
@@ -1017,26 +1142,49 @@ class VisiumHDFormatInfo(TechnologyFormatInfo):
         return ((self._segment1_offset, self._segment1_offset + self._segment1_length),
          (self._segment2_offset, self._segment2_offset + self._segment2_length))
 
-    @functools.lru_cache(1)
-    def possible_pairing_ranges(self, read_len: int) -> list[tuple[tuple[int, int],tuple[int, int]]]:
-        possible_pairing_ranges = []
+    @functools.lru_cache(2)
+    def possible_pairing_ranges(self, read_len: int, padding: int = 0) -> list[tuple[tuple[int, int],tuple[int, int]]]:
+        possible_pairing_ranges = set()
         for offset in range(self._min_offset, self._max_offset+1):
             # For each offset, try every possible combination of the two barcodes
-            for bc1_len, bc2_len in itertools.product(self._bc_lengths, self._bc_lengths):
-                # Skip if the length would go off the read
-                if bc1_len + bc2_len + offset > read_len:
-                    continue
+            # for bc1_len, bc2_len in itertools.product(self._bc_lengths, self._bc_lengths):
+            for bc1_len in range(min(self._bc_lengths) - padding, max(self._bc_lengths)+1 + padding):  # padded range from min length to max length+1
+                for bc2_len in range(min(self._bc_lengths) - padding, max(self._bc_lengths)+1 + padding):  # padded range from min length to max length+1
+                    # Skip if the length would go off the read
+                    if bc1_len + bc2_len + offset > read_len:
+                        continue
 
-                possible_pairing_ranges.append(((offset, offset+bc1_len), (offset+bc1_len, offset+bc1_len+bc2_len)))
+                    possible_pairing_ranges.add(((offset, offset+bc1_len), (offset+bc1_len, offset+bc1_len+bc2_len)))
 
-        # Add the default range from the chemistry def . We fall back to this if there are no best matches
-        possible_pairing_ranges.append(self._default_range)
+        # Add the default range from the chemistry def. We fall back to this if there are no best matches
+        possible_pairing_ranges.add(self._default_range)
+
+        # Sort by:  total length (longest first), then by bc1 length (longest first), then by bc2 length (longest first), start position (lowest first)
+        possible_pairing_ranges = list(sorted(possible_pairing_ranges, key=lambda x: (x[1][1] - x[0][0], x[0][1]-x[0][0], x[1][1]-x[1][0], -x[0][0]), reverse=True))
 
         return possible_pairing_ranges
 
     # Override the search to search all trees
-    @functools.lru_cache(1024)
-    def correct_barcode(self, read: str, max_mismatches: int, start_idx: int, end_idx: int) -> tuple[Optional[str], bool]:
+    @functools.lru_cache(250_000)
+    def correct_barcode(self, read: str, max_mismatches: int, start_idx: int, end_idx: int) -> tuple[Optional[str], int]:
+        barcode, corrections = self._correct_barcode(read, max_mismatches, start_idx, end_idx)
+        if barcode is not None:
+            # Check that the barcode is in our whitelist
+            if barcode not in self._barcode_coordinates:
+                return None, False
+        return barcode, corrections
+
+    ## Cache bc1 searches separately
+    @functools.lru_cache(125_000)
+    def _cached_bc1_search(self, possible_bc1: str, max_mismatches: int) -> tuple[Optional[str], int]:
+        return self._bc1_tree.search(possible_bc1, max_mismatches)
+
+    ## Cache bc2 searches separately
+    @functools.lru_cache(125_000)
+    def _cached_bc2_search(self, possible_bc2: str, max_mismatches: int) -> tuple[Optional[str], int]:
+        return self._bc2_tree.search(possible_bc2, max_mismatches)
+
+    def _correct_barcode(self, read: str, max_mismatches: int, start_idx: int, end_idx: int) -> tuple[Optional[str], int]:
         # Based on logic from spaceranger: https://github.com/10XGenomics/spaceranger/blob/main/lib/rust/cr_lib/src/stages/barcode_correction.rs#L100-L235
         # and https://github.com/10XGenomics/spaceranger/blob/main/lib/rust/cr_types/src/rna_read.rs#L297-L349
         # Note that we ignore the provided start and end indices, since we will follow 10X's logic exactly
@@ -1044,111 +1192,121 @@ class VisiumHDFormatInfo(TechnologyFormatInfo):
         # Additionally note that to match spaceranger we will allow for 4 mismatches
         max_mismatches = max(max_mismatches, 4)
 
-        possible_pairing_ranges = self.possible_pairing_ranges(len(read))
-
-        # Now we iterate and try to find exact matches
-        matches_i = []
-        for pairing_range in possible_pairing_ranges:
-            # Get the ranges
-            bc1_range, bc2_range = pairing_range
-            # Get the barcodes
-            bc1 = read[bc1_range[0]:bc1_range[1]]
-            bc2 = read[bc2_range[0]:bc2_range[1]]
-            # Check if they are in the trees
-            if bc1 in self._bc1_tree and bc2 in self._bc2_tree:
-                matches_i.append((bc1, bc2, bc1_range, bc2_range))
-
-        if len(matches_i) == 0:
-            pass  # No exact matches found
-        elif len(matches_i) == 1:  # Only one match found
-            bc1, bc2, bc1_range, bc2_range = matches_i[0]
-            return bc1 + bc2, False  # No mismatches
-        else:  # Multiple matches found, pick the largest match (or default)
-            bc1, bc2, bc1_range, bc2_range = matches_i[-1]
-            return bc1 + bc2, False  # No mismatches
-
-        # Now we see if either bc1 or bc2 has an exact match for the default range
-        default_bc1 = read[self._default_range[0][0]:self._default_range[0][1]]
-        default_bc2 = read[self._default_range[1][0]:self._default_range[1][1]]
-
-        search_lengths = self.get_lengths_to_search()
-
-        if default_bc1 in self._bc1_tree:  # Default BC1 is found!
-            # Starting from the end of bc1, we will search for the bc2
-            bc1_end = self._default_range[0][1]
-            possible_bc2s = []
-            for length in search_lengths:
-                if bc1_end + length > len(read):
+        initial_search = self.possible_pairing_ranges(len(read), padding=0)
+        # Exact search first
+        valid1 = False
+        valid2 = False
+        bc1_range = None
+        bc2_range = None
+        for (possible_bc1_start, possible_bc1_end), (possible_bc2_start, possible_bc2_end) in initial_search:
+            bc1, bc1_corrections = self._cached_bc1_search(read[possible_bc1_start:possible_bc1_end], 0)
+            bc2, bc2_corrections = self._cached_bc2_search(read[possible_bc2_start:possible_bc2_end], 0)
+            bc1_found = bc1 is not None
+            bc2_found = bc2 is not None
+            match (bc1_found, bc2_found):
+                case (True, True):
+                    return bc1 + bc2, 0  # Perfect match, return immediately
+                case (True, False):
+                    valid1 = True
+                    bc1_range = (possible_bc1_start, possible_bc1_end)
+                    valid2 = False
+                    bc2_range = (possible_bc2_start, possible_bc2_end)
                     continue
-                possible_bc2 = read[bc1_end:bc1_end + length]
-                # Search for a valid sequence
-                res = self._bc2_tree.search(possible_bc2, max_mismatches)
-                if res is not None:
-                    corrected = default_bc1 + res[0]
-                    distance = res[1]
-                    if distance <= 1:  # Can't theoretically have more than 1 mismatch as the best match, so exit early
-                        return corrected, distance > 0
-                    possible_bc2s.append((corrected, distance))
-            # Find the lowest score
-            if len(possible_bc2s) > 0:
-                best = min(possible_bc2s, key=lambda x: x[1])
-                return best[0], best[1] > 0
-        elif default_bc2 in self._bc2_tree:  # Default BC2 is found!
-            # Same as above, but we gotta search for bc1
-            bc2_start = self._default_range[1][0]
-            possible_bc1s = []
-            for length in search_lengths:
-                if bc2_start - length < 0:
+                case (False, True):
+                    if not valid1:  # Prefer to keep valid1 if it exists
+                        valid1 = False
+                        bc1_range = (possible_bc1_start, possible_bc1_end)
+                        valid2 = True
+                        bc2_range = (possible_bc2_start, possible_bc2_end)
                     continue
-                possible_bc1 = read[bc2_start - length:bc2_start]
-                # Search for a valid sequence
-                res = self._bc1_tree.search(possible_bc1, max_mismatches)
-                if res is not None:
-                    corrected = res[0] + default_bc2
-                    distance = res[1]
-                    if distance <= 1:
-                        return corrected, distance > 0
-                    possible_bc1s.append((corrected, distance))
-            # Find the lowest score
-            if len(possible_bc1s) > 0:
-                best = min(possible_bc1s, key=lambda x: x[1])
-                return best[0], best[1] > 0
-        else:  # Nothing found...
-            # We have to fuzzy match bc1 and bc2
-            # We will search for the longest possible match
-            best_distance = 1e6
-            best_bc = None
-            for possible_bc1_start in range(self._min_offset, self._max_offset+1):
-                for bc1_len, bc2_len in itertools.product(search_lengths, search_lengths):
-                    if possible_bc1_start + bc1_len + bc2_len > len(read):
+                case (False, False):
+                    continue
+
+        match (valid1, valid2):
+            case (True, True):
+                return bc1 + bc2, 0  # Both valid, but no perfect match, return immediately
+            case (True, False):  # Only bc1 valid, search for bc2 with mismatches
+                bc1_end = bc1_range[1]
+                bc1 = read[bc1_range[0]:bc1_range[1]]
+                # Search for bc2 with mismatches
+                best_len = -1
+                best_corrections = 1e6
+                best_bc2 = None
+                for bc2_len in range(max(self._bc_lengths) + 1, min(self._bc_lengths) - 2, -1):  # padded range from max length+1 to min length-1
+                    if bc1_end + bc2_len > len(read):
                         continue
-                    possible_bc1 = read[possible_bc1_start:possible_bc1_start + bc1_len]
-                    possible_bc2 = read[possible_bc1_start + bc1_len:possible_bc1_start + bc1_len + bc2_len]
+                    possible_bc2 = read[bc1_end:bc1_end+bc2_len]
+                    bc2, bc2_corrections = self._cached_bc2_search(possible_bc2, max_mismatches)
+                    if bc2 is None:
+                        continue
+                    if bc2_corrections < best_corrections or (bc2_corrections == best_corrections and bc2_len > best_len):
+                        best_corrections = bc2_corrections
+                        best_len = bc2_len
+                        best_bc2 = bc2
+                        if best_corrections == 0:  # Can't get better than this
+                            break
+                if best_bc2 is not None:
+                    return bc1 + best_bc2, best_corrections
+                return None, -1  # No match found
+            case (False, True):  # Only bc2 valid, search for bc1 with mismatches
+                bc2_start = bc2_range[0]
+                bc2 = read[bc2_range[0]:bc2_range[1]]
+                # Search for bc1 with mismatches
+                best_len = -1
+                best_corrections = 1e6
+                best_bc1 = None
+                for bc1_len in range(max(self._bc_lengths) + 1, min(self._bc_lengths) - 2, -1):  # padded range from max length+1 to min length-1
+                    if bc2_start - bc1_len < 0:
+                        continue
+                    possible_bc1 = read[bc2_start-bc1_len:bc2_start]
+                    bc1, bc1_corrections = self._cached_bc1_search(possible_bc1, max_mismatches)
+                    if bc1 is None:
+                        continue
+                    if bc1_corrections < best_corrections or (bc1_corrections == best_corrections and bc1_len > best_len):
+                        best_corrections = bc1_corrections
+                        best_len = bc1_len
+                        best_bc1 = bc1
+                        if best_corrections == 0:  # Can't get better than this
+                            break
+                if best_bc1 is not None:
+                    return best_bc1 + bc2, best_corrections
+                return None, -1  # No match found
+            case (False, False):
+                # Full fuzzy search
+                # Search with padding
+                best_bc = None
+                best_bc_corrections = None
+                best_length = None
+                search_ranges = self.possible_pairing_ranges(len(read), padding=1)
+                for (possible_bc1_start, possible_bc1_end), (possible_bc2_start, possible_bc2_end) in search_ranges:
+                    if possible_bc2_end > len(read) or possible_bc1_start < 0:
+                        continue
+                    possible_bc1 = read[possible_bc1_start:possible_bc1_end]
+                    possible_bc2 = read[possible_bc2_start:possible_bc2_end]
                     # Search for a valid sequence
-                    bc1_res = self._bc1_tree.search(possible_bc1, max_mismatches)
-                    if bc1_res is None:
+                    bc1, bc1_corrections = self._cached_bc1_search(possible_bc1, max_mismatches)
+                    if bc1 is None:
                         continue
-                    bc1_corrected = bc1_res[0]
-                    bc1_distance = bc1_res[1]
-                    bc2_res = self._bc2_tree.search(possible_bc2, max_mismatches)
-                    if bc2_res is None:
+                    remaining_mismatches = max_mismatches - bc1_corrections
+                    if remaining_mismatches < 0:
                         continue
-                    bc2_corrected = bc2_res[0]
-                    bc2_distance = bc2_res[1]
-                    if bc1_distance + bc2_distance > max_mismatches:
+                    bc2, bc2_corrections = self._cached_bc2_search(possible_bc2, remaining_mismatches)
+                    if bc2 is None:
                         continue
-                    if bc1_distance + bc2_distance < best_distance:
-                        best_distance = bc1_distance + bc2_distance
-                        best_bc = bc1_corrected + bc2_corrected
-
-                        if best_distance <= 1:  # Literally can't get better than this so exit early
-                            return best_bc, best_distance > 0
-
-            if best_bc is not None:
-                return best_bc, best_distance > 0
-
+                    if bc1_corrections + bc2_corrections > max_mismatches:
+                        continue
+                    combined_corrections = (bc1_corrections + bc2_corrections)
+                    combined_length = possible_bc1_end - possible_bc1_start + 1
+                    if best_bc is None or best_bc_corrections < combined_corrections or (combined_length > best_length and best_bc_corrections == combined_corrections):
+                        best_bc = bc1 + bc2
+                        best_length = combined_length
+                        best_bc_corrections = combined_corrections
+                        if best_bc_corrections == 0:  # Can't get better than this
+                            break
+                if best_bc is not None and best_bc in self._barcode_coordinates:
+                    return best_bc, best_bc_corrections
         # No matches found, return None
-        return None, False
+        return None, -1
 
 
 def read_barcodes(output_dir: Path) -> pd.DataFrame:
@@ -1200,6 +1358,11 @@ def maybe_gzip(file: Path | None, mode: Literal["r"] | Literal["w"] = "r"):
     :param mode: The mode.
     :return: The file handle.
     """
+    if file is None:
+        if mode == 'w':
+            return GzipNamedTemporaryFile()  # context manager
+        raise ValueError("read mode requires a real path")
+
     file = Path(file)
     if mode == 'r':
         if "gz" in file.suffix:
@@ -1560,7 +1723,7 @@ def read_h5_file(filename: str) -> ad.AnnData:
             'lhs_probe': f['probe_metadata']['lhs_probe'][:].astype(str),
             'rhs_probe': f['probe_metadata']['rhs_probe'][:].astype(str),
             'gap_probe_sequence': f['probe_metadata']['gap_probe_sequence'][:].astype(str),
-            'original_gap_probe_sequence': f['probe_metadata']['gap_probe_sequence'][:].astype(str),
+            'original_gap_probe_sequence': f['probe_metadata']['original_sequence'][:].astype(str),
         })
         if 'gene' in f['probe_metadata']:
             manifest['gene'] = f['probe_metadata']['gene'][:].astype(str)
@@ -1746,6 +1909,8 @@ def sequence_saturation_curve(full_counts, n_points: int = 1_000) -> np.array:
 
 
 def read_probes_input(probes: str) -> pd.DataFrame:
+    if isinstance(probes, Path):
+        probes = str(probes)
     # Parse the probes file
     if probes.endswith(".csv"):
         df = pd.read_csv(probes)

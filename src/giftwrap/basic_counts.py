@@ -179,7 +179,7 @@ def run(probes, project, output, make_unparsed_fastq, correct_barcodes, fuzzy_se
 
             if correct_barcodes:
                 # Correct the cell barcode
-                cell_barcode = flex_format.correct_barcode(r1_seq, max_mismatches=2,
+                cell_barcode, corrections = flex_format.correct_barcode(r1_seq, max_mismatches=2,
                                                            start_idx=flex_format.cell_barcode_start, end_idx=flex_format.umi_start)
                 if cell_barcode is None:
                     maybe_write(unparsed_r1, unparsed_r2, r1_name, r1_seq, r1_qual, r2_name, r2_seq, r2_qual)
