@@ -183,6 +183,8 @@ If you are using a non-supported single-cell protocol, follow the [Extending GIF
 ### Additional Options
 Here are the remaining options that can be used with the `giftwrap` command:
 
+* `---flexible_start_mapping <N>`: If specified, GIFTwrap will allow for some insertion/deletions related to technical artifacts in sequencing at the start of R2.
+
 * `--overwrite`: If specified, GIFTwrap will overwrite any existing output files in the output directory. This is useful if you want to re-run the pipeline without having to delete the output directory first.
 
 * `--allow_chimeras`: If specified, GIFTwrap will skip filtering out UMIs that pair to multiple probes within the same cell barcode. 

@@ -34,6 +34,7 @@ dependencies = [
     "sankeyflow>=0.4.1",
     "diskcache>=5.6.3",
     "rich-argparse>=1.7.1",
+    "prefixtrie>=0.5",
 ]
 
 [project.urls]
@@ -93,6 +94,7 @@ giftwrap-summarize = "giftwrap.step5_summarize_counts:main"
 giftwrap-generate-r = "giftwrap.misc_scripts:print_R"
 giftwrap-generate-tech = "giftwrap.misc_scripts:print_tech"
 giftwrap-convert-probes = "giftwrap.misc_scripts:convert_probes"
+giftwrap-revert-probes = "giftwrap.misc_scripts:revert_probes"
 giftwrap-diagnostic = "giftwrap.basic_counts:main"
 
 [build-system]
@@ -101,7 +103,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.sdist]
 exclude = [
-  "spaceranger-3.1.1",
+  "spaceranger-*",
     "test_out",
     "*fastq*",
     "venv",

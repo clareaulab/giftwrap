@@ -1,3 +1,6 @@
+import contextlib
+import hashlib
+import tempfile
 import warnings, os
 warnings.filterwarnings("ignore", category=FutureWarning)
 os.environ.setdefault("PYTHONWARNINGS", "ignore::FutureWarning")  # inherit to subprocesses
@@ -44,6 +47,83 @@ def print_tech():
     print("from giftwrap import FlexFormatInfo, PrefixTree")
     print(inspect.getsource(FlexFormatInfo), end="")
     exit(0)
+
+
+def int_to_hash(n, length=7):
+    # Convert integer to bytes
+    b = n.to_bytes((n.bit_length() + 7) // 8 or 1, byteorder="big")
+    # Hash and get hex digest
+    h = hashlib.sha1(b).hexdigest()
+    # Return first `length` characters
+    return h[:length]
+
+
+def revert_probes():
+    parser = argparse.ArgumentParser(
+        description="Revert a GIFTwrap probe file to a 10X Genomics cellranger-based probe file. Prints to stdout.",
+        formatter_class=RichHelpFormatter
+    )
+    parser.add_argument(
+        "--version", "-v",
+        action="version",
+        version=f"%(prog)s {sys.modules['giftwrap'].__version__}",
+        help="Show the version of the GIFTwrap pipeline."
+    )
+    parser.add_argument(
+        "--input",
+        required=True,
+        type=str,
+        help="The path to the input GIFTwrap probe file."
+    )
+    args = parser.parse_args()
+
+    input = Path(args.input)
+    if not input.exists():
+        raise FileNotFoundError(f"Input file {input} does not exist.")
+
+    from .step1_count_gapfills import build_manifest
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir = Path(tmpdir)
+        with warnings.catch_warnings(), open(os.devnull, "w") as devnull, contextlib.redirect_stdout(devnull):
+            build_manifest(input, tmpdir, overwrite=True, allow_any_combination=False)
+        probes = pd.read_csv(tmpdir / "manifest.tsv", sep="\t")
+
+    # Next, we need to convert the GIFTwrap probe file back to the 10X Genomics format
+    print("#probe_set_file_format=3.0")
+    print("#panel_name=GIFTWRAP probe set")
+    print("#panel_type=predesigned")
+    print("#reference_genome=GRCh38")
+    print("#reference_version=2024-A")
+    print("gene_id,probe_seq,probe_id,included,region,gene_name")
+    curr_hash = 0
+    has_ref_and_alt = ~(probes['original_gap_probe_sequence'].isna() | probes['gap_probe_sequence'].isna()).all()
+    for _, row in probes.iterrows():
+        name = row['name']
+        if 'gene' in row:
+            gene = row['gene']
+        else:
+            gene = name.split(" ")[0]
+        print(name, end="")
+        if has_ref_and_alt:
+            print(" REF", end=",")
+            probe_seq = row['lhs_probe'] + (row['original_gap_probe_sequence']) + row['rhs_probe']
+            probe_seq = probe_seq[:50]  # Ensure it is exactly 50 bases
+            print(probe_seq, end=",")
+            print(f"{name} REF|{gene}|{int_to_hash(curr_hash)},TRUE,unspliced,{gene} REF")
+            curr_hash+=1
+            print(name, " ALT", end=",")
+            probe_seq = row['lhs_probe'] + row['gap_probe_sequence'] + row['rhs_probe']
+            probe_seq = probe_seq[:50]  # Ensure it is exactly 50 bases
+            print(probe_seq, end=",")
+            print(f"{name} ALT|{gene}|{int_to_hash(curr_hash)},TRUE,unspliced,{gene} ALT")
+            curr_hash+=1
+        else:
+            print(",", end="")
+            probe_seq = row['lhs_probe'] + row['rhs_probe']
+            probe_seq = probe_seq[:50]  # Ensure it is exactly 50 bases
+            print(probe_seq, end=",")
+            print(f"{name}|{gene}|{int_to_hash(curr_hash)},TRUE,unspliced,{gene}")
+            curr_hash+=1
 
 
 def convert_probes():

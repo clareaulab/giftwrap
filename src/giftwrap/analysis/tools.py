@@ -36,9 +36,9 @@ def collapse_gapfills(adata: ad.AnnData) -> ad.AnnData:
         new_X_layer = np.zeros((adata.shape[0], adata.var["probe"].nunique()))
         for i, probe in enumerate(new_var.index.values):
             if layer == 'percent_supporting':
-                new_X_layer[:, i] = adata.layers[layer][:, adata.var["probe"] == probe].mean(axis=1).flatten()
+                new_X_layer[:, i] = adata[:, adata.var["probe"] == probe].layers[layer].mean(axis=1).flatten()
             else:
-                new_X_layer[:, i] = adata.layers[layer][:, adata.var["probe"] == probe].sum(axis=1).flatten()
+                new_X_layer[:, i] = adata[:, adata.var["probe"] == probe].layers[layer].sum(axis=1).flatten()
         new_layers[layer] = new_X_layer
     return ad.AnnData(X=new_X, obs=new_obs, var=new_var, layers=new_layers)
 
@@ -564,12 +564,12 @@ def _correct_off_by_one_job(adata: ad.AnnData, probes: list[str]) -> ad.AnnData:
             if subset_adata.shape[1] < 2 or subset_adata.X.sum() < 2:
                 continue  # There aren't multiple gapfills for this probe in this cell, skip it
             # Remove combos with no UMIs
-            gapfills = subset_adata.var_names[subset_adata.X.sum(axis=0) > 0]
+            gapfills = subset_adata.var_names[np.array(subset_adata.X.sum(axis=0)).flatten() > 0]
             if len(gapfills) < 2:  # There aren't multiple gapfills for this probe in this cell, skip it
                 continue
 
             # Get the length of the gapfills
-            gapfill_lengths = subset_adata.var[gapfills].apply(lambda x: len(x['gapfill']), axis=1).values
+            gapfill_lengths = subset_adata.var.loc[gapfills].apply(lambda x: len(x['gapfill']), axis=1).values
             # Only retain gapfills that are pairwise off-by-one
             gapfills_to_check = list()
             for length in np.unique(gapfill_lengths):
@@ -589,14 +589,16 @@ def _correct_off_by_one_job(adata: ad.AnnData, probes: list[str]) -> ad.AnnData:
                     continue
                 # Collect the counts of the gapfills
                 longer_counts = subset_adata[:, longer_gapfills].X.toarray().flatten()
+                longer_sequences = subset_adata.var.loc[longer_gapfills].gapfill.values
                 shorter_counts = subset_adata[:, shorter_gapfills].X.toarray().flatten()
+                shorter_sequences = subset_adata.var.loc[shorter_gapfills].gapfill.values
                 # The longer counts must be greater than the shorter counts if this was truly a rare base deletion error
                 if longer_counts.sum() <= shorter_counts.sum():
                     continue
                 # Finally, we can compute alignments
                 # Map each gapfill to its count
-                longer_gapfill_counts = {gapfill: count for gapfill, count in zip(longer_gapfills, longer_counts)}
-                shorter_gapfill_counts = {gapfill: count for gapfill, count in zip(shorter_gapfills, shorter_counts)}
+                longer_gapfill_counts = {gapfill: count for gapfill, count in zip(longer_gapfills, longer_sequences, longer_counts)}
+                shorter_gapfill_counts = {gapfill: count for gapfill, count in zip(shorter_gapfills, shorter_sequences, shorter_counts)}
 
                 aligned_longer, aligned_shorter = _compute_alignments(
                     ref_frequencies=longer_gapfill_counts,
@@ -728,11 +730,11 @@ def _generate_genotype_frequencies(gapfill_adata: ad.AnnData,
 
 
 def _compute_alignments(
-        ref_frequencies: dict[str, float],
-        alt_frequencies: dict[str, float] | None,
+        ref_frequencies: dict[str, tuple[str, float]],
+        alt_frequencies: dict[str, tuple[str, float]] | None,
         align: bool = True,
         threads: int = 1,
-) -> tuple[dict[str, float], dict[str, float] | None]:
+) -> tuple[dict[str, tuple[str, float]], dict[str, tuple[str, float]] | None]:
     """
     Compute alignments for the motif plot.
     :param ref_frequencies: A dictionary of reference frequencies for the probe.
@@ -752,13 +754,13 @@ def _compute_alignments(
         # Pad the motifs with gaps to the same length
         if alt_frequencies is None:
             max_length = max(len(motif) for motif in ref_frequencies.keys())
-            ref_frequencies = {motif.ljust(max_length, '-') : freq for motif, freq in ref_frequencies.items()}
+            ref_frequencies = {gapfill: (motif.ljust(max_length, '-'), freq) for gapfill, (motif, freq) in ref_frequencies.items()}
             return ref_frequencies, None
         else:
             max_length = max(max(len(motif) for motif in ref_frequencies.keys()),
                              max(len(motif) for motif in alt_frequencies.keys()))
-            ref_frequencies = {motif.ljust(max_length, '-') : freq for motif, freq in ref_frequencies.items()}
-            alt_frequencies = {motif.ljust(max_length, '-') : freq for motif, freq in alt_frequencies.items()}
+            ref_frequencies = {gapfill: (motif.ljust(max_length, '-'), freq) for gapfill, (motif, freq) in ref_frequencies.items()}
+            alt_frequencies = {gapfill: (motif.ljust(max_length, '-'), freq) for gapfill, (motif, freq) in alt_frequencies.items()}
             return ref_frequencies, alt_frequencies
 
 
@@ -772,7 +774,7 @@ def _compute_alignments(
         scoring_matrix=scoring_matrices.ScoringMatrix.from_name('BLOSUM62'),
     )
     # Sort the references by frequency (descending)
-    sorted_ref = dict(sorted(ref_frequencies.items(), key=lambda x: x[1], reverse=True))
+    sorted_ref = dict(sorted(ref_frequencies.items(), key=lambda x: x[1][1], reverse=True))
 
     if alt_frequencies is None:  # Only need to worry about one group
         if len(sorted_ref) < 2:  # Skip alignment
@@ -784,12 +786,12 @@ def _compute_alignments(
             )
         # Align the motifs
         sequences = [
-            pyfamsa.Sequence(f">{i} {freq}".encode(), seq.encode())
-            for i, (seq, freq) in enumerate(sorted_ref.items())
+            pyfamsa.Sequence(f">{i}${gapfill}${freq}".encode(), seq.encode())
+            for i, (gapfill, (seq, freq)) in enumerate(sorted_ref.items())
         ]
         msa = aligner.align(sequences)
         return {
-            seq.sequence.decode(): float(seq.id.decode().split(" ")[1])
+            (seq.sequence.decode(), float(seq.id.decode().split("$")[2]))
             for seq in msa
         }, None  # No alternative frequencies to return
     else: # Need to align both groups

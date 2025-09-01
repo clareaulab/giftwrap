@@ -50,7 +50,8 @@ def process_reads(reads,
                  min_lhs_probe_size, min_rhs_probe_size,
                  max_lhs_probe_size, max_rhs_probe_size,
                  multiplex, barcode, allow_indels,
-                 skip_constant_seq, unmapped_reads_prefix) -> list[tuple[list[ReadProcessState], Optional[ReadData]]]:
+                 skip_constant_seq, unmapped_reads_prefix,
+                 flexible_start_mapping) -> list[tuple[list[ReadProcessState], Optional[ReadData]]]:
     if allow_indels:  # If allow indels, levenshtein distance is used
         def fuzzysearch_fn(subsequence, sequence, dist):
             return fuzzysearch.find_near_matches(subsequence, sequence, max_l_dist=dist)
@@ -64,7 +65,7 @@ def process_reads(reads,
     for (r1, r2) in reads:
         res = process_read(r1, r2, rhs_seqs, lhs_seqs, lhs_seq2potential_rhs_seqs, tech_info, names, max_distance,
                          min_lhs_probe_size, min_rhs_probe_size, max_lhs_probe_size, max_rhs_probe_size, multiplex,
-                         barcode, skip_constant_seq, unmapped_reads_prefix, fuzzysearch_fn)
+                         barcode, skip_constant_seq, unmapped_reads_prefix, flexible_start_mapping, fuzzysearch_fn)
 
         reasons = res[0]
         data = res[1]
@@ -146,7 +147,7 @@ def process_read(r1, r2,
                  min_lhs_probe_size, min_rhs_probe_size,
                  max_lhs_probe_size, max_rhs_probe_size,
                  multiplex, barcode, skip_constant_seq,
-                 unmapped_reads_prefix,
+                 unmapped_reads_prefix, flexible_start_mapping,
                  fuzzysearch_fn) -> tuple[list[ReadProcessState], Optional[ReadData]]:
     ((r1_title, r1_seq, r1_quality), (r2_title, r2_seq, r2_quality)) = r1, r2
     if tech_info.read1_length is None:
@@ -202,6 +203,50 @@ def process_read(r1, r2,
         )
 
     if match is None:  # No match found
+        if flexible_start_mapping != 0:  # We need to search for offset matches
+            for offset in range(1, flexible_start_mapping + 1):
+                # First check if the read is truncated
+                # We will do this by re-processing everything with one base removed from the probes
+                states, data = process_read(
+                    r1, r2,
+                    rhs_seqs, [lhs[offset:] for lhs in lhs_seqs],
+                    {lhs[offset:]: potential for lhs, potential in lhs_seq2potential_rhs_seqs.items()},
+                    tech_info,
+                    names, max_distance,
+                    min_lhs_probe_size-1,
+                    min_rhs_probe_size,
+                    max_lhs_probe_size-1,
+                    max_rhs_probe_size,
+                    multiplex, barcode, skip_constant_seq,
+                    unmapped_reads_prefix,
+                    0, fuzzysearch_fn
+                )
+                # If we found a match, we can return it
+                if data is not None:
+                    return states, data
+                elif ReadProcessState.FILTERED_NO_LHS not in states:  # LHS mapped, but there was something else wrong
+                    return states, data
+
+                # Now remove the first base from the r2 sequence and quality
+                states, data = process_read(
+                    r1, r2,
+                    rhs_seqs, [lhs[offset:] for lhs in lhs_seqs],
+                    {lhs[offset:]: potential for lhs, potential in lhs_seq2potential_rhs_seqs.items()},
+                    tech_info,
+                    names, max_distance,
+                    min_lhs_probe_size,
+                    min_rhs_probe_size,
+                    max_lhs_probe_size,
+                    max_rhs_probe_size,
+                    multiplex, barcode, skip_constant_seq,
+                    unmapped_reads_prefix,
+                    0, fuzzysearch_fn
+                )
+                if data is not None:
+                    return states, data
+                elif ReadProcessState.FILTERED_NO_LHS not in states:
+                    return states, data
+
         return [ReadProcessState.TOTAL_READS, ReadProcessState.FILTERED_NO_LHS], None
 
     match_size = len(match_query)
@@ -370,7 +415,7 @@ def process_read(r1, r2,
     #                                               np.array(phred_string_to_probs(cell_barcode_quality)),
     #                                               tech_info,
     #                                               )
-    cell_barcode, was_corrected = tech_info.correct_barcode(r1_seq,
+    cell_barcode, corrections = tech_info.correct_barcode(r1_seq,
                                                             compute_max_distance(end_idx - start_idx, max_distance),
                                                             start_idx,
                                                             end_idx,
@@ -379,7 +424,7 @@ def process_read(r1, r2,
     if cell_barcode is None:
         return [ReadProcessState.TOTAL_READS, ReadProcessState.FILTERED_NO_CELL_BARCODE], None
 
-    if was_corrected:
+    if corrections > 0:
         states.append(ReadProcessState.CORRECTED_BARCODE)
 
     if len(states) == 1:  # Should be equal to one because of the TOTAL_READS state
@@ -396,7 +441,8 @@ def process_read(r1, r2,
 def search_files(read1s, read2s, output_dir, tech_info,
                  cores=1, n_reads_per_batch=1_000_000, max_distance=2,
                  multiplex=1, barcode=1, allow_indels=False,
-                 skip_constant_seq=False, unmapped_reads_prefix=None):
+                 skip_constant_seq=False, unmapped_reads_prefix=None,
+                 flexible_start_mapping=False):
     probes = read_manifest(output_dir)
 
     if unmapped_reads_prefix:
@@ -498,7 +544,8 @@ def search_files(read1s, read2s, output_dir, tech_info,
                                       barcode=barcode,
                                       allow_indels=allow_indels,
                                       skip_constant_seq=skip_constant_seq,
-                                      unmapped_reads_prefix=unmapped_reads_prefix),
+                                      unmapped_reads_prefix=unmapped_reads_prefix,
+                                      flexible_start_mapping=flexible_start_mapping),
                     batch
                 )
                 if last_job is not None:  # Output the previous run, then continue reading the file while the next batch is being processed
@@ -667,7 +714,8 @@ def run(probes,
         skip_constant_seq,
         allow_any_combination,
         unmapped_reads_prefix,
-        cellranger_output):
+        cellranger_output,
+        flexible_start_mapping):
     if (read1 == read2 == project) and project is None:
         raise AssertionError("At least one of the read1, read2, or project arguments must be provided.")
     assert not (multiplex > 1 and barcode > 0), "Multiplex and barcode arguments are mutually exclusive."
@@ -780,7 +828,8 @@ def run(probes,
     search_files(read1s, read2s, output, tech_info,
                  cores=cores, n_reads_per_batch=n_reads_per_batch, max_distance=max_distance,
                  multiplex=multiplex, barcode=barcode, allow_indels=allow_indels,
-                 skip_constant_seq=skip_constant_seq, unmapped_reads_prefix=unmapped_reads_prefix)
+                 skip_constant_seq=skip_constant_seq, unmapped_reads_prefix=unmapped_reads_prefix,
+                 flexible_start_mapping=flexible_start_mapping)
     exit(0)
 
 
@@ -818,6 +867,13 @@ def main():
         type=str,
         default=None,
         help="If provided, unmapped reads are written to the file prefix given."
+    )
+    parser.add_argument(
+        "--flexible_start_mapping",
+        required=False,
+        type=int,
+        default=0,
+        help="If set with an offset, we no longer assume that the R2 read starts with the LHS probe and that there may be a (-offset) deletion or (+offset) insertion that would need to be trimmed."
     )
     parser.add_argument(
         '--project',
@@ -947,7 +1003,8 @@ def main():
         args.skip_constant_seq,
         args.allow_any_combination,
         args.unmapped_reads,
-        args.cellranger_output
+        args.cellranger_output,
+        args.flexible_start_mapping
     )
 
 

@@ -12,10 +12,6 @@ np.infty = np.inf
 
 # Silence various warnings:
 try:
-    import dask  # Dask is imported with the spatial extra
-    dask.config.set({"dataframe.query-planning": True})
-except: pass
-try:
     import warnings
 
     warnings.filterwarnings(
@@ -24,6 +20,17 @@ try:
         category=FutureWarning,
         module="anndata.utils"
     )
+
+    warnings.filterwarnings(
+        "ignore",
+        message="pkg_resources is deprecated as an API",
+        category=UserWarning,
+    )
+except: pass
+
+try:
+    import dask  # Dask is imported with the spatial extra
+    dask.config.set({"dataframe.query-planning": True})
 except: pass
 
 try:
@@ -39,14 +46,13 @@ if importlib_metadata is not None:
 else:
     __version__ = "unknown"
 
-from .utils import read_h5_file, filter_h5_file, TechnologyFormatInfo, PrefixTree, sequence_saturation_curve, sequencing_saturation
+from .utils import read_h5_file, filter_h5_file, TechnologyFormatInfo, sequence_saturation_curve, sequencing_saturation
 from .analysis import preprocess as pp, plots as pl, tools as tl, spatial as sp
 
 
 __all__ = ['read_h5_file',
            'filter_h5_file',
            'TechnologyFormatInfo',
-           "PrefixTree",
            'sequence_saturation_curve',
            'sequencing_saturation',
            'pp', 'pl', 'tl', 'sp']

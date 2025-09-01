@@ -58,7 +58,7 @@ plugins:
               - griffe_sphinx
               - griffe_inherited_docstrings
   - mkdocs-jupyter:
-      execute: true
+      execute: false
       no_input: true
 #      theme: dark
       remove_tag_config:
@@ -132,6 +132,7 @@ nav:
         - giftwrap-generate-r: cli/giftwrap_generate_r.md
         - giftwrap-generate-tech: cli/giftwrap_generate_tech.md
         - giftwrap-convert-probes: cli/giftwrap_convert_probes.md
+        - giftwrap-revert-probes: cli/giftwrap_revert_probes.md
         - giftwrap-diagnostic: cli/giftwrap_diagnostic.md
     - API Reference
     - Contributing: contributing.md
