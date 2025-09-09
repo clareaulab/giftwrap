@@ -1841,9 +1841,15 @@ def read_probes_input(probes: str) -> pd.DataFrame:
     # Normalize the column names to be lowercase
     df.columns = df.columns.str.lower()
     if 'gap_probe_sequence' not in df.columns:
-        df['gap_probe_sequence'] = "NA"
+        if 'expected_gapfill' in df.columns:
+            df.rename(columns={'expected_gapfill': 'gap_probe_sequence'}, inplace=True)
+        else:
+            df['gap_probe_sequence'] = "NA"
     if 'original_gap_probe_sequence' not in df.columns:
-        df['original_gap_probe_sequence'] = "NA"
+        if 'reference_gapfill' in df.columns:
+            df.rename(columns={'reference_gapfill': 'original_gap_probe_sequence'}, inplace=True)
+        else:
+            df['original_gap_probe_sequence'] = "NA"
     gene_column = None
     # Check if there is a gene name column
     if 'gene' in df.columns:

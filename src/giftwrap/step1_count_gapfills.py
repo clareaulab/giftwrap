@@ -308,7 +308,7 @@ def search_files(read1s, read2s, output_dir, tech_info,
     print(f"{total} reads extracted.")
 
 
-def build_manifest(probes, output: Path, overwrite, allow_any_combination):
+def build_manifest(probes, output: Path, overwrite, allow_any_combination, trim_probes):
     print("Indexing probes...", end="")
     if output.exists():
         if overwrite:
@@ -351,6 +351,30 @@ def build_manifest(probes, output: Path, overwrite, allow_any_combination):
 
         print(f"{(~df['was_defined']).sum()} decoy pairings added.")
 
+    if trim_probes > 0:
+        print("Trimming probes to an expected length of ", trim_probes)
+        for i, row in list(df.iterrows()):
+            original_probe_sequence = row['original_gap_probe_sequence']
+            gap_probe_sequence = row['gap_probe_sequence']
+            if original_probe_sequence == gap_probe_sequence and gap_probe_sequence == "NA":
+                gap_length = 0
+            elif original_probe_sequence == "NA":
+                gap_length = len(gap_probe_sequence)
+            elif gap_probe_sequence == "NA":
+                gap_length = 0
+            else:
+                gap_length = max(len(original_probe_sequence), len(gap_probe_sequence))
+
+            to_trim_from_rhs = trim_probes - gap_length - len(row['lhs_probe'])
+            if to_trim_from_rhs < 0:
+                print(f"Warning: Probe {row['name']} is shorter than the trim length by {-to_trim_from_rhs}bp. Not trimming.")
+                continue
+            new_rhs = row['rhs_probe'][:to_trim_from_rhs]
+            if len(new_rhs) < 5:
+                print(f"Warning: Probe {row['name']} is trimmed to less than 5bp. This may cause issues!")
+            df.at[i, 'rhs_probe'] = new_rhs
+        print("Probes trimmed.")
+
     # Create an index column
     df.reset_index(drop=True, inplace=True)
     df["index"] = df.index
@@ -360,6 +384,7 @@ def build_manifest(probes, output: Path, overwrite, allow_any_combination):
 
 
 def run(probes,
+        trim_probes,
         read1,
         read2,
         project,
@@ -487,7 +512,7 @@ def run(probes,
         )
     print(f"{tech_info.n_barcodes} cell barcodes found.")
 
-    build_manifest(probes, output, overwrite, allow_any_combination)
+    build_manifest(probes, output, overwrite, allow_any_combination, trim_probes)
 
     search_files(read1s, read2s, output, tech_info,
                  cores=cores, n_reads_per_batch=n_reads_per_batch, max_distance=max_distance,
@@ -512,6 +537,13 @@ def main():
         required=True,
         type=str,
         help="Path to the generated gap-filling probe set file."
+    )
+    parser.add_argument(
+        "--trim_probes",
+        type=int,
+        default=-1,
+        required=False,
+        help="If > 0, trim the probes to the given length before mapping. This can be useful if the probes have a common sequence at the end that is not expected to be sequenced. If the probe file contains expected gapfills, this will be used to inform the trimming."
     )
     parser.add_argument(
         "-r1", "--read1",
@@ -649,6 +681,7 @@ def main():
 
     run(
         args.probes,
+        args.trim_probes,
         args.read1,
         args.read2,
         args.project,
