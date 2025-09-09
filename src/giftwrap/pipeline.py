@@ -50,6 +50,13 @@ def main():
         help="Path to the generated gap-filling probe set file."
     )
     parser.add_argument(
+        "--trim_probes",
+        type=int,
+        default=-1,
+        required=False,
+        help="If > 0, trim the probes to the given length before mapping. This can be useful if the probes have a common sequence at the end that is not expected to be sequenced. If the probe file contains expected gapfills, this will be used to inform the trimming."
+    )
+    parser.add_argument(
         "-r1", "--read1",
         required=False,
         type=str,
@@ -222,6 +229,7 @@ def main():
             "-c", str(cores),
             "-e", technology
             ]
+            + (['--trim_probes', str(args.trim_probes)] if args.trim_probes > 0 else [])
             + (['--flexible_start_mapping'] if args.flexible_start_mapping else [])
             + (['--tech_def', tech_def] if tech_def is not None else [])
             + (['--overwrite'] if overwrite else [])
