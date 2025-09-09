@@ -5,6 +5,7 @@ os.environ.setdefault("PYTHONWARNINGS", "ignore::FutureWarning")  # inherit to s
 import argparse
 import sys
 from pathlib import Path
+from collections import defaultdict
 
 import h5py
 import numpy as np
@@ -35,7 +36,6 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
     elif final_output.exists():
         final_output.unlink()
 
-
     # Replace the barcode -plex with {probe bc}-1 to match cellranger output
     if multiplex:
         barcodes_df.barcode = barcodes_df.barcode.str.replace(f"-{plex}", f"{_tx_barcode_to_oligo[plex]}-1")
@@ -46,32 +46,91 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
     barcode2h5_idx = {bc: idx for idx, bc in enumerate(barcodes_df.barcode.values)}
 
     if flatten:
-        compile_flatfile(manifest, input, barcodes_df.barcode.values.tolist(), plex, output / f'flat_counts.{plex}.tsv.gz')
+        compile_flatfile(manifest, str(input), barcodes_df.barcode.values.tolist(), plex, str(output / f'flat_counts.{plex}.tsv.gz'))
 
-    # First we must scan for all possible probe id/gap fill combinations
+    # Single pass through file - collect all data at once
+    print("Reading and processing file...", end="")
+
+    # Use defaultdicts for faster accumulation
+    counts_data = defaultdict(int)
+    total_umi_data = defaultdict(int)
+    percent_supporting_data = defaultdict(float)
     possible_probes = set()
-    probe_bcs = set()
-    n_lines = 0  # Track the number of lines for progress tracking later on
-    print("Initial scan for possible probe gapfills...", end="")
+    n_lines = 0
+
+    # Pre-convert plex to int for faster comparison
+    plex_int = int(plex)
+    barcode_h5_indices = set(barcode2h5_idx.values())
+
     with maybe_gzip(input, 'r') as input_file:
         # Skip the header
         next(input_file)
         for line in input_file:
-            cell_idx, probe_idx, probe_bc_idx, umi, gapfill, umi_count, percent_supporting = line.strip().split("\t")
-            if int(cell_idx) not in barcode2h5_idx.values() or int(probe_bc_idx) != plex:
+            cell_idx, probe_idx, probe_bc_idx, umi, gapfill, umi_dup_count, percent_supporting = line.strip().split("\t")
+            cell_idx = int(cell_idx)
+            probe_bc_idx = int(probe_bc_idx)
+
+            # Fast filtering
+            if cell_idx not in barcode_h5_indices or probe_bc_idx != plex_int:
                 continue
-            probe_name = probe_idx2name[int(probe_idx)]
-            possible_probes.add((probe_name, gapfill))
-            probe_bcs.add(probe_bc_idx)
+
+            probe_idx = int(probe_idx)
+            probe_name = probe_idx2name[probe_idx]
+            probe_key = (probe_name, gapfill)
+            possible_probes.add(probe_key)
+
+            # Get barcode directly - avoid double lookup
+            cell_barcode = barcodes_df.iloc[cell_idx].barcode
+            cell_barcode_h5_idx = barcode2h5_idx[cell_barcode]
+
+            # Store data for later matrix construction
+            matrix_key = (cell_barcode_h5_idx, probe_key)
+            counts_data[matrix_key] += 1
+            total_umi_data[matrix_key] += int(umi_dup_count)
+            percent_supporting_data[matrix_key] += float(percent_supporting)
             n_lines += 1
-    print(f"{len(possible_probes)} found.")
 
-    # Now we will define probe/gapfill indices
-    probe2h5_idx = dict()
-    for idx, (probe_name, gapfill) in enumerate(sorted(possible_probes)):  # Sort for readability
-        probe2h5_idx[(probe_name, gapfill)] = idx
+    print(f"{len(possible_probes)} probe combinations found, {n_lines} valid lines processed.")
 
-    # Next we start reading the file
+    # Create probe index mapping
+    probe2h5_idx = {probe_key: idx for idx, probe_key in enumerate(sorted(possible_probes))}
+
+    # Build sparse matrices efficiently using COO format
+    print("Building sparse matrices...", end="")
+    n_cells = len(barcode2h5_idx)
+    n_probes = len(probe2h5_idx)
+
+    # Pre-allocate arrays for COO matrix construction
+    rows = []
+    cols = []
+    counts_vals = []
+    umi_vals = []
+    percent_vals = []
+
+    for (cell_idx, probe_key), count in counts_data.items():
+        probe_idx = probe2h5_idx[probe_key]
+        rows.append(cell_idx)
+        cols.append(probe_idx)
+        counts_vals.append(count)
+        umi_vals.append(total_umi_data[(cell_idx, probe_key)])
+        # Normalize percent supporting by count
+        percent_vals.append(percent_supporting_data[(cell_idx, probe_key)] / count)
+
+    # Convert to numpy arrays for efficiency
+    rows = np.array(rows, dtype=np.int32)
+    cols = np.array(cols, dtype=np.int32)
+    counts_vals = np.array(counts_vals, dtype=np.uint32)
+    umi_vals = np.array(umi_vals, dtype=np.uint32)
+    percent_vals = np.array(percent_vals, dtype=np.float32)
+
+    # Create COO matrices
+    counts_matrix = scipy.sparse.coo_matrix((counts_vals, (rows, cols)), shape=(n_cells, n_probes), dtype=np.uint32)
+    total_umi_dup_matrix = scipy.sparse.coo_matrix((umi_vals, (rows, cols)), shape=(n_cells, n_probes), dtype=np.uint32)
+    percent_supporting_matrix = scipy.sparse.coo_matrix((percent_vals, (rows, cols)), shape=(n_cells, n_probes), dtype=np.float32)
+
+    print("Done.")
+
+    # Next we start writing the file
     with h5py.File(final_output, 'w') as output_file:
         # Prepare groups/datasets based on raw_probe_bc_matrix.h5 returned by cellranger
         matrix_grp = output_file.create_group("matrix")
@@ -96,43 +155,7 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
             cell_metadata_grp.create_dataset(col, data=values, compression='gzip')
         output_file.flush()
 
-        with maybe_gzip(input, 'r') as input_file:
-            # Skip the header
-            next(input_file)
-
-            # lil matrix for fast construction
-            counts_matrix = scipy.sparse.lil_matrix((len(barcode2h5_idx), len(probe2h5_idx)), dtype=np.uint32)
-            total_umi_dup_matrix = scipy.sparse.lil_matrix((len(barcode2h5_idx), len(probe2h5_idx)), dtype=np.uint32)
-            percent_supporting_matrix = scipy.sparse.lil_matrix((len(barcode2h5_idx), len(probe2h5_idx)), dtype=np.float32)
-
-            pbar = tqdm(total=n_lines, desc="Collecting counts", unit="umis")
-            for line in input_file:
-                # Split the line
-                cell_idx, probe_idx, probe_bc_idx, umi, gapfill, umi_dup_count, percent_supporting = line.strip().split("\t")
-                cell_idx = int(cell_idx)
-                probe_idx = int(probe_idx)
-                pbar.update(1)
-                # Check whether we are dealing with the correct plexed umi for this invocation
-                if cell_idx not in barcode2h5_idx.values() or int(probe_bc_idx) != plex:
-                    continue  # Skip this line, should be handled elsewhere
-
-                # Now we need to extract some data to add counts
-                cell_barcode = barcodes_df.iloc[cell_idx].barcode
-                cell_barcode_h5_idx = barcode2h5_idx[cell_barcode]
-                probe_name = probe_idx2name[probe_idx]
-                probe_h5_idx = probe2h5_idx[(probe_name, gapfill)]
-                counts_matrix[cell_barcode_h5_idx, probe_h5_idx] += 1
-                total_umi_dup_matrix[cell_barcode_h5_idx, probe_h5_idx] += int(umi_dup_count)
-                percent_supporting_matrix[cell_barcode_h5_idx, probe_h5_idx] += float(percent_supporting)
-            pbar.close()
-
         print("Writing counts...", end="")
-        # Save the counts matrix
-        # Normalize the percent supporting matrix
-        # percent_supporting_matrix / counts_matrix will give us a non-sparse matrix, so we have to do some trickery
-        # Iterate over the non-zero elements and divide them
-        for (i, j) in zip(*percent_supporting_matrix.nonzero()):
-            percent_supporting_matrix[i, j] /= counts_matrix[i, j]
 
         write_sparse_matrix(matrix_grp, "data", counts_matrix)  # Shuffle for better compression
         output_file.flush()
@@ -164,7 +187,7 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
         output_file.attrs['project'] = output.name
         output_file.attrs['created_date'] = str(pd.Timestamp.now())
         output_file.attrs['n_cells'] = len(barcode2h5_idx)
-        output_file.attrs['n_probes'] = manifest.shape[0]
+        output_file.attrs['n_probes'] = int(manifest.shape[0])
         output_file.attrs['n_probe_gapfill_combinations'] = len(probe2h5_idx)
         print("Done.")
 

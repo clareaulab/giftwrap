@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 from tqdm import tqdm
 from rich_argparse import RichHelpFormatter
+from prefixtrie import PrefixTrie
 
 from .utils import maybe_multiprocess, batched, maybe_gzip, GzipNamedTemporaryFile, phred_string_to_probs, \
     permute_bases, generate_permuted_seqs, compute_max_distance
@@ -34,7 +35,7 @@ def process_lines(lines: list[str], threshold: int, allow_chimeras: bool) -> tup
     # Compute the threshold
     threshold = compute_max_distance(umi_len, threshold)
 
-    all_valid_umis = defaultdict(set)
+    all_valid_umis = defaultdict(lambda: PrefixTrie([], allow_indels=False, immutable=False))
     final_lines = []
     corrected = 0
 
@@ -42,53 +43,19 @@ def process_lines(lines: list[str], threshold: int, allow_chimeras: bool) -> tup
     tracked_umis = defaultdict(lambda: defaultdict(lambda: defaultdict(int)))
     # Next we sort by count and iterate. Note that we remove the quality scores
     for (probe, probe_bc, umi), lines in sorted(probe_umi_to_lines.items(), key=lambda x: (int(x[0][0]), len(x[1])), reverse=True):
-        if len(all_valid_umis[probe_bc]) == 0:  # We have no umis yet, so we have to assume the first one is a real umi
-            all_valid_umis[probe_bc].add(umi)
+        trie = all_valid_umis[probe_bc]
+        corrected_umi, corrections = trie.search(umi, threshold)
+        if corrected_umi is None:  # New umi
+            trie.add(umi)
             final_lines.extend([line[:6] for line in lines])
             tracked_umis[probe_bc][umi][probe] += len(lines)
-            continue
-        elif umi in all_valid_umis[probe_bc]:  # Exact match, so we don't need to do anything
-            final_lines.extend([line[:6] for line in lines])
-            tracked_umis[probe_bc][umi][probe] += len(lines)
-            continue
-        else:  # Now we need to see if there is a fuzzy match
-            # match = rapidfuzz.process.extractOne(
-            #     umi,
-            #     all_valid_umis[probe_bc],
-            #     scorer=rapidfuzz.distance.Levenshtein.distance,
-            #     score_cutoff=threshold
-            # )
-            # if match is None:  # No match
-            # Before promoting this to being a UMI, check the probability of each position being errant
-            # We can do this by checking the umi quality scores
-            qualities = np.array([phred_string_to_probs(line[6]) for line in lines]) # n_lines x n_bases (probability of error)
-            # We can now calculate the probability of the base position being incorrect. Note that these are all
-            # independent events
-            probs = np.prod(qualities, axis=0)
-            # Set all N positions to 100% error
-            probs = np.where(np.array([base == 'N' for base in umi]), 1.0, probs)
-            # Edit up to threshold positions to try finding an exact match
-            found_existing = False
-            for i in range(1, threshold + 1):
-                for permuted_umi in generate_permuted_seqs(umi, probs, i):
-                    if permuted_umi in all_valid_umis[probe_bc]:  # Found a match!
-                        final_lines.extend([line[:5] + [permuted_umi] for line in lines])
-                        corrected += len(lines)
-                        found_existing = True
-                        tracked_umis[probe_bc][permuted_umi][probe] += len(lines)
-                        break
-
-            if not found_existing:  # Still no match, so add to the list if there are no Ns
-                all_valid_umis[probe_bc].add(umi)  # No match, so add to the list
+        else:
+            if corrections > 0:
+                corrected += len(lines)
+                final_lines.extend([line[:5] + [corrected_umi] for line in lines])
+            else:
                 final_lines.extend([line[:6] for line in lines])
-                tracked_umis[probe_bc][umi][probe] += len(lines)
-
-            # else:  # There is a fuzzy match
-            #     match_umi, score, match_umi_index = match
-            #     for line in lines:
-            #         line[5] = match_umi
-            #     final_lines.extend(["\t".join(line[:6]) for line in lines])
-            #     corrected += len(lines)
+            tracked_umis[probe_bc][corrected_umi][probe] += len(lines)
 
     # Now that we have all valid umis, create a list of umis to filter if chimeric
     dropped = 0

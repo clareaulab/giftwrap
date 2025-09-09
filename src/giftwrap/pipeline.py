@@ -173,9 +173,9 @@ def main():
     parser.add_argument(
         "--flexible_start_mapping",
         required=False,
-        type=int,
-        default=0,
-        help="If set with an offset, we no longer assume that the R2 read starts with the LHS probe and that there may be a (-offset) deletion or (+offset) insertion that would need to be trimmed."
+        default=False,
+        action="store_true",
+        help="If set with, we no longer assume that the R2 read starts with the LHS probe and that there may be an insertion that would need to be trimmed."
     )
     args = parser.parse_args()
 
@@ -222,7 +222,7 @@ def main():
             "-c", str(cores),
             "-e", technology
             ]
-            + (['--flexible_start_mapping', str(args.flexible_start_mapping)] if args.flexible_start_mapping > 0 else [])
+            + (['--flexible_start_mapping'] if args.flexible_start_mapping else [])
             + (['--tech_def', tech_def] if tech_def is not None else [])
             + (['--overwrite'] if overwrite else [])
             + (["-r1", read1, "-r2", read2] if project is None else ["--project", project])

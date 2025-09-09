@@ -1,5 +1,8 @@
 import tempfile
 import warnings, os
+from collections import defaultdict
+from enum import Enum
+
 warnings.filterwarnings("ignore", category=FutureWarning)
 os.environ.setdefault("PYTHONWARNINGS", "ignore::FutureWarning")  # inherit to subprocesses
 
@@ -23,326 +26,22 @@ import pandas as pd
 import h5py
 import anndata as ad
 import scipy
-import diskcache as dc
 from Bio.SeqIO.QualityIO import FastqGeneralIterator
 from prefixtrie import PrefixTrie, load_shared_trie, create_shared_trie
 
 
-# class PrefixTree:
-#     """
-#     Dynamically expanding tree (up to N mismatches) of strings based on prefixes.
-#     Note that by default indels are not considered since it would be extremely slow to search.
-#     This is based on the trie data structure.
-#     Note that this supports memory sharing.
-#     """
-#
-#     __slots__ = ['_root', '_size', 'allow_indels', '_cache', '_prefix_only_search', '_next_id']
-#
-#     def __init__(self,
-#                  contents: Iterable[str],
-#                  allow_indels: bool = False,
-#                  prefix_only_search: bool = True):
-#         """
-#         Initialize the tree with a list of contents.
-#         :param contents: The list of contents.
-#         :param allow_indels: Whether to allow insertions/deletions in the search.
-#             Equivalent to edit distance when true, equivalent to hamming distance when false.
-#         :param prefix_only_search: If true, the tree will only allow for insertions at the start of the string. And will attempt to only match the longest prefix in the query.
-#         """
-#         self.allow_indels = allow_indels
-#         self._root = {
-#             '#': 0  # Root node ID, used for caching
-#         }
-#         self._size = 0
-#         self._next_id = 1
-#         self._prefix_only_search = prefix_only_search
-#
-#         # # initialize cache for lookups
-#         # os.makedirs("giftwrap_cache", exist_ok=True)
-#         # _cache_dir = tempfile.mkdtemp(
-#         #     dir="giftwrap_cache",
-#         #     prefix="prefix_tree_cache_"
-#         # )
-#         # self._cache = dc.Cache(
-#         #     directory=_cache_dir,
-#         # )
-#         # self._cache_cache = dict()  # Cache for the cache, to avoid I/O overhead
-#         self._cache = dict()
-#
-#         for content in contents:
-#             self.add(content)
-#
-#     @property
-#     def root(self) -> dict:
-#         return self._root
-#
-#     def add(self, content: str):
-#         """
-#         Add a content to the tree.
-#         """
-#         node = self.root
-#         for char in content:
-#             if char not in node:
-#                 node[char] = {'#': self._next_id}  # Use a unique ID for each node
-#                 self._next_id += 1
-#             node = node[char]
-#         if '$' not in node:  # This end node did not exist yet
-#             node['$'] = content  # Store the full content at the end as a short cut
-#             self._size += 1
-#
-#     # Recursive function to find the best match as fast as possible
-#     # Note that we do not allow for insertions and deletions, only substitutions
-#     # To match spaceranger behavior, we will have to check for errors from first bases down
-#     def _search(self,
-#                 full_content: str,
-#                 curr_node: dict,
-#                 content_index: int,
-#                 max_mismatches: int,
-#                 curr_mismatches: int,
-#                 visited: dict,
-#                 curr_depth: int = 0,
-#                 start_index: int = 0,
-#                 flen: Optional[int] = None) -> Optional[tuple[str, int, int]]:
-#         if flen is None:
-#             flen = len(full_content)
-#         node_id = curr_node['#']
-#         if node_id in visited:  # Already visited this node
-#             if curr_mismatches >= visited[node_id]:  # Skip if we have already visited this node with a better score than is possible
-#                 return None
-#         # Check for end cases
-#         if curr_mismatches > max_mismatches:
-#             # visited[node_id] = max_mismatches+1
-#             return None
-#         if content_index > flen:
-#             # visited[node_id] = max_mismatches+1  # Mark this node as visited
-#             return None
-#         remaining_mismatches = max_mismatches - curr_mismatches
-#
-#         best_score = None
-#         best = None
-#
-#         if content_index == flen:  # We reached the end of the content, is there an end of word here?
-#             if '$' in curr_node:  # This will always be the best match
-#                 # Add to visited
-#                 self._insert_if_better(visited, node_id, curr_mismatches)
-#                 return curr_node['$'], curr_mismatches, start_index
-#             elif not (self.allow_indels and remaining_mismatches <= 0):  # Stop early if we can't insert/delete
-#                 visited[node_id] = max_mismatches+1  # Mark this node as visited
-#                 return None  # We have reached the end of the content and have no more mismatches to spare
-#
-#         # See if a match exists or perform mismatches if this is not the end of the content
-#         if content_index < flen:
-#             # First test with no corrections allowed
-#             if full_content[content_index] in curr_node:
-#                 # Continue the search
-#                 res = self._search(full_content,
-#                                    curr_node[full_content[content_index]],
-#                                    content_index + 1,
-#                                    curr_mismatches,  # Don't allow further mismatches
-#                                    curr_mismatches,
-#                                    visited,
-#                                    curr_depth + 1,
-#                                    start_index,
-#                                    flen)
-#                 if res is not None:
-#                     if best_score is None or res[1] < best_score:
-#                         best = res
-#                         best_score = res[1]
-#                     self._insert_if_better(visited, node_id, res[1])
-#                     return best
-#
-#             # No match, try mismatches
-#             for char in curr_node:
-#                 if char == '$':  # End of word, but not end of the query. Continue to see if there are other matches
-#                     continue
-#                 elif char == '#':  # This is the node ID, skip it
-#                     continue
-#                 # Continue the search, but with a mismatch
-#                 res = self._search(full_content, curr_node[char], content_index + 1, max_mismatches, curr_mismatches + (char != full_content[content_index]), visited, curr_depth + 1, start_index, flen)
-#                 if res is not None:
-#                     if best is None or res[1] < best_score:
-#                         best = res
-#                         best_score = res[1]
-#                         # Break early if we have a perfect match with this substitution
-#                         if best_score == curr_mismatches+1:
-#                             break
-#
-#         if best_score is None or best_score > max_mismatches or (self.allow_indels and (best_score - curr_mismatches) > 1):
-#             # No match found, or invalid match found, or the match that was found had more than one mismatch.
-#             # Meaning we can theoretically improve the score with indels
-#             if not self.allow_indels:
-#                 visited[node_id] = max_mismatches+1
-#                 return None  # No need to continue if we don't allow indels
-#
-#             # If we are prefix-matching, the query string may be too long
-#             if self.allow_indels and self._prefix_only_search:
-#                 if '$' in curr_node and curr_mismatches <= max_mismatches:
-#                     # By this point, we should have already found a match if it existed
-#                     self._insert_if_better(visited, node_id, curr_mismatches)
-#                     return curr_node['$'], curr_mismatches, start_index
-#                 elif curr_depth == 0:  # This is the top-level, try removing the current position without penalty, but reduce the number of further mismatches
-#                     res = self._search(full_content[1:], curr_node, content_index, max_mismatches-1, curr_mismatches, visited, curr_depth, start_index + 1, flen-1)
-#                     if res is not None:
-#                         if best is None or res[1] < best_score:
-#                             best = res
-#                             best_score = res[1]
-#                         # Break early if we have a perfect match with this deletion
-#                         if best_score == curr_mismatches:
-#                             self._insert_if_better(visited, node_id, best_score)
-#                             return best
-#             else:
-#                 # First test deleting this position (i.e. the string has an insertion)
-#                 res = self._search(full_content, curr_node, content_index + 1, max_mismatches, curr_mismatches + 1, visited, curr_depth + 1, start_index, flen)  # Not updating start index since we are considering this an error
-#                 if res is not None:
-#                     if best is None or res[1] < best_score:
-#                         best = res
-#                         best_score = res[1]
-#                     # Break early if we have a perfect match with this deletion
-#                     if best_score == curr_mismatches+1:
-#                         self._insert_if_better(visited, node_id, best_score)
-#                         return best
-#
-#                 # Now test inserting a character
-#                 for char in curr_node:
-#                     if char == '$':
-#                         continue
-#                     elif char == '#':
-#                         continue
-#                     res = self._search(full_content, curr_node[char], content_index, max_mismatches, curr_mismatches + 1, visited, curr_depth + 1, start_index, flen)
-#                     if res is not None:
-#                         if best is None or res[1] < best_score:
-#                             best = res
-#                             best_score = res[1]
-#                         # Break early if we have a perfect match with this insertion
-#                         if best_score == curr_mismatches+1:
-#                             self._insert_if_better(visited, node_id, best_score)
-#                             return best
-#
-#         self._insert_if_better(visited, node_id, best_score)
-#
-#         return best
-#
-#     def search(self, content: str, max_mismatches: int) -> Optional[tuple[str, int, int]]:
-#         """
-#         Search the tree for a content with a maximum number of mismatches.
-#
-#         Returns None if no content is found with the given number of mismatches.
-#         Else returns a tuple of: Corrected Content, Number of Mismatches, Start Index within the Given String the match begins on
-#         """
-#         cached = self._cache.get((content, max_mismatches), -1)
-#         if cached != -1:
-#             return cached
-#
-#         res = self._search(content, self.root, 0, max_mismatches, 0, dict())
-#
-#         self._cache[(content, max_mismatches)] = res
-#
-#         if res is not None and res[1] <= max_mismatches:
-#             return res
-#         return None
-#
-#     @staticmethod
-#     def _insert_if_better(dictionary, key, value):
-#         if value is None:
-#             return False
-#
-#         if key not in dictionary:
-#             dictionary[key] = value
-#             return True
-#         elif value < dictionary[key]:
-#             dictionary[key] = value
-#             return True
-#         return False
-#
-#     def __contains__(self, content: str) -> bool:
-#         """
-#         Check if exact content is in the tree.
-#         """
-#         node = self.root
-#         for char in content:
-#             if char not in node:
-#                 return False
-#             node = node[char]
-#         return '$' in node
-#
-#     def values(self) -> list[str]:
-#         """
-#         Return all values in the tree.
-#         """
-#         vals = []
-#         self._values(self.root, vals)
-#         return vals
-#
-#     def _values(self, node: dict, vals: list[str]):
-#         """
-#         Recursively extract all values from the tree.
-#         """
-#         if '$' in node:
-#             vals.append(node['$'])
-#         for char in node:
-#             if char == '$':
-#                 continue
-#             self._values(node[char], vals)
-#
-#     def size(self) -> int:
-#         return self._size
-#
-#     def __len__(self):
-#         return self.size()
-#
-#
-# class SequentialPrefixTree(PrefixTree):
-#     """
-#     A prefix tree that can be searched sequentially. I.e. for matching pairs of barcodes.
-#     """
-#
-#     def __init__(self, trees: list[PrefixTree]):
-#         """
-#         Initialize a prefix tree which sequentially matches strings.
-#         :param trees: The trees to use.
-#         """
-#         assert len(trees) > 1, "Must have at least two trees."
-#         assert all([tree._prefix_only_search for tree in trees]), "All trees must be prefix only search."
-#         self._trees = trees
-#         super().__init__([], allow_indels=trees[0].allow_indels, prefix_only_search=trees[0]._prefix_only_search)
-#         self._size = math.prod(map(len, trees))
-#
-#     def values(self) -> list[str]:
-#         """
-#         Return all values in the tree.
-#         """
-#         return list(itertools.product(*[tree.values() for tree in self._trees]))
-#
-#     def search(self, content: str, max_mismatches: int) -> Optional[tuple[str, int, int]]:
-#         curr_content = content
-#         corrected_content = ""
-#         remaining_mismatches = max_mismatches
-#         first_start = None
-#         for tree in self._trees:
-#             if len(curr_content) == 0 or remaining_mismatches < 0:
-#                 return None
-#             res = tree.search(curr_content, remaining_mismatches)
-#             if res is None:
-#                 return None
-#             corrected_content += res[0]
-#             remaining_mismatches -= res[1]
-#             curr_content = curr_content[res[2] + len(res[0]):]
-#             if first_start is None:
-#                 first_start = res[2]
-#
-#         return corrected_content, max_mismatches - remaining_mismatches, first_start
-#
-#     # These functions don't make sense here:
-#
-#     @property
-#     def root(self):
-#         raise NotImplementedError()
-#
-#     def add(self, content: str):
-#         raise NotImplementedError()
-#
-#     def __contains__(self, content: str) -> bool:
-#         raise NotImplementedError()  # TODO
+class ReadProcessState(Enum):
+    FILTERED_NO_CONSTANT = 0
+    FILTERED_NO_RHS = 1
+    FILTERED_NO_LHS = 2
+    FILTERED_NO_PROBE_BARCODE = 3
+    FILTERED_NO_CELL_BARCODE = 4
+    FILTERED_INCORRECT_PROBE_BARCODE = 5
+    CORRECTED_RHS = 6
+    CORRECTED_LHS = 7
+    CORRECTED_BARCODE = 8
+    EXACT = 9
+    TOTAL_READS = 10  # Placeholder so that we can count the total number of reads
 
 
 #Based on: https://docs.python.org/3/library/itertools.html#itertools.batched
@@ -1307,6 +1006,227 @@ class VisiumHDFormatInfo(TechnologyFormatInfo):
                     return best_bc, best_bc_corrections
         # No matches found, return None
         return None, -1
+
+
+class ProbeParser:
+
+    def __init__(self,
+                 lhs_seqs: list[str],
+                 rhs_seqs: list[str],
+                 names: list[str],
+                 tech: TechnologyFormatInfo,
+                 probe_bcs: Optional[list[int]] = None,  # Indices of the probe barcodes corresponding to the sequences (1-indexed)
+                 allow_indels: bool = False):
+        self.lhs_seqs = lhs_seqs
+        self.rhs_seqs = rhs_seqs
+        self.names = names
+
+        # Deduplicate sequences and map back to pairings
+        self.deduped_lhs = defaultdict(set)
+        self.deduped_rhs = defaultdict(set)
+        self.lhs_lens = list(sorted(set(len(seq) for seq in lhs_seqs), reverse=True))
+        self.rhs_lens = list(sorted(set(len(seq) for seq in rhs_seqs), reverse=True))
+        self.lhs_lens_differ = len(self.lhs_lens) > 1
+        self.rhs_lens_differ = len(self.rhs_lens) > 1
+        for i, (lhs, rhs) in enumerate(zip(lhs_seqs, rhs_seqs)):
+            self.deduped_lhs[lhs].add(i)
+            self.deduped_rhs[rhs].add(i)
+
+        # Create prefix tries for fast searching
+        # self.lhs_trie = PrefixTrie(list(self.deduped_lhs.keys()), allow_indels=allow_indels)
+        # self.rhs_trie = PrefixTrie(list(self.deduped_rhs.keys()), allow_indels=allow_indels)
+        self.lhs_trie, self._lhs_trie_name = create_shared_trie(list(self.deduped_lhs.keys()), allow_indels=allow_indels)
+        self.rhs_trie, self._rhs_trie_name = create_shared_trie(list(self.deduped_rhs.keys()), allow_indels=allow_indels)
+        self.constant_seq_trie = None
+        self._constant_seq_trie_name = None
+        self.probe_bc_trie = None
+        self._probe_bc_trie_name = None
+
+        self.has_constant_seq = tech.has_constant_sequence
+        if self.has_constant_seq:
+            self.constant_seq = tech.constant_sequence
+            self.constant_seq_start = tech.constant_sequence_start
+            # Create a trie for the constant sequence
+            # self.constant_seq_trie = PrefixTrie([self.constant_seq], allow_indels=allow_indels)
+            self.constant_seq_trie, self._constant_seq_trie_name = create_shared_trie([self.constant_seq], allow_indels=allow_indels)
+        else:
+            self.constant_seq = None
+            self.constant_seq_start = None
+
+        self.probe_bcs = probe_bcs
+        self.has_probe_bc = tech.has_probe_barcode and probe_bcs is not None and len(probe_bcs) > 0
+        if self.has_probe_bc:
+            self.probe_bc_start = tech.probe_barcode_start
+            self.probe_bc_length = tech.probe_barcode_length
+            # self.probe_bc_trie = PrefixTrie([tech.probe_barcodes[i-1] for i in probe_bcs], allow_indels=allow_indels)
+            self.probe_bc_trie, self._probe_bc_trie_name = create_shared_trie([tech.probe_barcodes[i-1] for i in probe_bcs], allow_indels=allow_indels)
+        else:
+            self.probe_bc_start = None
+            self.probe_bc_length = None
+
+    def __getstate__(self):
+        state = dict()
+        state['_lhs_trie_name'] = self._lhs_trie_name
+        state['_rhs_trie_name'] = self._rhs_trie_name
+        state['_constant_seq_trie_name'] = self._constant_seq_trie_name
+        state['_probe_bc_trie_name'] = self._probe_bc_trie_name
+        state['lhs_seqs'] = self.lhs_seqs
+        state['rhs_seqs'] = self.rhs_seqs
+        state['names'] = self.names
+        state['deduped_lhs'] = self.deduped_lhs
+        state['deduped_rhs'] = self.deduped_rhs
+        state['lhs_lens'] = self.lhs_lens
+        state['rhs_lens'] = self.rhs_lens
+        state['lhs_lens_differ'] = self.lhs_lens_differ
+        state['rhs_lens_differ'] = self.rhs_lens_differ
+        state['has_constant_seq'] = self.has_constant_seq
+        state['constant_seq'] = self.constant_seq
+        state['constant_seq_start'] = self.constant_seq_start
+        state['probe_bcs'] = self.probe_bcs
+        state['probe_bc_start'] = self.probe_bc_start
+        state['probe_bc_length'] = self.probe_bc_length
+        state['has_probe_bc'] = self.has_probe_bc
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self.lhs_trie = load_shared_trie(self._lhs_trie_name)
+        self.rhs_trie = load_shared_trie(self._rhs_trie_name)
+        if self.has_constant_seq:
+            self.constant_seq_trie = load_shared_trie(self._constant_seq_trie_name)
+        if self.has_probe_bc:
+            self.probe_bc_trie = load_shared_trie(self._probe_bc_trie_name)
+
+    def _compute_max_distance(self, string_length: int, max_mismatches: int) -> int:
+        # Compute the maximum distance allowed based on the length of the string
+        return max(1, (string_length * max_mismatches) // 10)
+
+    @functools.lru_cache(maxsize=250_000)
+    def parse_probe(self, read2: str,
+                    max_mismatches: int,
+                    skip_constant_seq: bool = False,
+                    flexible_start: bool = False) -> tuple[Optional[int], Optional[int], Optional[int], Optional[str], Optional[str], list[ReadProcessState]]:
+        """
+        From the given read2 sequence, parse the probe, gapfill, probe bc, and process states.
+        :param read2: The R2 sequence to parse.
+        :param max_mismatches: The maximum number of mismatches to allow per 10bp.p
+        :param skip_constant_seq: If True, do not filter out reads that do not have the constant sequence.
+        :param flexible_start: If True, allow for flexible start positions for the LHS sequence (i.e. not anchored to the start of the read).
+        :return: The probe index, gapfill sequence, gapfill_start, gapfill_end, probe barcode, and process states.
+        """
+        state = [ReadProcessState.TOTAL_READS]
+        if flexible_start:
+            lhs, lhs_corrections, lhs_start, lhs_end = self.lhs_trie.search_substring(read2, self._compute_max_distance(max(self.lhs_lens), max_mismatches))
+            if lhs is None:
+                state.append(ReadProcessState.FILTERED_NO_LHS)
+                return None, None, None, None, None, state
+            if lhs_corrections > 0:
+                state.append(ReadProcessState.CORRECTED_LHS)
+            # Remove the lhs from the read
+            read2 = read2[lhs_end:]
+        else:
+            # First, identify if the LHS is present
+            if self.lhs_lens_differ:
+                # Try matching from longest to shortest
+                lhs = None
+                for lhs_len in self.lhs_lens:
+                    if lhs_len > len(read2):
+                        continue
+                    possible_lhs = read2[0:lhs_len]
+                    lhs, lhs_corrections = self.lhs_trie.search(possible_lhs, self._compute_max_distance(len(possible_lhs), max_mismatches))
+                    if lhs is not None:
+                        if lhs_corrections > 0:
+                            state.append(ReadProcessState.CORRECTED_LHS)
+                        break
+                if lhs is None:
+                    state.append(ReadProcessState.FILTERED_NO_LHS)
+                    return None, None, None, None, None, state
+            else:
+                # Single search
+                possible_lhs = read2[0:self.lhs_lens[0]]
+                lhs, lhs_corrections = self.lhs_trie.search(possible_lhs, self._compute_max_distance(len(possible_lhs), max_mismatches))
+                if lhs is None:
+                    state.append(ReadProcessState.FILTERED_NO_LHS)
+                    return None, None, None, None, None, state
+                if lhs_corrections > 0:
+                    state.append(ReadProcessState.CORRECTED_LHS)
+
+            # Remove the lhs from the read
+            read2 = read2[len(lhs):]
+
+        # Next, check for constant sequence
+        probe_bc = ""
+        rhs_end = None
+        if self.has_constant_seq:
+            search_space = read2[max(self.rhs_lens) + self.constant_seq_start:]
+            # Attempt to find the constant sequence
+            found_string, corrections, constant_seq_start_pos, constant_seq_end_pos = self.constant_seq_trie.search_substring(search_space, self._compute_max_distance(len(self.constant_seq), max_mismatches))
+
+            if found_string is None:  # Could not find constant seq. Possible that it was cutoff, so lets find the best prefix match
+                # We need at least 1/2 of the constant sequence to consider it a match
+                min_constant_len = len(self.constant_seq) // 2
+                found_string, constant_seq_start_pos, match_len = self.constant_seq_trie.longest_prefix_match(search_space, min_constant_len, self._compute_max_distance(len(self.constant_seq), max_mismatches))
+
+                if found_string is None and not skip_constant_seq:
+                    state.append(ReadProcessState.FILTERED_NO_CONSTANT)
+                    return None, None, None, None, None, state
+                else:
+                    constant_seq_end_pos = constant_seq_start_pos + match_len
+            if found_string is not None:
+                # Adjust the positions to be relative to the original read2
+                constant_seq_start_pos += len(read2) - len(search_space)
+                constant_seq_end_pos += len(read2) - len(search_space)
+                rhs_end = constant_seq_start_pos - self.constant_seq_start
+
+                if self.has_probe_bc:
+                    possible_probe_bc = read2[constant_seq_end_pos + self.probe_bc_start:constant_seq_end_pos + self.probe_bc_start + self.probe_bc_length]
+                    if len(possible_probe_bc) == 0:
+                        state.append(ReadProcessState.FILTERED_NO_PROBE_BARCODE)
+                        return None, None, None, None, None, state
+                    probe_bc, probe_bc_corrections = self.probe_bc_trie.search(possible_probe_bc, self._compute_max_distance(len(possible_probe_bc), max_mismatches))
+                    if probe_bc is None:
+                        if len(possible_probe_bc) < self.probe_bc_length:  # Try prefix search
+                            probe_bc, probe_bc_start, match_len = self.probe_bc_trie.longest_prefix_match(possible_probe_bc, min_match_length=self.probe_bc_length//2, correction_budget=self._compute_max_distance(len(possible_probe_bc), max_mismatches))
+                        if probe_bc is None:
+                            state.append(ReadProcessState.FILTERED_NO_PROBE_BARCODE)
+                            return None, None, None, None, None, state
+        else:  # No need to search for constant sequence and probe bc
+            rhs_end = len(read2)
+
+        # Now we try to match the RHS
+        read2 = read2[:rhs_end]
+
+        # Short circuit cases:
+        if len(read2) < min(self.rhs_lens):  # Impossible to have the full RHS
+            # Search for the RHS with a prefix match
+            rhs, rhs_start, match_len = self.rhs_trie.longest_prefix_match(read2, min_match_length=min(self.rhs_lens)//2, correction_budget=self._compute_max_distance(max(self.rhs_lens), max_mismatches))
+            if rhs is None:
+                state.append(ReadProcessState.FILTERED_NO_RHS)
+                return None, None, None, None, None, state
+            if rhs != read2[rhs_start:rhs_start+match_len]:
+                state.append(ReadProcessState.CORRECTED_RHS)
+        else:
+            rhs, rhs_corrections, rhs_start, rhs_end = self.rhs_trie.search_substring(read2, self._compute_max_distance(max(self.rhs_lens), max_mismatches))
+            if rhs is None:
+                state.append(ReadProcessState.FILTERED_NO_RHS)
+                return None, None, None, None, None, state
+            if rhs_corrections > 0:
+                state.append(ReadProcessState.CORRECTED_RHS)
+
+        # extract the gapfill
+        gapfill = read2[:rhs_start]
+
+        possible_lhs_indices = self.deduped_lhs[lhs]
+        possible_rhs_indices = self.deduped_rhs[rhs]
+
+        possible_indices = possible_lhs_indices.intersection(possible_rhs_indices)
+        if len(possible_indices) == 0:
+            state.append(ReadProcessState.FILTERED_NO_RHS)
+            return None, None, None, None, None, state
+
+        probe_idx = possible_indices.pop()
+
+        return probe_idx, gapfill, len(lhs), len(lhs) + rhs_start, probe_bc, state
 
 
 def read_barcodes(output_dir: Path) -> pd.DataFrame:

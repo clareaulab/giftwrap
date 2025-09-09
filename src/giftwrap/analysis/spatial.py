@@ -97,14 +97,24 @@ def bin(adata: ad.AnnData, resolution: int = 8) -> ad.AnnData:
 
     # Build obs_names for each unique bin
     obs_names = []
+    array_col = []
+    array_row = []
     for b in unique_bins:
         new_y = b // new_ncol
         new_x = b % new_ncol
         obs_names.append(f's_{resolution:03d}um_{new_y:05d}_{new_x:05d}-1')
+        array_col.append(new_x)
+        array_row.append(new_y)
 
     new_adata = ad.AnnData(
         X=X_summed,
-        obs=pd.DataFrame(index=obs_names),
+        obs=pd.DataFrame(
+            index=obs_names,
+            data={
+                'array_col': array_col,
+                'array_row': array_row
+            }
+        ),
         var=adata.var.copy(),
         varm=adata.varm.copy(),
         uns=dict(adata.uns)
@@ -182,7 +192,7 @@ def plot_genotypes(sdata: 'sd.SpatialData',
 
     ax = sdata.pl.render_images(f"{dataset_id}_{image_name}", alpha=0.8) \
         .pl.render_shapes(element=f'{dataset_id}_{res_name}', color='giftwrap_genotype', method='matplotlib', na_color=None) \
-        .pl.show(coordinate_systems="global", figsize=(25, 25), na_in_legend=False, title=probe, return_ax=True)
+        .pl.show(coordinate_systems="", figsize=(25, 25), na_in_legend=False, title=probe, return_ax=True)
 
     del sdata[res_name].obs['giftwrap_genotype']
 
@@ -290,7 +300,7 @@ def impute_genotypes(sdata: 'sd.SpatialData',
                      k: int = None,
                      threshold: float = None,
                      impute_all: bool = None,
-                     hold_out: bool = None,
+                     hold_out: float = None,
                      cores: int = None
                      ) -> 'sd.SpatialData':
     """
@@ -303,7 +313,7 @@ def impute_genotypes(sdata: 'sd.SpatialData',
     :param threshold: The threshold to use for imputation. If None, uses the default value from giftwrap.tl.impute_genotypes.
     :param impute_all: If True, will impute all genotypes, even those that are already called. If False, will only
         impute genotypes that are not already called. If None, uses the default value from giftwrap.tl.impute_genotypes.
-    :param hold_out: If True, will hold out a portion of the data for validation. If False, will not hold out any data.
+    :param hold_out: The fraction of data to hold out for validation.
         If None, uses the default value from giftwrap.tl.impute_genotypes.
     :param cores: The number of cores to use for imputation. If None, uses the default value from giftwrap.tl.impute_genotypes.
     :return: The updated SpatialData object with the imputed genotypes.
