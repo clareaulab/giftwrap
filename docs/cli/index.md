@@ -14,4 +14,3 @@ description: A reference guide for the `giftwrap` command line interface (CLI) f
 8. [giftwrap-generate-tech](giftwrap_generate_tech.md): Command for generating a scaffold for a new GIFT-seq technology design. See the [Extending GIFTwrap tutorial](../tutorials/extending_giftwrap.md) for more information on how to use this command.
 9. [giftwrap-convert-probes](giftwrap_convert_probes.md): Converts a 10X Cell Ranger probe set to a GIFTwrap-compatible probe set file.
 10. [giftwrap-revert-probes](giftwrap_revert_probes.md): Converts a GIFTwrap-compatible probe set file to a 10X Cell Ranger probe set. This can be useful for comparing to ranger-processed data.
-11. [giftwrap-diagnostic](giftwrap_diagnostic.md): Command to quickly parse reads without any corrections/processing to check for issues with the sequencing data.

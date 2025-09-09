@@ -9,77 +9,126 @@ import gzip
 import shutil
 import sys
 from collections import namedtuple, Counter
-from enum import Enum
 from pathlib import Path
 from typing import Optional
 
-import numpy as np
 import pandas as pd
 from tqdm import tqdm
-import fuzzysearch
-import rapidfuzz
 from rich_argparse import RichHelpFormatter
 
 from .utils import maybe_multiprocess, batched, read_manifest, sort_tsv_file, FlexFormatInfo, VisiumHDFormatInfo, \
-    VisiumFormatInfo, TechnologyFormatInfo, phred_string_to_probs, compute_max_distance, read_probes_input, read_fastqs
-
-
-# Enum for possible states
-class ReadProcessState(Enum):
-    FILTERED_NO_CONSTANT = 0
-    FILTERED_NO_RHS = 1
-    FILTERED_NO_LHS = 2
-    FILTERED_NO_PROBE_BARCODE = 3
-    FILTERED_NO_CELL_BARCODE = 4
-    FILTERED_INCORRECT_PROBE_BARCODE = 5
-    CORRECTED_RHS = 6
-    CORRECTED_LHS = 7
-    CORRECTED_BARCODE = 8
-    EXACT = 9
-    TOTAL_READS = 10  # Placeholder so that we can count the total number of reads
-
+    VisiumFormatInfo, TechnologyFormatInfo, compute_max_distance, read_probes_input, read_fastqs, \
+    ReadProcessState, ProbeParser
 
 ReadData = namedtuple("ReadData", ["probe_id", "probe_barcode", "gapfill", "gapfill_quality", "cell_barcode", "umi", "umi_quality", "coordinate_x", "coordinate_y"])
 
 
-def process_reads(reads,
-                 rhs_seqs, lhs_seqs,
-                 lhs_seq2potential_rhs_seqs,
-                 tech_info: TechnologyFormatInfo, names,
-                 max_distance,
-                 min_lhs_probe_size, min_rhs_probe_size,
-                 max_lhs_probe_size, max_rhs_probe_size,
-                 multiplex, barcode, allow_indels,
-                 skip_constant_seq, unmapped_reads_prefix,
-                 flexible_start_mapping) -> list[tuple[list[ReadProcessState], Optional[ReadData]]]:
-    if allow_indels:  # If allow indels, levenshtein distance is used
-        def fuzzysearch_fn(subsequence, sequence, dist):
-            return fuzzysearch.find_near_matches(subsequence, sequence, max_l_dist=dist)
-    else:  # If not, we use the hamming distance
-        def fuzzysearch_fn(subsequence, sequence, dist):
-            return fuzzysearch.find_near_matches(subsequence, sequence, max_substitutions=dist, max_insertions=0, max_deletions=0)
-    fuzzysearch_fn = functools.lru_cache(maxsize=len(reads) // 2)(fuzzysearch_fn)
-
+def process_reads(reads: list[tuple[tuple[str, str, str], tuple[str, str, str]]],
+                  tech_info: TechnologyFormatInfo,
+                  probe_parser: ProbeParser,
+                  max_distance: int,
+                  skip_constant_seq: bool,
+                  unmapped_reads_prefix: Optional[str],
+                  flexible_start: bool) -> list[tuple[list[ReadProcessState], Optional[ReadData]]]:
     unmapped = []
     results = []
     for (r1, r2) in reads:
-        res = process_read(r1, r2, rhs_seqs, lhs_seqs, lhs_seq2potential_rhs_seqs, tech_info, names, max_distance,
-                         min_lhs_probe_size, min_rhs_probe_size, max_lhs_probe_size, max_rhs_probe_size, multiplex,
-                         barcode, skip_constant_seq, unmapped_reads_prefix, flexible_start_mapping, fuzzysearch_fn)
+        ((r1_title, r1_seq, r1_quality), (r2_title, r2_seq, r2_quality)) = r1, r2
+        if tech_info.read1_length is None:
+            r1_len = len(r1_seq)
+        else:
+            r1_len = tech_info.read1_length
+        if tech_info.read2_length is None:
+            r2_len = len(r2_seq)
+        else:
+            r2_len = tech_info.read2_length
 
-        reasons = res[0]
-        data = res[1]
-        if data is None:  # Unmapped read
-            unmapped.append((reasons[-1], r1, r2))
+        r1_seq = r1_seq[:r1_len]
+        r1_quality = r1_quality[:r1_len]
 
-        results.append((reasons, data))
+        r2_seq = r2_seq[:r2_len]
+        r2_quality = r2_quality[:r2_len]
+
+        probe_idx, gap_seq, gap_start, gap_end, probe_bc, states = probe_parser.parse_probe(
+            r2_seq, max_distance, skip_constant_seq, flexible_start
+        )
+
+        if probe_idx is None:  # Failed to parse R2
+            results.append(
+                (states, None)
+            )
+            unmapped.append((states[-1], r1, r2))
+            continue
+
+        # Now that we have parsed R2, we need to parse R1
+        umi = r1_seq[tech_info.umi_start:tech_info.umi_start + tech_info.umi_length]
+        umi_quality = r1_quality[tech_info.umi_start:tech_info.umi_start + tech_info.umi_length]
+        # Prune out the umi
+        if tech_info.umi_start < tech_info.cell_barcode_start:
+            # Cell barcode is after the UMI, so we can ignore the umi
+            start_idx = tech_info.cell_barcode_start
+            end_idx = tech_info.cell_barcode_start + tech_info.max_cell_barcode_length
+            # cell_barcode = r1_seq[tech_info.cell_barcode_start:tech_info.cell_barcode_start+tech_info.max_cell_barcode_length]
+            # cell_barcode_quality = r1_quality[tech_info.cell_barcode_start:tech_info.cell_barcode_start+tech_info.max_cell_barcode_length]
+        else:
+            # Cell barcode is before the UMI, so we need to extract from before the umi
+            start_idx = tech_info.cell_barcode_start
+            end_idx = tech_info.cell_barcode_start + tech_info.max_cell_barcode_length
+            # cell_barcode = r1_seq[tech_info.cell_barcode_start:tech_info.umi_start]
+            # cell_barcode_quality = r1_quality[tech_info.cell_barcode_start:tech_info.umi_start]
+
+        cell_barcode, corrections = tech_info.correct_barcode(r1_seq,
+                                                                compute_max_distance(end_idx - start_idx, max_distance),
+                                                                start_idx,
+                                                                end_idx,
+                                                                )
+
+        if cell_barcode is None:
+            results.append(
+                (states + [ReadProcessState.FILTERED_NO_CELL_BARCODE], None)
+            )
+            unmapped.append((ReadProcessState.FILTERED_NO_CELL_BARCODE, r1, r2))
+            continue
+
+        if corrections > 0:
+            states.append(ReadProcessState.CORRECTED_BARCODE)
+
+        if len(states) == 1:  # Should be equal to one because of the TOTAL_READS state
+            states.append(ReadProcessState.EXACT)
+
+        coordinate_x = None
+        coordinate_y = None
+        if tech_info.is_spatial:
+            coordinate_x, coordinate_y = tech_info.barcode2coordinates(cell_barcode)
+
+        results.append((
+            states,
+            ReadData(
+                probe_idx, probe_bc, gap_seq, r2_quality[gap_start:gap_end], cell_barcode, umi, umi_quality, coordinate_x, coordinate_y
+            )
+        ))
+    #
+    # unmapped = []
+    # results = []
+    # for (r1, r2) in reads:
+    #     res = process_read(r1, r2, rhs_seqs, lhs_seqs, lhs_seq2potential_rhs_seqs, tech_info, names, max_distance,
+    #                      min_lhs_probe_size, min_rhs_probe_size, max_lhs_probe_size, max_rhs_probe_size, multiplex,
+    #                      barcode, skip_constant_seq, unmapped_reads_prefix, flexible_start_mapping, fuzzysearch_fn)
+    #
+    #     reasons = res[0]
+    #     data = res[1]
+    #     if data is None:  # Unmapped read
+    #         unmapped.append((reasons[-1], r1, r2))
+    #
+    #     results.append((reasons, data))
 
     save_unmapped_data(unmapped_reads_prefix, unmapped)
 
     return results
 
 
-def save_unmapped_data(prefix, unmapped: list[tuple[ReadProcessState, tuple[tuple[str, str, str],tuple[str, str, str]]]]):
+def save_unmapped_data(prefix, unmapped: list[tuple[
+    ReadProcessState, tuple[tuple[str, str, str],tuple[str, str, str]]]]):
     """
     Add unmapped reads to fastq. And tag them with the reason. To deal with asynchronous writing, we will write to temp
     files and then concatenate them at the end.
@@ -139,337 +188,28 @@ def collect_unmapped_fastq(unmapped_reads_prefix):
     print("Done.")
 
 
-def process_read(r1, r2,
-                 rhs_seqs, lhs_seqs,
-                 lhs_seq2potential_rhs_seqs,
-                 tech_info: TechnologyFormatInfo, names,
-                 max_distance,
-                 min_lhs_probe_size, min_rhs_probe_size,
-                 max_lhs_probe_size, max_rhs_probe_size,
-                 multiplex, barcode, skip_constant_seq,
-                 unmapped_reads_prefix, flexible_start_mapping,
-                 fuzzysearch_fn) -> tuple[list[ReadProcessState], Optional[ReadData]]:
-    ((r1_title, r1_seq, r1_quality), (r2_title, r2_seq, r2_quality)) = r1, r2
-    if tech_info.read1_length is None:
-        r1_len = len(r1_seq)
-    else:
-        r1_len = tech_info.read1_length
-    if tech_info.read2_length is None:
-        r2_len = len(r2_seq)
-    else:
-        r2_len = tech_info.read2_length
-
-    r1_seq = r1_seq[:r1_len]
-    r1_quality = r1_quality[:r1_len]
-
-    r2_seq = r2_seq[:r2_len]
-    r2_quality = r2_quality[:r2_len]
-
-    states = [ReadProcessState.TOTAL_READS]
-
-    lhs_probes_sizes_differ = min_lhs_probe_size != max_lhs_probe_size
-    rhs_probes_sizes_differ = min_rhs_probe_size != max_rhs_probe_size
-
-    # First identify the LHS probe
-    match = None
-    if lhs_probes_sizes_differ:
-        # We need to do a more expensive search since the probe size differences
-        # will lead to inflated edit distances
-
-        # Greedy search from longest possible probe size to shortest
-        best_score = None
-        for size in range(max_lhs_probe_size, min_lhs_probe_size-1, -1):
-            potential_lhs_search_space = r2_seq[:size]
-            potential_match = rapidfuzz.process.extractOne(
-                potential_lhs_search_space,
-                lhs_seqs,
-                scorer=rapidfuzz.distance.Levenshtein.distance,
-                score_cutoff=compute_max_distance(max_lhs_probe_size, max_distance)
-            )
-            if potential_match is not None:
-                if best_score is None or potential_match[1] < best_score:
-                    best_score = potential_match[1]
-                    match = potential_match
-                    match_query = potential_lhs_search_space
-                if best_score == 0:  # Exact match
-                    break
-    else:
-        match_query = r2_seq[:max_lhs_probe_size]
-        match = rapidfuzz.process.extractOne(
-            match_query,
-            lhs_seqs,
-            scorer=rapidfuzz.distance.Levenshtein.distance,
-            score_cutoff=compute_max_distance(max_lhs_probe_size, max_distance)
-        )
-
-    if match is None:  # No match found
-        if flexible_start_mapping != 0:  # We need to search for offset matches
-            for offset in range(1, flexible_start_mapping + 1):
-                # First check if the read is truncated
-                # We will do this by re-processing everything with one base removed from the probes
-                states, data = process_read(
-                    r1, r2,
-                    rhs_seqs, [lhs[offset:] for lhs in lhs_seqs],
-                    {lhs[offset:]: potential for lhs, potential in lhs_seq2potential_rhs_seqs.items()},
-                    tech_info,
-                    names, max_distance,
-                    min_lhs_probe_size-1,
-                    min_rhs_probe_size,
-                    max_lhs_probe_size-1,
-                    max_rhs_probe_size,
-                    multiplex, barcode, skip_constant_seq,
-                    unmapped_reads_prefix,
-                    0, fuzzysearch_fn
-                )
-                # If we found a match, we can return it
-                if data is not None:
-                    return states, data
-                elif ReadProcessState.FILTERED_NO_LHS not in states:  # LHS mapped, but there was something else wrong
-                    return states, data
-
-                # Now remove the first base from the r2 sequence and quality
-                states, data = process_read(
-                    r1, r2,
-                    rhs_seqs, [lhs[offset:] for lhs in lhs_seqs],
-                    {lhs[offset:]: potential for lhs, potential in lhs_seq2potential_rhs_seqs.items()},
-                    tech_info,
-                    names, max_distance,
-                    min_lhs_probe_size,
-                    min_rhs_probe_size,
-                    max_lhs_probe_size,
-                    max_rhs_probe_size,
-                    multiplex, barcode, skip_constant_seq,
-                    unmapped_reads_prefix,
-                    0, fuzzysearch_fn
-                )
-                if data is not None:
-                    return states, data
-                elif ReadProcessState.FILTERED_NO_LHS not in states:
-                    return states, data
-
-        return [ReadProcessState.TOTAL_READS, ReadProcessState.FILTERED_NO_LHS], None
-
-    match_size = len(match_query)
-    lhs_probe_idx = match[2]
-
-    if lhs_seqs[lhs_probe_idx] != match_query:
-        states.append(ReadProcessState.CORRECTED_LHS)
-
-    # prune out lhs sequence
-    r2_seq = r2_seq[match_size:]
-    r2_quality = r2_quality[match_size:]
-
-    # Now, search for constant sequence to split the RHS and the probe barcode if it exists
-    probe_barcode = ""
-    if tech_info.has_constant_sequence:
-        # Search for up to half of the constant sequence
-        constant_seq_match = None
-        for const_seq_len in range(len(tech_info.constant_sequence), len(tech_info.constant_sequence) // 2 - 1, -1):
-            # The constant sequence may be truncated
-            constant_seq_search = fuzzysearch_fn(tech_info.constant_sequence[:const_seq_len],
-                                                 r2_seq, compute_max_distance(const_seq_len, max_distance))
-
-            if len(constant_seq_search) > 0:
-                potential_constant_seq_match = sorted(constant_seq_search, key=lambda x: (x.dist, -x.start))[0]
-                if constant_seq_match is None or potential_constant_seq_match.dist < constant_seq_match.dist:
-                    constant_seq_match = potential_constant_seq_match
-
-        if constant_seq_match is None:  # No matches, short circuit
-            if skip_constant_seq:
-                # If we are skipping the constant seq, we will just assume the constant seq is not present
-                rhs_end = len(r2_seq)
-                constant_end = -1
-                has_constant_seq = False
-            else:
-                return [ReadProcessState.TOTAL_READS, ReadProcessState.FILTERED_NO_CONSTANT], None
-        else:
-            has_constant_seq = True
-            # If the gap is too long, the constant seq may be cut off. So we will fuzzy match the first N bases of the
-            # constant seq against the match to get the final distance
-            rhs_end = constant_seq_match.start
-            constant_end = constant_seq_match.end
-
-
-        # Next, if the run is multiplexed or the probe barcode is specified
-        # We will need to search for the probe barcode
-        if has_constant_seq and tech_info.has_probe_barcode and (multiplex > 1 or barcode > 0):
-            probe_bc_search_space = r2_seq[constant_end + tech_info.probe_barcode_start:constant_end + tech_info.probe_barcode_start + tech_info.probe_barcode_length]
-            if len(probe_bc_search_space) == 0:  # Short circuit if there is no probe barcode
-                return [ReadProcessState.TOTAL_READS, ReadProcessState.FILTERED_NO_PROBE_BARCODE], None
-
-            if multiplex <= 1:  # Singleplex, so we search for the specified barcode
-                probe_barcode = tech_info.probe_barcodes[barcode-1]
-                if rapidfuzz.distance.Levenshtein.distance(probe_bc_search_space, probe_barcode) > compute_max_distance(len(probe_bc_search_space), max_distance):
-                    return [ReadProcessState.TOTAL_READS, ReadProcessState.FILTERED_INCORRECT_PROBE_BARCODE], None
-            else:  # Multiplexed, so we need to search for the barcode
-                probe_barcode_match = rapidfuzz.process.extractOne(
-                    probe_bc_search_space,
-                    tech_info.probe_barcodes[:multiplex],
-                    scorer=rapidfuzz.distance.Levenshtein.distance,
-                    score_cutoff=compute_max_distance(len(probe_bc_search_space), max_distance)
-                )
-                if probe_barcode_match is None:
-                    return [ReadProcessState.TOTAL_READS, ReadProcessState.FILTERED_NO_PROBE_BARCODE], None
-                probe_barcode = probe_barcode_match[0]
-        # Else don't verify since we don't need to demultiplex
-        else:
-            probe_barcode = tech_info.probe_barcodes[0]
-        # If we got to here, there was a valid probe bc or no need to check
-    else:
-        # No constant
-        rhs_end = len(r2_seq)
-
-    # Filter out the constant seq + probe bc
-    r2_seq = r2_seq[:rhs_end]
-    r2_quality = r2_quality[:rhs_end]
-
-    def find_rhs_match(sequence, rhs_sequence):
-        # If there is a constant sequence, it was found and therefore we should have the full RHS length
-        rhs_match = None
-        if tech_info.has_constant_sequence:
-            search = fuzzysearch_fn(rhs_sequence, sequence, compute_max_distance(len(rhs_sequence), max_distance))
-            if len(search) > 0:
-                rhs_match = sorted(search, key=lambda x: (x.dist, -x.start))[0]
-        else:  # If these reads have no constant sequence, there is a chance that the RHS is cut off if it is at the end
-            if len(rhs_sequence) < len(r2_seq):  # If the RHS is shorter than the read, we need to allow
-                max_rhs_length = len(r2_seq)
-                # Allow for up to 8mer RHS prefix (This matches our 10x flex constant sequence search)
-                for rhs_len in range(max_rhs_length, 7, -1):
-                    search = fuzzysearch_fn(rhs_sequence[:rhs_len], sequence,
-                                            compute_max_distance(rhs_len, max_distance))
-                    if len(search) == 0:
-                        continue
-                    search = sorted(search, key=lambda x: (x.dist, -x.start))[0]
-                    if rhs_match is None or search.dist < rhs_match.dist:
-                        rhs_match = search
-
-            else:  # RHS is not shorter than the read so we should have the full sequence
-                search = fuzzysearch_fn(rhs_sequence, sequence,
-                                        compute_max_distance(len(rhs_sequence), max_distance))
-                if len(search) > 0:
-                    rhs_match = sorted(search, key=lambda x: (x.dist, -x.start))[0]
-        return rhs_match
-
-    # Now we have to map the RHS probe to the remaining R2 sequence
-    # Since multiple RHS can be mapped to a single LHS, we must search for all possible RHS
-    potential_rhs_seqs = lhs_seq2potential_rhs_seqs[lhs_seqs[lhs_probe_idx]]
-    if len(potential_rhs_seqs) == 1:  # Only one possible RHS
-        potential_rhs_probe_idx, potential_rhs_probe_seq = potential_rhs_seqs[0]
-        # Since there is only one possible RHS, if this doesn't match then this is invalid
-        # Note that if the RHS may be cut off, we need to adjust the search space by allowing for deletions
-        rhs_match = find_rhs_match(r2_seq, potential_rhs_probe_seq)
-
-        if rhs_match is None:  # Short circuit
-            return [ReadProcessState.TOTAL_READS, ReadProcessState.FILTERED_NO_RHS], None
-
-        rhs_idx = potential_rhs_probe_idx
-    else:  # Multiple possible RHS
-        # Find the best match
-        rhs_match = None
-        rhs_idx = None
-        # Repeat the same logic as above
-        for potential_rhs_probe_idx, potential_rhs_probe_seq in potential_rhs_seqs:
-            potential_rhs_match = find_rhs_match(r2_seq, potential_rhs_probe_seq)
-
-            if potential_rhs_match is None:
-                continue
-
-            if rhs_match is None or rhs_match.dist > potential_rhs_match.dist:
-                rhs_match = potential_rhs_match
-                rhs_idx = potential_rhs_probe_idx
-        if rhs_match is None:  # Short circuit
-            return [ReadProcessState.TOTAL_READS, ReadProcessState.FILTERED_NO_RHS], None
-
-    if rhs_seqs[rhs_idx] != r2_seq[rhs_match.start:rhs_match.end]:
-        states.append(ReadProcessState.CORRECTED_RHS)
-
-    # Probe index would be the index of the RHS probe since we eliminated all potential redundancy
-    probe_idx = rhs_idx
-    # Prune out the RHS probe
-    r2_seq = r2_seq[:rhs_match.start]
-    r2_quality = r2_quality[:rhs_match.start]
-
-    # What remains should be the gapfill sequence
-    gapfill_seq = r2_seq
-    gapfill_quality = r2_quality
-
-    # Now that we have parsed R2, we need to parse R1
-    umi = r1_seq[tech_info.umi_start:tech_info.umi_start + tech_info.umi_length]
-    umi_quality = r1_quality[tech_info.umi_start:tech_info.umi_start + tech_info.umi_length]
-    # Prune out the umi
-    if tech_info.umi_start < tech_info.cell_barcode_start:
-        # Cell barcode is after the UMI, so we can ignore the umi
-        start_idx = tech_info.cell_barcode_start
-        end_idx = tech_info.cell_barcode_start + tech_info.max_cell_barcode_length
-        # cell_barcode = r1_seq[tech_info.cell_barcode_start:tech_info.cell_barcode_start+tech_info.max_cell_barcode_length]
-        # cell_barcode_quality = r1_quality[tech_info.cell_barcode_start:tech_info.cell_barcode_start+tech_info.max_cell_barcode_length]
-    else:
-        # Cell barcode is before the UMI, so we need to extract from before the umi
-        start_idx = tech_info.cell_barcode_start
-        end_idx = tech_info.cell_barcode_start + tech_info.max_cell_barcode_length
-        # cell_barcode = r1_seq[tech_info.cell_barcode_start:tech_info.umi_start]
-        # cell_barcode_quality = r1_quality[tech_info.cell_barcode_start:tech_info.umi_start]
-
-    # We have a likely probe. Now we need to correct the barcode
-    # was_corrected, cell_barcode = correct_barcode(cell_barcode,
-    #                                               np.array(phred_string_to_probs(cell_barcode_quality)),
-    #                                               tech_info,
-    #                                               )
-    cell_barcode, corrections = tech_info.correct_barcode(r1_seq,
-                                                            compute_max_distance(end_idx - start_idx, max_distance),
-                                                            start_idx,
-                                                            end_idx,
-                                                            )
-
-    if cell_barcode is None:
-        return [ReadProcessState.TOTAL_READS, ReadProcessState.FILTERED_NO_CELL_BARCODE], None
-
-    if corrections > 0:
-        states.append(ReadProcessState.CORRECTED_BARCODE)
-
-    if len(states) == 1:  # Should be equal to one because of the TOTAL_READS state
-        states.append(ReadProcessState.EXACT)
-
-    coordinate_x = None
-    coordinate_y = None
-    if tech_info.is_spatial:
-        coordinate_x, coordinate_y = tech_info.barcode2coordinates(cell_barcode)
-
-    return states, ReadData(probe_idx, probe_barcode, gapfill_seq, gapfill_quality, cell_barcode, umi, umi_quality, coordinate_x, coordinate_y)
-
-
 def search_files(read1s, read2s, output_dir, tech_info,
                  cores=1, n_reads_per_batch=1_000_000, max_distance=2,
                  multiplex=1, barcode=1, allow_indels=False,
                  skip_constant_seq=False, unmapped_reads_prefix=None,
-                 flexible_start_mapping=False):
+                 flexible_start=False):
     probes = read_manifest(output_dir)
-
-    if unmapped_reads_prefix:
-        unmapped_reads_prefix = os.path.join(output_dir, unmapped_reads_prefix)
 
     lhs_seqs = probes['lhs_probe'].tolist()
     rhs_seqs = probes['rhs_probe'].tolist()
     names = probes['name'].tolist()
+    if multiplex > 1:
+        probe_bcs = list(range(1, multiplex+1))
+    elif barcode > 0:
+        probe_bcs = [barcode]
+    else:
+        probe_bcs = None
+    probe_parser = ProbeParser(
+        lhs_seqs, rhs_seqs, names, tech_info, probe_bcs, allow_indels
+    )
 
-    # Some lhs can map to multiple possible RHS (or vice versa)
-    lhs_seq2potential_rhs_seqs = dict()
-    for lhs_seq, (rhs_i, rhs_seq) in zip(lhs_seqs, enumerate(rhs_seqs)):
-        if lhs_seq not in lhs_seq2potential_rhs_seqs:
-            lhs_seq2potential_rhs_seqs[lhs_seq] = []
-        lhs_seq2potential_rhs_seqs[lhs_seq].append((rhs_i, rhs_seq))
-    # Sort each of the potential RHS by length (Largest first) to make searching attempt to match more difficult sequences first
-    for lhs_seq in lhs_seq2potential_rhs_seqs:
-        lhs_seq2potential_rhs_seqs[lhs_seq] = list(
-            sorted(lhs_seq2potential_rhs_seqs[lhs_seq], key=lambda x: len(x[1]), reverse=True)
-        )
-
-    # For selecting search spaces
-    max_lhs_probe_size = max(len(lhs) for lhs in lhs_seqs)
-    max_rhs_probe_size = max(len(rhs) for rhs in rhs_seqs)
-    # If probe sizes are all the same we can short-circuit the search
-    min_lhs_probe_size = min(len(lhs) for lhs in lhs_seqs)
-    min_rhs_probe_size = min(len(rhs) for rhs in rhs_seqs)
+    if unmapped_reads_prefix:
+        unmapped_reads_prefix = os.path.join(output_dir, unmapped_reads_prefix)
 
     read1_iterator, read2_iterator = read_fastqs(read1s, read2s)
 
@@ -530,22 +270,12 @@ def search_files(read1s, read2s, output_dir, tech_info,
                     last_job = job
                 job = pool.starmap_async(
                     functools.partial(process_reads,
-                                      rhs_seqs=rhs_seqs,
-                                      lhs_seqs=lhs_seqs,
-                                      lhs_seq2potential_rhs_seqs=lhs_seq2potential_rhs_seqs,
                                       tech_info=tech_info,
-                                      names=names,
+                                      probe_parser=probe_parser,
                                       max_distance=max_distance,
-                                      min_lhs_probe_size=min_lhs_probe_size,
-                                      min_rhs_probe_size=min_rhs_probe_size,
-                                      max_lhs_probe_size=max_lhs_probe_size,
-                                      max_rhs_probe_size=max_rhs_probe_size,
-                                      multiplex=multiplex,
-                                      barcode=barcode,
-                                      allow_indels=allow_indels,
                                       skip_constant_seq=skip_constant_seq,
                                       unmapped_reads_prefix=unmapped_reads_prefix,
-                                      flexible_start_mapping=flexible_start_mapping),
+                                      flexible_start=flexible_start),
                     batch
                 )
                 if last_job is not None:  # Output the previous run, then continue reading the file while the next batch is being processed
@@ -576,72 +306,6 @@ def search_files(read1s, read2s, output_dir, tech_info,
     sort_tsv_file(output_dir / "probe_reads.tsv.gz", [2, 0, 1], cores=cores)  # Sort by probe bc, cell idx, probe idx
     print("Done!")
     print(f"{total} reads extracted.")
-
-
-# @functools.lru_cache(maxsize=1_000)
-# def find_exact_match(barcode: str, tech_info: TechnologyFormatInfo) -> Optional[str]:
-#     for length, bcs in tech_info.length2barcodes().items():  # We assume this is sorted from largest -> smallest
-#         barcode_sub = barcode[:length]
-#         if barcode_sub in bcs:
-#             return barcode_sub
-#     return None
-
-
-# def correct_barcode(read: str, start_idx: int, end_idx: int, tech_info: TechnologyFormatInfo, max_dist: int) -> tuple[bool, Optional[str]]:
-#     """
-#     Correct a barcode by permuting the barcode by max_dist and checking if it is in the set of barcodes.
-#     :param read: The barcode-containing read string.
-#     :param barcode_quality: The barcode position qualities (Probability of error).
-#     :param tech_info: Information about the technology used.
-#     :param max_dist: The maximum edit distance to search for.
-#     :return: The corrected barcode, or None if no barcode was found.
-#     """
-#     match, corrected = tech_info.correct_barcode(barcode, max_dist)  # TODO: Replace rapidfuzz entirely with the trie?
-#     return corrected, match
-
-    # # based on: https://github.com/caleblareau/errorcorrect_10xatac_barcodes/blob/main/process_10x_barcodes.py#L115
-    # match = find_exact_match(barcode, tech_info)
-    # if match:
-    #     return False, match
-    # elif max_dist <= 0:
-    #     return False, None  # The max_dist requires an exact match
-    #
-    # # If more Ns than max_dist, return None
-    # N_indices = [i for i, base in enumerate(barcode) if base == "N"]
-    # if len(N_indices) > max_dist:
-    #     return False, None
-    #
-    # # Set the N positions to high error to prioritize their correction
-    # barcode_quality[N_indices] = 1.0
-    #
-    # # Try to correct the barcode
-    # for edits in range(1, max_dist + 1):
-    #     # Generate all possible edits
-    #     # First try to edit just positions with N
-    #     if len(N_indices) > edits:  # Not possible to correct fully
-    #         continue
-    #     elif len(N_indices) > 0:
-    #         # all_edits_N = len(N_indices) == edits
-    #         # Replace the Ns with all possible bases
-    #         for possible_seq in permute_bases(barcode, N_indices):
-    #             # match = find_exact_match(possible_seq, tech_info)
-    #             # if match:  # Found a base
-    #             #     return True, match
-    #             # elif not all_edits_N:  # Additional edits must be made
-    #             is_corrected, corrected_barcode = correct_barcode(possible_seq, barcode_quality, tech_info, max_dist - edits)
-    #             if corrected_barcode is not None:
-    #                 return True, corrected_barcode
-    #         # If we are here, we failed to correct the Ns so iterate over the loop
-    #         continue
-    #
-    #     # At this point, there are no Ns so we have to do naive correction
-    #     for possible_seq in generate_permuted_seqs(barcode, barcode_quality, edits):
-    #         match = find_exact_match(possible_seq, tech_info)
-    #         if match:
-    #             return True, match
-    #
-    # # If we are here, nothing worked
-    # return False, None
 
 
 def build_manifest(probes, output: Path, overwrite, allow_any_combination):
@@ -715,7 +379,7 @@ def run(probes,
         allow_any_combination,
         unmapped_reads_prefix,
         cellranger_output,
-        flexible_start_mapping):
+        flexible_start):
     if (read1 == read2 == project) and project is None:
         raise AssertionError("At least one of the read1, read2, or project arguments must be provided.")
     assert not (multiplex > 1 and barcode > 0), "Multiplex and barcode arguments are mutually exclusive."
@@ -829,7 +493,7 @@ def run(probes,
                  cores=cores, n_reads_per_batch=n_reads_per_batch, max_distance=max_distance,
                  multiplex=multiplex, barcode=barcode, allow_indels=allow_indels,
                  skip_constant_seq=skip_constant_seq, unmapped_reads_prefix=unmapped_reads_prefix,
-                 flexible_start_mapping=flexible_start_mapping)
+                 flexible_start=flexible_start)
     exit(0)
 
 
@@ -871,9 +535,9 @@ def main():
     parser.add_argument(
         "--flexible_start_mapping",
         required=False,
-        type=int,
-        default=0,
-        help="If set with an offset, we no longer assume that the R2 read starts with the LHS probe and that there may be a (-offset) deletion or (+offset) insertion that would need to be trimmed."
+        default=False,
+        action="store_true",
+        help="If set with, we no longer assume that the R2 read starts with the LHS probe and that there may be an insertion that would need to be trimmed."
     )
     parser.add_argument(
         '--project',

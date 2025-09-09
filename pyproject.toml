@@ -24,17 +24,14 @@ dependencies = [
     "scipy>=1.15",
     "numpy>=2.2.6",
     "pandas>=2.3.0",
-    "rapidfuzz>=3.13",
-    "fuzzysearch>=0.8",
     "tqdm>=4.66.5",
     "h5py>=3.14",
     "anndata>=0.11",
     "matplotlib>=3.10",
     "openpyxl>=3.1.5",
     "sankeyflow>=0.4.1",
-    "diskcache>=5.6.3",
     "rich-argparse>=1.7.1",
-    "prefixtrie>=0.5",
+    "prefixtrie>=1.1.0",
 ]
 
 [project.urls]
@@ -48,6 +45,7 @@ Issues = "https://github.com/lareauc/giftwrap/issues"
 spatial = [
     "protobuf>=5.28.0",
     "spatialdata>=0.5.0",
+    "spatialdata-plot>=0.2.11",
     "squidpy>=1.6.5"
 ]
 analysis = [
@@ -57,14 +55,17 @@ analysis = [
     "leidenalg>=0.10.2",
     "pyfamsa>=0.5.3.post1",
     "logomaker>=0.8.7",
+    "rapidfuzz>=3.13",
 ]
 all = [
     "protobuf>=5.28.0",
     "spatialdata>=0.5.0",
+    "spatialdata-plot>=0.2.11",
     "squidpy>=1.6.5",
     "scanpy>=1.11",
     "igraph>=0.10",
     "numba>=0.61.0",
+    "rapidfuzz>=3.13",
 ]
 
 docs = [
@@ -95,7 +96,6 @@ giftwrap-generate-r = "giftwrap.misc_scripts:print_R"
 giftwrap-generate-tech = "giftwrap.misc_scripts:print_tech"
 giftwrap-convert-probes = "giftwrap.misc_scripts:convert_probes"
 giftwrap-revert-probes = "giftwrap.misc_scripts:revert_probes"
-giftwrap-diagnostic = "giftwrap.basic_counts:main"
 
 [build-system]
 requires = ["hatchling"]

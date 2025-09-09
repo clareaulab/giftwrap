@@ -133,7 +133,6 @@ nav:
         - giftwrap-generate-tech: cli/giftwrap_generate_tech.md
         - giftwrap-convert-probes: cli/giftwrap_convert_probes.md
         - giftwrap-revert-probes: cli/giftwrap_revert_probes.md
-        - giftwrap-diagnostic: cli/giftwrap_diagnostic.md
     - API Reference
     - Contributing: contributing.md
 
