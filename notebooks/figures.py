@@ -1,4 +1,5 @@
 import giftwrap as gw
+import anndata as ad
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -23,7 +24,7 @@ def compare_library_size_per_bin(sdata, resolution: int = 2):
     wta_lib = sdata.tables[f'square_{resolution:03d}um'].X.sum(1).__array__().flatten()
     gf_lib = sdata.tables[f'gf_square_{resolution:03d}um'].X.sum(1).flatten()
     xy = np.vstack([wta_lib, gf_lib])
-    density = gaussian_kde(xy)(xy)
+    density = gaussian_kde(xy, bw_method="silverman")(xy)
     plt.figure(figsize=(5, 5))
     plt.scatter(wta_lib, gf_lib, c=density, cmap='viridis', alpha=0.5)
     plt.xlabel("WTA Library Size")
@@ -40,7 +41,10 @@ def get_0bp_probe(adata, probe_name: str):
 
 def plot_relative_efficiency(sdata, resolution: int = 2, min_gf_count: int = 0, min_0bp_count: int = 0):
     # gf_data = sdata
-    gf_data = sdata.tables[f'gf_square_{resolution:03d}um']
+    if isinstance(sdata, ad.AnnData):
+        gf_data = sdata
+    else:
+        gf_data = sdata.tables[f'gf_square_{resolution:03d}um']
     to_plot = {
         'probe': [],
         'gene': [],
@@ -48,7 +52,7 @@ def plot_relative_efficiency(sdata, resolution: int = 2, min_gf_count: int = 0, 
         'gf': []
     }
     for probe in gf_data.var.probe.unique():
-        zero_bp_probe = get_0bp_probe(sdata, probe)
+        zero_bp_probe = get_0bp_probe(gf_data, probe)
         if zero_bp_probe is None:
             print(f"Can't find 0bp for: {probe}")
             continue

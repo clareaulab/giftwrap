@@ -146,15 +146,21 @@ def join_with_wta(wta: 'sd.SpatialData', gf_adata: ad.AnnData) -> 'sd.SpatialDat
         # Fill in missing cells with zeros
         missing_cells = _wta.obs.index.difference(_gf.obs.index).values
         if len(missing_cells) > 0:
+            # Store the original var dataframe to preserve all columns
+            original_var = _gf.var.copy()
+
             # Concatenate and fill in missing values with nan
             missing_adata = ad.AnnData(X=np.zeros((len(missing_cells), _gf.shape[1])),
                                        obs=pd.DataFrame(index=missing_cells),
-                                       var=_gf.var.copy(),
+                                       var=original_var,
                                        varm={k: v.copy() for k,v in _gf.varm.items()},
                                        uns=dict(_gf.uns),
                                        obsm={k: pd.DataFrame(index=missing_cells, columns=v.columns) for k,v in _gf.obsm.items()},
                                        layers={k: np.zeros((len(missing_cells), _gf.shape[1])) for k in _gf.layers})
             _gf = ad.concat([_gf, missing_adata], axis=0)
+
+            # Ensure var dataframe is preserved after concatenation
+            _gf.var = original_var
 
         # Re-order the cells to match the original data.
         return _gf[_wta.obs.index]
@@ -363,6 +369,7 @@ def recipe_spatial_expression_coclustering(
         n_expression_neighbors: int = None,
         n_spatial_neighbors: int = None,
         leiden_kwargs: dict = None,
+        coordinate_system: str = None
 ) -> 'sd.SpatialData':
     """
     This is a recipe for spatial expression co-clustering. This requires the squidpy package to be installed.
@@ -379,6 +386,7 @@ def recipe_spatial_expression_coclustering(
     :param n_expression_neighbors: The number of neighbors to use for expression-based KNN connectivities.
     :param n_spatial_neighbors: The number of neighbors to use for spatial-based KNN connectivities.
     :param leiden_kwargs: Additional keyword arguments for the Leiden clustering algorithm.
+    :param coordinate_system: The coordinate system to use for spatial neighbors. If None, uses the first coordinate system found.
     :return: The updated SpatialData object with the co-clustering results.
     """
     from spatialdata_io.experimental import to_legacy_anndata
@@ -389,7 +397,7 @@ def recipe_spatial_expression_coclustering(
     if n_spatial_neighbors is None:
         n_spatial_neighbors = n_neighbors
 
-    adata = to_legacy_anndata(sdata, table_name=table_name, include_images=False)
+    adata = to_legacy_anndata(sdata, table_name=table_name, include_images=False, coordinate_system=coordinate_system)
 
     # Run the co-clustering
     sc.pp.normalize_total(adata)
