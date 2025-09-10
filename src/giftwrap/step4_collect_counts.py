@@ -56,6 +56,9 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
     total_umi_data = defaultdict(int)
     percent_supporting_data = defaultdict(float)
     possible_probes = set()
+    # Track original indices for cells and probes
+    original_cell_indices = set()
+    original_probe_indices = set()
     n_lines = 0
 
     # Pre-convert plex to int for faster comparison
@@ -79,6 +82,10 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
             probe_key = (probe_name, gapfill)
             possible_probes.add(probe_key)
 
+            # Track original indices
+            original_cell_indices.add(cell_idx)
+            original_probe_indices.add(probe_idx)
+
             # Get barcode directly - avoid double lookup
             cell_barcode = barcodes_df.iloc[cell_idx].barcode
             cell_barcode_h5_idx = barcode2h5_idx[cell_barcode]
@@ -92,8 +99,14 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
 
     print(f"{len(possible_probes)} probe combinations found, {n_lines} valid lines processed.")
 
-    # Create probe index mapping
+    # Create probe index mapping and track original probe indices for each probe_key
     probe2h5_idx = {probe_key: idx for idx, probe_key in enumerate(sorted(possible_probes))}
+    probe_key_to_original_idx = {}
+    for probe_key in possible_probes:
+        probe_name = probe_key[0]
+        # Find the original probe index from the manifest
+        original_idx = manifest[manifest['name'] == probe_name]['index'].iloc[0]
+        probe_key_to_original_idx[probe_key] = original_idx
 
     # Build sparse matrices efficiently using COO format
     print("Building sparse matrices...", end="")
@@ -138,9 +151,22 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
         matrix_grp.create_dataset("barcode",
                                   data=np.array(list(barcode2h5_idx.keys()), dtype='S'),
                                   compression='gzip')
+        # Store original cell indices corresponding to each barcode
+        original_cell_idx_array = np.array([barcodes_df.index[barcodes_df.barcode == bc].tolist()[0]
+                                          for bc in barcode2h5_idx.keys()], dtype=np.uint32)
+        matrix_grp.create_dataset("cell_index",
+                                  data=original_cell_idx_array,
+                                  compression='gzip')
+
         # List of probes
         matrix_grp.create_dataset("probe",
                                   data=np.array(list(probe2h5_idx.keys()), dtype='S'),
+                                  compression='gzip')
+        # Store original probe indices corresponding to each probe_key
+        original_probe_idx_array = np.array([probe_key_to_original_idx[probe_key]
+                                           for probe_key in sorted(probe2h5_idx.keys())], dtype=np.uint32)
+        matrix_grp.create_dataset("probe_index",
+                                  data=original_probe_idx_array,
                                   compression='gzip')
         output_file.flush()
 

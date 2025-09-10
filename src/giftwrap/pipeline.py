@@ -184,6 +184,13 @@ def main():
         action="store_true",
         help="If set with, we no longer assume that the R2 read starts with the LHS probe and that there may be an insertion that would need to be trimmed."
     )
+    parser.add_argument(
+        "--reads_per_gapfill",
+        required=False,
+        type=int,
+        default=0,
+        help="The minimum number of reads supporting a gapfill to include it in the final counts. Default is 0 (no filtering)."
+    )
     args = parser.parse_args()
 
     probes = args.probes
@@ -324,6 +331,7 @@ def main():
             "-o", str(output),
         ] + (['--overwrite'] if overwrite else [])
           + (['--flatten'] if args.flatten else [])
+          + (['--reads_per_gapfill', str(args.reads_per_gapfill)] if args.reads_per_gapfill > 0 else [])
           + wta_args)
         if returncode != 0:
             print("Error: Failed to generate summary statistics and plots.", file=sys.stderr, flush=True)

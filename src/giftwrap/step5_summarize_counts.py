@@ -13,7 +13,8 @@ from scipy.stats import spearmanr, gaussian_kde
 from sankeyflow import Sankey
 from rich_argparse import RichHelpFormatter
 
-from .utils import filter_h5_file, read_h5_file, read_wta, sequencing_saturation, sequence_saturation_curve, maybe_gzip
+from .utils import filter_h5_file_by_barcodes, read_h5_file, read_wta, sequencing_saturation, sequence_saturation_curve, \
+    maybe_gzip, filter_h5_file_by_pcr_dups
 from .analysis.tools import collapse_gapfills
 
 
@@ -381,7 +382,7 @@ def make_pdf_report(output_file, gapfill_adata, adata):
             plt.close(fig)
 
 
-def summarize_counts(input: Path, summary_output: Path, summary_pdf_output: Path, counts_output: Path, flattened_counts_output: Path, cellranger_output: Optional[Path], flatten: bool):
+def summarize_counts(input: Path, summary_output: Path, summary_pdf_output: Path, counts_output: Path, flattened_counts_output: Path, cellranger_output: Optional[Path], flatten: bool, reads_per_gapfill: int):
     print("Summarizing counts file ", input, " to ", summary_output, ", ", summary_pdf_output, ", and ", counts_output, " (This will take awhile)...")
 
     # Read cellranger to an anndata file if provided
@@ -390,7 +391,7 @@ def summarize_counts(input: Path, summary_output: Path, summary_pdf_output: Path
             cellranger_output,
             fallback_to_barcodes=True
         )
-        # If an array was returned, we only have barcodes, else we have an andata object
+        # If an array was returned, we only have barcodes, else we have an anndata object
         if isinstance(obj, np.ndarray):
             adata = None
             barcodes = obj
@@ -403,22 +404,38 @@ def summarize_counts(input: Path, summary_output: Path, summary_pdf_output: Path
         barcodes = None
         print("No cellranger output provided, unable to filter counts...")
 
+    cr_filtered = False
     if barcodes is not None:
         print(f"Cellranger identified {barcodes.shape[0]} cells. Filtering counts...", end="")
         # Filter the counts file to only include cells in the cellranger output
-        filter_h5_file(input, counts_output, barcodes)
-        if flatten:  # We need to filter the flattened counts as well
-            with maybe_gzip(input.parent / input.name.replace(".h5", ".tsv.gz").replace('counts.', 'flat_counts.'), 'r') as f_in:
-                with maybe_gzip(flattened_counts_output, 'w') as f_out:
-                    first = True
-                    for line in f_in:
-                        if line.split("\t")[0] in barcodes or first:
-                            f_out.write(line)
-                            first = False
+        filter_h5_file_by_barcodes(input, counts_output, barcodes)
         gapfill_adata = read_h5_file(counts_output)
         print(f"Filtered to {gapfill_adata.shape[0]} gapfill cells.")
+        cr_filtered = True
     else:
         gapfill_adata = read_h5_file(input)
+
+    pcr_dup_filtered = False
+    if reads_per_gapfill > 0:  # Filter gapfills by minimum reads
+        print(f"Filtering gapfills to those with at least {reads_per_gapfill} supporting reads...", end="")
+        probe_reads_file = input.parent / "probe_reads.tsv.gz"
+        filter_h5_file_by_pcr_dups(gapfill_adata, probe_reads_file, input, counts_output, reads_per_gapfill)
+        gapfill_adata = read_h5_file(counts_output)
+        pcr_dup_filtered = True
+
+    if (cr_filtered or pcr_dup_filtered) and flatten:  # We need to filter the flattened counts as well
+        with maybe_gzip(input.parent / input.name.replace(".h5", ".tsv.gz").replace('counts.', 'flat_counts.'), 'r') as f_in:
+            with maybe_gzip(flattened_counts_output, 'w') as f_out:
+                first = True
+                for line in f_in:
+                    line_passes = True
+                    if cr_filtered:
+                        line_passes = line.split("\t")[0] in barcodes or first
+                    if pcr_dup_filtered:
+                        line_passes = line_passes and int(line.split("\t")[5]) > reads_per_gapfill or first  # Filter by N pcr duplicates
+                    if line_passes:
+                        f_out.write(line)
+                        first = False
 
     # Compute umi statistics
     stats = dict(
@@ -469,7 +486,7 @@ def summarize_counts(input: Path, summary_output: Path, summary_pdf_output: Path
     make_pdf_report(summary_pdf_output, gapfill_adata, adata)
 
 
-def run(output, overwrite, cellranger_output, flatten):
+def run(output, overwrite, cellranger_output, flatten, reads_per_gapfill):
     if isinstance(cellranger_output, str):
         cellranger_output = [cellranger_output]
     has_cellranger = cellranger_output is not None and len(cellranger_output) > 0
@@ -511,7 +528,7 @@ def run(output, overwrite, cellranger_output, flatten):
                 print("Skipping existing files. Use --overwrite to overwrite.")
                 continue
 
-        summarize_counts(counts_file, summary_output_file, summary_pdf_output_file, h5_output_file, flattened_output_file, counts_cellranger, flatten)
+        summarize_counts(counts_file, summary_output_file, summary_pdf_output_file, h5_output_file, flattened_output_file, counts_cellranger, flatten, reads_per_gapfill)
 
 
 def main():
@@ -550,6 +567,14 @@ def main():
     )
 
     parser.add_argument(
+        "--reads_per_gapfill",
+        required=False,
+        type=int,
+        default=0,
+        help="The minimum number of reads supporting a gapfill to include it in the final counts. Default is 0 (no filtering)."
+    )
+
+    parser.add_argument(
         "--flatten",
         required=False,
         action="store_true",
@@ -557,7 +582,7 @@ def main():
     )
 
     args = parser.parse_args()
-    run(args.output, args.overwrite, args.cellranger_output, args.flatten)
+    run(args.output, args.overwrite, args.cellranger_output, args.flatten, args.reads_per_gapfill)
 
 
 if __name__ == "__main__":
