@@ -419,7 +419,7 @@ def summarize_counts(input: Path, summary_output: Path, summary_pdf_output: Path
     if reads_per_gapfill > 0:  # Filter gapfills by minimum reads
         print(f"Filtering gapfills to those with at least {reads_per_gapfill} supporting reads...", end="")
         probe_reads_file = input.parent / "probe_reads.tsv.gz"
-        filter_h5_file_by_pcr_dups(gapfill_adata, probe_reads_file, input, counts_output, reads_per_gapfill)
+        filter_h5_file_by_pcr_dups(probe_reads_file, input, counts_output, reads_per_gapfill)
         gapfill_adata = read_h5_file(counts_output)
         pcr_dup_filtered = True
 
