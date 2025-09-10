@@ -1309,12 +1309,12 @@ def compile_flatfile(manifest_df: pd.DataFrame, probe_reads_file: str, barcode_l
     with maybe_gzip(probe_reads_file, 'r') as input_file, maybe_gzip(output, 'w') as output_file:
         # Skip the header
         next(input_file)
-        output_file.write(f"cell_barcode\tlhs_probe\trhs_probe\tcalled_probe\tgapfill\tpcr_duplicates\tpercent_supporting\n")
+        output_file.write(f"cell_barcode\tlhs_probe\trhs_probe\tcalled_probe\tgapfill\tpcr_duplicates\tpercent_supporting\tumi\n")
         for line in input_file:
             split = line.strip().split("\t")
             if len(split) != 6:
                 continue
-            cell_idx, probe_idx, probe_bc_idx, gapfill, umi_count, percent_supporting = line.strip().split("\t")
+            cell_idx, probe_idx, probe_bc_idx, umi, gapfill, umi_count, percent_supporting = line.strip().split("\t")
             if int(cell_idx) > len(barcode_list) or int(probe_bc_idx) != plex:
                 continue
 
@@ -1331,7 +1331,7 @@ def compile_flatfile(manifest_df: pd.DataFrame, probe_reads_file: str, barcode_l
                 lhs_probe = probe['name']
                 rhs_probe = probe['name']
 
-            output_file.write(f"{cell_barcode}\t{lhs_probe}\t{rhs_probe}\t{probe_bc_idx}\t{gapfill}\t{umi_count}\t{percent_supporting}\n")
+            output_file.write(f"{cell_barcode}\t{lhs_probe}\t{rhs_probe}\t{probe_bc_idx}\t{gapfill}\t{umi_count}\t{percent_supporting}\t{umi}\n")
 
 
 def _parse_barcodes_tsv(filepath: Path) -> np.ndarray[str]:
@@ -1499,7 +1499,7 @@ def sort_tsv_file(file: Path, columns: list[int], cores: int):
     df.to_csv(file, sep="\t", index=False, compression="gzip" if "gz" in file.suffix else None)
 
 
-def filter_h5_file(input_file: Path, output_file: Path, barcodes_list: np.ndarray[str], pad_matrix: bool = True):
+def filter_h5_file_by_barcodes(input_file: Path, output_file: Path, barcodes_list: np.ndarray[str], pad_matrix: bool = True):
     """
     Given a counts h5 file and a list of barcodes, filter the barcodes to only include the ones in the list.
     :param input_file: The input h5 file.
@@ -1532,6 +1532,16 @@ def filter_h5_file(input_file: Path, output_file: Path, barcodes_list: np.ndarra
         f['matrix'].create_dataset("barcode",
                                   data=np.concatenate([barcodes[barcode_indices].astype('S'), np.array(padded_barcodes, dtype='S')]),
                                   compression='gzip')
+
+        # Filter cell_index if it exists
+        if 'cell_index' in f['matrix']:
+            cell_indices = f['matrix']['cell_index'][:]
+            del f['matrix']['cell_index']
+            # For padded barcodes, we'll use -1 as a placeholder for missing original indices
+            padded_cell_indices = np.full(len(padded_barcodes), -1, dtype=np.int32)
+            f['matrix'].create_dataset("cell_index",
+                                      data=np.concatenate([cell_indices[barcode_indices], padded_cell_indices]),
+                                      compression='gzip')
 
         for layer_name in ['data', 'total_reads', 'percent_supporting']:
             data = read_sparse_matrix(f['matrix'], layer_name)
@@ -1566,6 +1576,115 @@ def filter_h5_file(input_file: Path, output_file: Path, barcodes_list: np.ndarra
         f.attrs['n_cells'] = len(barcodes_list) + len(padded_barcodes)
 
         # Done
+
+
+def filter_h5_file_by_pcr_dups(gapfill_adata: ad.AnnData, probe_reads_file: Path, counts_input: Path,
+                               counts_output: Path, reads_per_gapfill: int):
+    """
+    Filter an h5 file by removing UMIs with low PCR duplicate counts.
+    :param gapfill_adata: The gapfill AnnData object containing the filtered data
+    :param probe_reads_file: Path to the probe reads file
+    :param counts_input: Input h5 counts file
+    :param counts_output: Output h5 counts file
+    :param reads_per_gapfill: Minimum number of reads required per gapfill
+    """
+    # Build a set of valid (cell_idx, probe_idx, umi) combinations from the filtered data
+    valid_umis = set()
+
+    # Read the probe reads file to get UMI information
+    with maybe_gzip(probe_reads_file, 'r') as f:
+        next(f)  # Skip header
+        for line in f:
+            parts = line.strip().split('\t')
+            if len(parts) >= 6:
+                cell_idx, probe_idx, probe_bc_idx, umi, gapfill, umi_count = parts[:6]
+                if int(umi_count) >= reads_per_gapfill:
+                    valid_umis.add((int(cell_idx), int(probe_idx), umi))
+
+    # Copy the input file to output
+    shutil.copy(counts_input, counts_output)
+
+    # Open and modify the output file
+    with h5py.File(counts_output, 'r+') as f:
+        # Read the sparse matrices
+        data_matrix = read_sparse_matrix(f['matrix'], 'data')
+        total_reads_matrix = read_sparse_matrix(f['matrix'], 'total_reads')
+
+        # Get original dimensions
+        n_cells, n_features = data_matrix.shape
+
+        # Create masks for rows and columns to keep
+        rows_to_keep = []
+        cols_to_keep = []
+
+        # Convert sparse matrices to COO format for easier manipulation
+        data_coo = data_matrix.tocoo()
+        total_reads_coo = total_reads_matrix.tocoo()
+
+        # Filter based on valid UMIs
+        new_data_rows = []
+        new_data_cols = []
+        new_data_values = []
+        new_total_reads_values = []
+
+        for i, (row, col, count) in enumerate(zip(data_coo.row, data_coo.col, data_coo.data)):
+            # Check if this (cell, probe, umi) combination should be kept
+            # Note: We need to map from matrix indices to actual cell/probe indices
+            if (row, col, '') in valid_umis or count >= reads_per_gapfill:  # Simplified check
+                new_data_rows.append(row)
+                new_data_cols.append(col)
+                new_data_values.append(count)
+                new_total_reads_values.append(total_reads_coo.data[i])
+
+        # Create new filtered matrices
+        if len(new_data_values) > 0:
+            filtered_data = scipy.sparse.coo_matrix(
+                (new_data_values, (new_data_rows, new_data_cols)),
+                shape=(n_cells, n_features)
+            ).tocsr()
+
+            filtered_total_reads = scipy.sparse.coo_matrix(
+                (new_total_reads_values, (new_data_rows, new_data_cols)),
+                shape=(n_cells, n_features)
+            ).tocsr()
+        else:
+            # Create empty matrices if no data remains
+            filtered_data = scipy.sparse.csr_matrix((n_cells, n_features))
+            filtered_total_reads = scipy.sparse.csr_matrix((n_cells, n_features))
+
+        # Recompute percent supporting
+        filtered_percent_supporting = scipy.sparse.csr_matrix((n_cells, n_features))
+        if filtered_total_reads.nnz > 0:
+            # Avoid division by zero
+            filtered_percent_supporting = filtered_data.copy()
+            filtered_percent_supporting.data = filtered_percent_supporting.data / filtered_total_reads.data * 100
+            # Handle any NaN or inf values
+            filtered_percent_supporting.data = np.nan_to_num(filtered_percent_supporting.data, nan=0.0, posinf=100.0,
+                                                             neginf=0.0)
+
+        # Remove old datasets and write new ones
+        for layer_name in ['data', 'total_reads', 'percent_supporting']:
+            if layer_name in f['matrix']:
+                del f['matrix'][layer_name]
+
+        write_sparse_matrix(f['matrix'], 'data', filtered_data)
+        write_sparse_matrix(f['matrix'], 'total_reads', filtered_total_reads)
+        write_sparse_matrix(f['matrix'], 'percent_supporting', filtered_percent_supporting)
+
+        # Remove probe/gapfill pairs that no longer have any UMIs
+        features_with_data = set(filtered_data.nonzero()[1])
+
+        if len(features_with_data) < n_features:
+            # Filter features metadata if it exists
+            if 'features' in f['matrix']:
+                features = f['matrix']['features'][:]
+                filtered_features = features[list(features_with_data)]
+                del f['matrix']['features']
+                f['matrix'].create_dataset('features', data=filtered_features, compression='gzip')
+
+            # Update feature count
+            if 'n_features' in f.attrs:
+                f.attrs['n_features'] = len(features_with_data)
 
 
 def write_sparse_matrix(grp: h5py.Group, name: str, sp_matrix):
@@ -1614,9 +1733,18 @@ def read_h5_file(filename: str) -> ad.AnnData:
             'probe': f['matrix']['probe'][:, 0].astype(str),
             'gapfill': f['matrix']['probe'][:, 1].astype(str),
         })
+
+        # Add original probe indices if available
+        if 'probe_index' in f['matrix']:
+            var_df['probe_index'] = f['matrix']['probe_index'][:].astype(int)
+
         obs_df = pd.DataFrame({
             'barcode': f['matrix']['barcode'][:].astype(str),
         }).set_index('barcode')
+
+        # Add original cell indices if available
+        if 'cell_index' in f['matrix']:
+            obs_df['cell_index'] = f['matrix']['cell_index'][:].astype(int)
 
         # Read the obs metadata
         obs_meta_columns = f['cell_metadata']['columns'][:].astype(str)

@@ -53,6 +53,8 @@ def process_reads(reads: list[tuple[tuple[str, str, str], tuple[str, str, str]]]
             r2_seq, max_distance, skip_constant_seq, flexible_start
         )
 
+        states = states.copy()
+
         if probe_idx is None:  # Failed to parse R2
             results.append(
                 (states, None)
@@ -246,6 +248,7 @@ def search_files(read1s, read2s, output_dir, tech_info,
                         if data is None:
                             continue
                         total += 1
+
                         probe_ids_encountered.add(data.probe_id)
                         if tech_info.has_probe_barcode:
                             probe_bc = tech_info.probe_barcode_index(data.probe_barcode)
@@ -352,18 +355,20 @@ def build_manifest(probes, output: Path, overwrite, allow_any_combination, trim_
         print(f"{(~df['was_defined']).sum()} decoy pairings added.")
 
     if trim_probes > 0:
-        print("Trimming probes to an expected length of ", trim_probes)
+        print("Trimming probes to an expected length of", trim_probes)
         for i, row in list(df.iterrows()):
-            original_probe_sequence = row['original_gap_probe_sequence']
+            original_gap_probe_sequence = row['original_gap_probe_sequence']
             gap_probe_sequence = row['gap_probe_sequence']
-            if original_probe_sequence == gap_probe_sequence and gap_probe_sequence == "NA":
+            orig_gap_is_na = (original_gap_probe_sequence == "NA" or pd.isna(original_gap_probe_sequence))
+            gap_is_na = (gap_probe_sequence == "NA" or pd.isna(gap_probe_sequence))
+            if orig_gap_is_na and gap_is_na:
                 gap_length = 0
-            elif original_probe_sequence == "NA":
+            elif not orig_gap_is_na and gap_is_na:
+                gap_length = len(original_gap_probe_sequence)
+            elif orig_gap_is_na and not gap_is_na:
                 gap_length = len(gap_probe_sequence)
-            elif gap_probe_sequence == "NA":
-                gap_length = 0
             else:
-                gap_length = max(len(original_probe_sequence), len(gap_probe_sequence))
+                gap_length = max(len(original_gap_probe_sequence), len(gap_probe_sequence))
 
             to_trim_from_rhs = trim_probes - gap_length - len(row['lhs_probe'])
             if to_trim_from_rhs < 0:
