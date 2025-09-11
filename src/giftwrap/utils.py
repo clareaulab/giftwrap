@@ -1509,71 +1509,130 @@ def filter_h5_file_by_barcodes(input_file: Path, output_file: Path, barcodes_lis
     """
     # First, copy the file
     shutil.copy(input_file, output_file)
+
+    # Convert barcodes_list to a set for O(1) lookups
+    barcodes_set = set(barcodes_list)
+
     # Then open the file
     with h5py.File(output_file, 'r+') as f:
-        barcodes = f['matrix']['barcode'][:].astype(str)
-        # Get the filtered list of barcodes indices and re-order them
-        barcode_indices = np.array([i for i, bc in enumerate(barcodes) if bc in barcodes_list])
-        # Check if the we need to filter the data
+        # Read barcodes once
+        barcodes_array = f['matrix']['barcode'][:]
+        barcodes = np.char.decode(barcodes_array, 'utf-8') if barcodes_array.dtype.kind == 'S' else barcodes_array.astype(str)
+
+        # Use vectorized numpy operations for finding indices
+        # Create a boolean mask for matching barcodes
+        mask = np.isin(barcodes, list(barcodes_set))
+        barcode_indices = np.where(mask)[0]
+
+        # Check if we need to filter the data
         if len(barcode_indices) == len(barcodes):
             return  # Equal size, no point in filtering
 
         if len(barcode_indices) == 0:
             raise ValueError("No barcodes found in the file.")
 
-        if pad_matrix and len(barcodes_list) > len(barcode_indices):
-            padded_barcodes = [bc for bc in barcodes_list if bc not in barcodes]
+        # Calculate padded barcodes only if needed
+        padded_barcodes = []
+        if pad_matrix and len(barcodes_set) > len(barcode_indices):
+            existing_barcodes = set(barcodes)
+            padded_barcodes = np.array([bc for bc in barcodes_list if bc not in existing_barcodes], dtype='S')
             print(f"Padding {len(padded_barcodes)} unseen cells with zeroes.")
-        else:
-            padded_barcodes = []
 
         # Filter the data
+        filtered_barcodes = barcodes[barcode_indices]
         del f['matrix']['barcode']
-        f['matrix'].create_dataset("barcode",
-                                  data=np.concatenate([barcodes[barcode_indices].astype('S'), np.array(padded_barcodes, dtype='S')]),
-                                  compression='gzip')
+
+        # Convert to bytes only once if needed
+        if filtered_barcodes.dtype.kind != 'S':
+            filtered_barcodes = np.array(filtered_barcodes, dtype='S')
+
+        # Create the new dataset
+        if len(padded_barcodes) > 0:
+            if padded_barcodes.dtype.kind != 'S':
+                padded_barcodes = np.array(padded_barcodes, dtype='S')
+            combined_barcodes = np.concatenate([filtered_barcodes, padded_barcodes])
+        else:
+            combined_barcodes = filtered_barcodes
+
+        f['matrix'].create_dataset("barcode", data=combined_barcodes, compression='gzip')
 
         # Filter cell_index if it exists
         if 'cell_index' in f['matrix']:
             cell_indices = f['matrix']['cell_index'][:]
             del f['matrix']['cell_index']
             # For padded barcodes, we'll use -1 as a placeholder for missing original indices
-            padded_cell_indices = np.full(len(padded_barcodes), -1, dtype=np.int32)
-            f['matrix'].create_dataset("cell_index",
-                                      data=np.concatenate([cell_indices[barcode_indices], padded_cell_indices]),
-                                      compression='gzip')
+            if len(padded_barcodes) > 0:
+                padded_cell_indices = np.full(len(padded_barcodes), -1, dtype=np.int32)
+                combined_indices = np.concatenate([cell_indices[barcode_indices], padded_cell_indices])
+            else:
+                combined_indices = cell_indices[barcode_indices]
+            f['matrix'].create_dataset("cell_index", data=combined_indices, compression='gzip')
 
+        # Process each sparse matrix layer
         for layer_name in ['data', 'total_reads', 'percent_supporting']:
             data = read_sparse_matrix(f['matrix'], layer_name)
+            # Efficiently extract rows
             data = data[barcode_indices, :]
-            # Add padding
+
+            # Add padding only if needed
             if len(padded_barcodes) > 0:
-                data = scipy.sparse.vstack([data, scipy.sparse.csr_matrix((len(padded_barcodes), data.shape[1]))])
+                # Create empty sparse matrix only once with correct dimensions
+                padding = scipy.sparse.csr_matrix((len(padded_barcodes), data.shape[1]), dtype=data.dtype)
+                data = scipy.sparse.vstack([data, padding])
+
             del f['matrix'][layer_name]
             write_sparse_matrix(f['matrix'], layer_name, data)
 
-        obs_meta_columns = f['cell_metadata']['columns'][:].astype(str)
-        obs_meta_df = pd.DataFrame({
-            col: (f['cell_metadata'][col][:].astype(str) if col == 'barcode' else f['cell_metadata'][col][:].astype(int)) for col in obs_meta_columns
-        }).set_index('barcode')
-        obs_meta_df = obs_meta_df.loc[barcodes[barcode_indices]]
-        # Move the index back to a column
-        obs_meta_df = obs_meta_df.reset_index()
-        # Add padding
-        if len(padded_barcodes) > 0:
-            obs_meta_df = pd.concat([obs_meta_df, pd.DataFrame({col: (([pd.NA] * len(padded_barcodes)) if col != "barcode" else padded_barcodes) for col in obs_meta_df.columns})])
-        del f['cell_metadata']
-        cell_metadata_grp = f.create_group('cell_metadata')
-        cell_metadata_grp.create_dataset('columns', data=np.array(obs_meta_df.columns, dtype='S'), compression='gzip')
-        for col in obs_meta_df.columns:
-            values = obs_meta_df[col].values
-            # If it is not an integer or float, then convert to string
-            if not np.issubdtype(values.dtype, np.number):
-                values = values.astype('S')
-            cell_metadata_grp.create_dataset(col, data=values, compression='gzip')
+        # Process cell metadata more efficiently
+        if 'cell_metadata' in f:
+            obs_meta_columns = f['cell_metadata']['columns'][:].astype(str)
 
-        del f.attrs['n_cells']
-        f.attrs['n_cells'] = len(barcodes_list) + len(padded_barcodes)
+            # Create a dictionary to hold column data
+            meta_dict = {}
+            for col in obs_meta_columns:
+                values = f['cell_metadata'][col][:]
+                if col == 'barcode':
+                    if values.dtype.kind == 'S':
+                        values = np.char.decode(values, 'utf-8')
+                    meta_dict[col] = values
+                else:
+                    try:
+                        meta_dict[col] = values
+                    except:
+                        meta_dict[col] = np.zeros_like(values, dtype=int)
+
+            # Create filtered DataFrame
+            obs_meta_df = pd.DataFrame(meta_dict)
+            if 'barcode' in obs_meta_df.columns:
+                obs_meta_df.set_index('barcode', inplace=True)
+                filtered_meta = obs_meta_df.loc[barcodes[barcode_indices]].reset_index()
+            else:
+                filtered_meta = obs_meta_df.iloc[barcode_indices].reset_index(drop=True)
+
+            # Add padding if needed
+            if len(padded_barcodes) > 0:
+                pad_dict = {col: ([pd.NA] * len(padded_barcodes)) for col in filtered_meta.columns if col != 'barcode'}
+                if 'barcode' in filtered_meta.columns:
+                    pad_dict['barcode'] = padded_barcodes
+                pad_df = pd.DataFrame(pad_dict)
+                filtered_meta = pd.concat([filtered_meta, pad_df], ignore_index=True)
+
+            # Write back to file
+            del f['cell_metadata']
+            cell_metadata_grp = f.create_group('cell_metadata')
+            cell_metadata_grp.create_dataset('columns', data=np.array(filtered_meta.columns, dtype='S'), compression='gzip')
+
+            for col in filtered_meta.columns:
+                values = filtered_meta[col].values
+                # Convert to appropriate type
+                if not np.issubdtype(values.dtype, np.number):
+                    values = np.array(values, dtype='S')
+                cell_metadata_grp.create_dataset(col, data=values, compression='gzip')
+
+        # Update cell count
+        if 'n_cells' in f.attrs:
+            del f.attrs['n_cells']
+            f.attrs['n_cells'] = len(combined_barcodes)
 
         # Done
 
@@ -1635,23 +1694,29 @@ def filter_h5_file_by_pcr_dups(probe_reads_file: Path, counts_input: Path,
             print("All UMIs passed the filter; no changes made to the counts file.")
             return
 
-        # Take the original matrices and subtract the counts / recompute the percent_supporting
-        original_data = read_sparse_matrix(f['matrix'], 'data').tocoo()
-        original_total_reads = read_sparse_matrix(f['matrix'], 'total_reads').tocoo()
-        original_percent_supporting = read_sparse_matrix(f['matrix'], 'percent_supporting').tocoo()
+        # Read matrices and convert to more efficient format for modifications
+        original_data = read_sparse_matrix(f['matrix'], 'data').tolil()
+        original_total_reads = read_sparse_matrix(f['matrix'], 'total_reads').tolil()
+        original_percent_supporting = read_sparse_matrix(f['matrix'], 'percent_supporting').tolil()
+
         for (r, c), counts in subtracted_counts.items():
-            original_data[r, c] = max(0, original_data[r, c] - counts['data'])
-            original_total_reads[r, c] = max(0, original_total_reads[r, c] - counts['total_reads'])
+            # Convert to int to avoid unsigned integer overflow, then apply max(0, ...)
+            original_data[r, c] = max(0, int(original_data[r, c]) - counts['data'])
+            original_total_reads[r, c] = max(0, int(original_total_reads[r, c]) - counts['total_reads'])
             if original_total_reads[r, c] > 0:
                 original_percent_supporting[r, c] = (original_data[r, c] / original_total_reads[r, c]) * 100
             else:
                 original_percent_supporting[r, c] = 0.0
 
+        # Convert back to CSR format for storage
+        original_data = original_data.tocsr()
+        original_total_reads = original_total_reads.tocsr()
+        original_percent_supporting = original_percent_supporting.tocsr()
         # Save the modified matrices back to the file
         print("Writing filtered matrices back to HDF5 file...")
         for layer_name, matrix in zip(
             ['data', 'total_reads', 'percent_supporting'],
-            [original_data.tocsr(), original_total_reads.tocsr(), original_percent_supporting.tocsr()]
+            [original_data, original_total_reads, original_percent_supporting]
         ):
             if layer_name in f['matrix']:
                 del f['matrix'][layer_name]
