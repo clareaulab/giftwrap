@@ -20,7 +20,7 @@ from .analysis.tools import collapse_gapfills
 
 def density(x, y):
     xy = np.vstack([x, y])
-    kde = gaussian_kde(xy)
+    kde = gaussian_kde(xy, bw_method="silverman")
     return kde(xy)
 
 def best_fit(x, y):
@@ -272,51 +272,8 @@ def make_pdf_report(output_file, gapfill_adata, adata, probe_reads, filter_cutof
         pdf.savefig(fig)
         plt.close(fig)
 
-        # Perform basic clustering/projection on just the gapfill data
-        try:
-            import scanpy as sc
-        except:
-            print("Scanpy not found. Completing the PDF report without analysis")
-            return
-        # Save the raw data
-        gapfill_adata_old = gapfill_adata.copy()
-        # Remove cells with no gapfill counts (for figure purposes)
-        gapfill_adata = gapfill_adata[gapfill_adata.X.sum(axis=1) > 0, :]
-        # Normalize the data
-        sc.pp.normalize_total(gapfill_adata, target_sum=1e2)  # Note lower target sum because of typically lower UMI counts
-        sc.pp.log1p(gapfill_adata)
-        # Perform PCA
-        sc.tl.pca(gapfill_adata)
-        # Perform clustering
-        sc.pp.neighbors(gapfill_adata)
-        try:
-            sc.tl.leiden(gapfill_adata, key_added='cluster')
-        except:
-            try:
-                sc.tl.louvain(gapfill_adata, key_added='cluster')
-            except:
-                print("Leiden and louvain clustering packages not found. Skipping clustering.")
-                gapfill_adata.obs['cluster'] = 0
-        # Compute t-sne and umap
-        sc.tl.tsne(gapfill_adata)
-        sc.tl.umap(gapfill_adata)
-        # Plot the results
-        fig, axs = plt.subplots(2, 1, figsize=(8, 8))
-        fig.set_dpi(600)
-        fig.suptitle("Clustering of gapfill data")
-        sc.pl.tsne(gapfill_adata, color='cluster', ax=axs[0], show=False)
-        sc.pl.umap(gapfill_adata, color='cluster', ax=axs[1], show=False)
-        fig.text(0.5, 0.005,
-                    "This figure shows the results of clustering purely on the gapfill data on both a t-SNE and UMAP projection.",
-                    ha='center', wrap=True)
-        pdf.savefig(fig)
-        plt.close(fig)
-
-
         # If we have cellranger data, compare psuedobulk counts of gapfill vs WTA.
         if adata is not None:
-            # Get the original gapfill adata back
-            gapfill_adata = gapfill_adata_old
             # Re-order cells in adata to match gapfill adata
             adata = adata[gapfill_adata.obs.index, :]
             # Get the gene names
@@ -378,51 +335,8 @@ def make_pdf_report(output_file, gapfill_adata, adata, probe_reads, filter_cutof
             pdf.savefig(fig)
             plt.close(fig)
 
-            # Finally, compute WTA UMAP, which we will project gapfill data onto
-            sc.pp.normalize_total(adata, target_sum=1e4)  # Note higher target sum because of typically higher UMI counts in WTA
-            sc.pp.log1p(adata)
-            sc.pp.highly_variable_genes(adata)
-            sc.tl.pca(adata)
-            sc.pp.neighbors(adata)
-            sc.tl.umap(adata)
-            # Project gapfill data onto WTA UMAP
-            gapfill_adata.obsm['X_umap'] = adata[gapfill_adata.obs.index.values].obsm['X_umap']
 
-            # Plot summary statistics
-            fig, axs = plt.subplots(3, 1, figsize=(8, 12))
-            fig.set_dpi(600)
-            fig.suptitle("Gapfill on WTA UMAP")
-            sc.pl.umap(gapfill_adata, color='umis_per_cell', ax=axs[0], title="UMIs per cell", show=False)
-
-            # Compute the majority gapfill for the probe with the most UMIs and the fewest UMIs
-            gapfill_adata.obs['majority_gapfill'] = 'N/A'
-            probe_X = np.zeros((gapfill_adata.var['probe'].nunique(),))
-            probes = gapfill_adata.var['probe'].unique()
-            for i, probe in enumerate(gapfill_adata.var['probe'].unique()):
-                probe_X[i] = gapfill_adata[:, gapfill_adata.var['probe'] == probe].X.mean()
-            max_probe = probes[np.argmax(probe_X)]
-            min_probe = probes[np.argmin(probe_X)]
-            for i, probe in enumerate([max_probe, min_probe]):
-                ax = axs[i+1]
-                majority_gapfills = list()
-                for cell in gapfill_adata.obs.index:
-                    cell_data = gapfill_adata[cell, gapfill_adata.var['probe'] == probe].X
-                    if cell_data.sum() > 0:
-                        majority_gapfills.append(gapfill_adata.var['gapfill'][cell_data.argmax()])
-                    else:
-                        majority_gapfills.append("N/A")
-                gapfill_adata.obs['majority_gapfill'] = majority_gapfills
-                sc.pl.umap(gapfill_adata, color='majority_gapfill', ax=ax, title=f"Majority gapfill for {probe}", show=False)
-
-            fig.text(0.5, 0.005,
-                    "The top figure shows the distribution of UMIs per cell on the WTA UMAP. "
-            "The middle and bottom figures show the majority gapfill for the probe with the most and fewest average UMIs, respectively.",
-                    ha='center', wrap=True)
-            pdf.savefig(fig)
-            plt.close(fig)
-
-
-def summarize_counts(input: Path, summary_output: Path, summary_pdf_output: Path, counts_output: Path, flattened_counts_output: Path, cellranger_output: Optional[Path], flatten: bool, reads_per_gapfill: int):
+def summarize_counts(input: Path, summary_output: Path, summary_pdf_output: Path, counts_output: Path, flattened_counts_output: Path, cellranger_output: Optional[Path], flatten: bool, reads_per_gapfill: int, probe_bc: int):
     print("Summarizing counts file ", input, " to ", summary_output, ", ", summary_pdf_output, ", and ", counts_output, " (This will take awhile)...")
 
     # Read cellranger to an anndata file if provided
@@ -459,7 +373,7 @@ def summarize_counts(input: Path, summary_output: Path, summary_pdf_output: Path
     if reads_per_gapfill > 0:  # Filter gapfills by minimum reads
         print(f"Filtering gapfills to those with at least {reads_per_gapfill} supporting reads...", end="")
         probe_reads_file = input.parent / "probe_reads.tsv.gz"
-        filter_h5_file_by_pcr_dups(probe_reads_file, input, counts_output, reads_per_gapfill)
+        filter_h5_file_by_pcr_dups(probe_reads_file, input, counts_output, reads_per_gapfill, probe_bc)
         gapfill_adata = read_h5_file(counts_output)
         pcr_dup_filtered = True
 
@@ -560,6 +474,7 @@ def run(output, overwrite, cellranger_output, flatten, reads_per_gapfill):
         summary_pdf_output_file = output / counts_file.name.replace(".h5", ".summary.pdf")
         h5_output_file = output / counts_file.name.replace(".h5", ".filtered.h5")
         flattened_output_file = output / counts_file.name.replace(".h5", ".filtered.tsv.gz").replace('counts.', 'flat_counts.')
+        probe_bc = int(counts_file.name.split(".")[1])
 
         if summary_output_file.exists() or h5_output_file.exists():
             if overwrite:
@@ -568,7 +483,7 @@ def run(output, overwrite, cellranger_output, flatten, reads_per_gapfill):
                 print("Skipping existing files. Use --overwrite to overwrite.")
                 continue
 
-        summarize_counts(counts_file, summary_output_file, summary_pdf_output_file, h5_output_file, flattened_output_file, counts_cellranger, flatten, reads_per_gapfill)
+        summarize_counts(counts_file, summary_output_file, summary_pdf_output_file, h5_output_file, flattened_output_file, counts_cellranger, flatten, reads_per_gapfill, probe_bc)
 
 
 def main():
