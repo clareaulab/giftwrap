@@ -127,7 +127,7 @@ def make_pdf_report(output_file, gapfill_adata, adata, probe_reads, filter_cutof
     with PdfPages(output_file) as pdf:
         # Compute a sankey diagram describing the overall flow of data processing
         fig, ax = plt.subplots(1, 1, figsize=(8, 8))
-        fig.set_dpi(600)
+        fig.set_dpi(300)
         fig.suptitle("Data processing flow")
         # Read the counts metrics file (long format table) into a dictionary
         fastq_metrics = pd.read_table(output_file.parent / "fastq_metrics.tsv").set_index("metric").to_dict()["value"]
@@ -145,7 +145,7 @@ def make_pdf_report(output_file, gapfill_adata, adata, probe_reads, filter_cutof
 
         # Barcode rank plot (log-umis vs log-cell rank)
         fig, ax = plt.subplots(1, 1, figsize=(8, 8))
-        fig.set_dpi(600)
+        fig.set_dpi(300)
         fig.suptitle("Barcode rank plot")
         umis_per_cell = np.asarray(gapfill_adata.X.sum(axis=1)).flatten()
         gapfill_adata.obs['umis_per_cell'] = umis_per_cell
@@ -169,7 +169,7 @@ def make_pdf_report(output_file, gapfill_adata, adata, probe_reads, filter_cutof
 
         # Plot the sequencing saturation curve
         fig, ax = plt.subplots(1, 1, figsize=(8, 8))
-        fig.set_dpi(600)
+        fig.set_dpi(300)
         fig.suptitle("Sequencing saturation curve")
         saturations = sequence_saturation_curve(collapse_gapfills(gapfill_adata).layers['total_reads'], n_points=1000)
         ax.plot(saturations[:,0], saturations[:,1])
@@ -187,7 +187,7 @@ def make_pdf_report(output_file, gapfill_adata, adata, probe_reads, filter_cutof
 
         # Plot the distributions of PCR duplicate count per gapfill
         fig, ax = plt.subplots(1, 1, figsize=(8, 8))
-        fig.set_dpi(600)
+        fig.set_dpi(300)
         fig.suptitle("PCR duplicate distribution")
         make_pcr_duplicate_histogram(probe_reads, filter_cutoff, ax)
         fig.text(0.5, 0.005,
@@ -199,7 +199,7 @@ def make_pdf_report(output_file, gapfill_adata, adata, probe_reads, filter_cutof
 
         # Plot the distributions of umis per cell and cells per gapfill
         fig, axs = plt.subplots(2, 1, figsize=(8, 12))
-        fig.set_dpi(600)
+        fig.set_dpi(300)
         fig.suptitle("UMIs distributions")
         axs[0].hist(umis_per_cell, bins=100)
         # Add horizontal line to show the # of probes
@@ -223,7 +223,7 @@ def make_pdf_report(output_file, gapfill_adata, adata, probe_reads, filter_cutof
 
         # Plot the number of unique gapfills per gene and the number of cells containing a gapfill for a gene
         fig, axs = plt.subplots(2, 1, figsize=(8, 12))
-        fig.set_dpi(600)
+        fig.set_dpi(300)
         fig.suptitle("Unique gapfills per gene")
         unique_genes = gapfill_adata.var['probe'].unique().tolist()
         gapfills_per_gene = np.zeros((gapfill_adata.shape[0],len(unique_genes)), dtype=float)
@@ -250,7 +250,7 @@ def make_pdf_report(output_file, gapfill_adata, adata, probe_reads, filter_cutof
 
         # Number of supporting reads per gene gapfill
         fig, ax = plt.subplots(1, 1, figsize=(8, 8))
-        fig.set_dpi(600)
+        fig.set_dpi(300)
         fig.suptitle("Supporting reads per gapfill")
         total_reads_per_probe = gapfill_adata.layers['total_reads'].todense().__array__().sum(0).flatten()
         # Sort
@@ -296,7 +296,7 @@ def make_pdf_report(output_file, gapfill_adata, adata, probe_reads, filter_cutof
                 gapfill_expression[:, i] = gapfill_adata[:, gapfill_adata.var['probe'] == gap_probe].X.toarray().sum(axis=1).flatten()
 
             fig, axs = plt.subplots(2, 1, figsize=(8, 12))
-            fig.set_dpi(600)
+            fig.set_dpi(300)
             fig.suptitle("Gapfill vs WTA")
             # Compute spearman's rank correlation for single cells
             sc_corr_results = spearmanr(gapfill_expression.flatten(), wta_expression.flatten())
