@@ -615,17 +615,17 @@ class VisiumHDFormatInfo(TechnologyFormatInfo):
                  barcode_list: Optional[list[Path]] = None):
         super().__init__(barcode_dir, read1_length, read2_length)
 
-        xy_whitelist = None
-        if barcode_list is not None:
-            barcodes = _parse_possible_barcodes(barcode_list)
-            if barcodes is not None:
-                xy_whitelist = set()
-                # Parse the coordinates from the barcode strings
-                for bc in barcodes:
-                    y, x = bc.split("-")[0].split("_")[-2:]
-                    x = int(x)
-                    y = int(y)
-                    xy_whitelist.add((x, y))
+        # xy_whitelist = None
+        # if barcode_list is not None:
+        #     barcodes = _parse_possible_barcodes(barcode_list)
+        #     if barcodes is not None:
+        #         xy_whitelist = set()
+        #         # Parse the coordinates from the barcode strings
+        #         for bc in barcodes:
+        #             y, x = bc.split("-")[0].split("_")[-2:]
+        #             x = int(x)
+        #             y = int(y)
+        #             xy_whitelist.add((x, y))
 
         # Load the barcodes, note that this REQUIRES spaceranger to be installed
         import shutil
@@ -682,9 +682,9 @@ class VisiumHDFormatInfo(TechnologyFormatInfo):
         # https://www.10xgenomics.com/support/software/space-ranger/latest/algorithms-overview/gene-expression#:~:text=using%20the%20edit%20distance%2C%20which%20allows%20for%20insertions%2C%20deletions%2C%20and%20substitutions.%20Up%20to%20four%20edits%20are%20permissible%20to%20correct%20a%20barcode%20to%20the%20whitelist.
         for x, bc1 in enumerate(slide_def.two_part.bc1_oligos):
             for y, bc2 in enumerate(slide_def.two_part.bc2_oligos):
-                if xy_whitelist is not None:
-                    if (x, y) not in xy_whitelist:
-                        continue   # Skip if not in the whitelist
+                # if xy_whitelist is not None:
+                #     if (x, y) not in xy_whitelist:
+                #         continue   # Skip if not in the whitelist
                 bc1s.add(bc1)  # Add barcodes if coordinate passed whitelist
                 bc2s.add(bc2)
                 self._bc_lengths.add(len(bc1))

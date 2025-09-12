@@ -6,6 +6,7 @@ import pandas as pd
 import matplotlib as mpl
 from scipy.stats import gaussian_kde
 import adjustText
+import seaborn as sns
 mpl.rcParams['figure.dpi'] = 300
 
 def plot_library_size(sdata, table, resolution: int = 2, include_0bp: bool = False):
@@ -126,7 +127,7 @@ def print_summary_stats(sdata, resolution: int = 2, include_0bp: bool = False):
 
     if not include_0bp:
         zero_bp_probes = get_all_0bp_probes(gf_adata)
-    gf_adata = gf_adata[:, ~gf_adata.var.probe.isin(zero_bp_probes)].copy()
+        gf_adata = gf_adata[:, ~gf_adata.var.probe.isin(zero_bp_probes)].copy()
 
     # Aggregate to probe level
     adata = gw.tl.collapse_gapfills(gf_adata)
@@ -134,14 +135,14 @@ def print_summary_stats(sdata, resolution: int = 2, include_0bp: bool = False):
     # N probes targeted and N with at least one count
     n_probes = adata.shape[1]
     n_at_least_one = (adata.X.sum(0) > 0).sum()
-    print(f"Number of probes targetted: {n_probes}")
+    print(f"Number of probes targeted: {n_probes}")
     print(f"Number of probes with at least one count: {n_at_least_one} ({n_at_least_one / n_probes * 100:.2f}%)")
 
     # Median counts per bin per probe (i.e. the median of matrix)
-    median_counts_per_bin_per_probe = np.median(adata.X.toarray().flatten())
+    median_counts_per_bin_per_probe = np.median(adata.X.flatten())
     print(f"Median counts per bin per probe: {median_counts_per_bin_per_probe:.2f}")
     # Mean counts per bin per probe (i.e. the mean of matrix)
-    mean_counts_per_bin_per_probe = np.mean(adata.X.toarray().flatten())
+    mean_counts_per_bin_per_probe = np.mean(adata.X.flatten())
     print(f"Mean counts per bin per probe: {mean_counts_per_bin_per_probe:.2f}")
 
     # Median counts per bin per gene for wta
@@ -149,3 +150,93 @@ def print_summary_stats(sdata, resolution: int = 2, include_0bp: bool = False):
     print(f"Median counts per bin per gene (WTA): {median_counts_per_bin_per_gene_wta:.2f}")
     mean_counts_per_bin_per_gene_wta = np.mean(wta_adata.X.toarray().flatten())
     print(f"Mean counts per bin per gene (WTA): {mean_counts_per_bin_per_gene_wta:.2f}")
+
+def _assign_genotype_calls(table, probe, wt_gf, alt_gf):
+    table.obs[probe] = 'N/A'
+    for i, row in table.var.iterrows():
+        gapfill = row['gapfill']
+        call = 'WT' if gapfill == wt_gf else 'ALT' if gapfill == alt_gf else "Other"
+        table.obs.loc[table.X[:, table.var.index.get_loc(i)].flatten() > 0, probe] = call
+    # Call heterozygous if both WT and ALT are present
+    wt_mask = (table.var.probe == probe) & (table.var.gapfill == wt_gf)
+    alt_mask = (table.var.probe == probe) & (table.var.gapfill == alt_gf)
+    wt_present = table.X[:, np.where(wt_mask)[0]].flatten() > 0
+    alt_present = table.X[:, np.where(alt_mask)[0]].flatten() > 0
+    both_present = wt_present & alt_present
+    table.obs['both_present'] = both_present
+    table.obs.loc[table.obs['both_present'], probe] = 'HET'
+    return table
+
+def genotype_cell_line_barplots(sdata, probe: str, wt_gf: str, alt_gf: str, resolution: int = 2):
+    table = sdata.tables[f'gf_square_{resolution:03d}um'].copy()
+    # Add the cell_line annotation to the obs if it doesn't exist
+    if 'cell_line' not in table.obs.columns:
+        wta = sdata.tables[f'square_{resolution:03d}um']
+        if 'cell_line' in wta.obs.columns:
+            # Add cell_line to gf table from wta by matching indices
+            table.obs['cell_line'] = wta.obs.loc[table.obs_names, 'cell_line'].values
+        else:
+            raise ValueError("cell_line annotation not found in either gf or wta data.")
+    table = table[:, table.var.probe == probe].copy()
+    if table.shape[1] == 0:
+        raise ValueError(f"Probe {probe} not found in data.")
+    table = _assign_genotype_calls(table, probe, wt_gf, alt_gf)
+    plt.figure(figsize=(8, 6))
+    prop_data = (
+        table.obs.groupby(['cell_line', probe])
+        .size()
+        .reset_index(name='count')
+        .groupby('cell_line')
+        .apply(lambda x: x.assign(proportion=x['count'] / x['count'].sum()))
+        .reset_index(drop=True)
+    )
+    # Filter N/A cell line
+    prop_data = prop_data[prop_data['cell_line'] != 'N/A']
+    ax = sns.barplot(data=prop_data, x='cell_line', y='proportion', hue=probe)
+    plt.title(f"Genotype Call Proportions for {probe} by Cell Line")
+    plt.xlabel("Cell Line")
+    plt.ylabel("Proportion of Bins")
+    plt.legend(title="Genotype Call")
+    plt.xticks(rotation=90)
+    plt.tight_layout()
+    return ax
+
+def genotype_accuracy_barplot(sdata, probe: str, wt_gf: str, alt_gf: str, celltype2genotype_acc: dict, resolution: int = 2, filter_na: bool = True):
+    table = sdata.tables[f'gf_square_{resolution:03d}um'].copy()
+    if 'cell_line' not in table.obs.columns:
+        wta = sdata.tables[f'square_{resolution:03d}um']
+        if 'cell_line' in wta.obs.columns:
+            # Add cell_line to gf table from wta by matching indices
+            table.obs['cell_line'] = wta.obs.loc[table.obs_names, 'cell_line'].values
+        else:
+            raise ValueError("cell_line annotation not found in either gf or wta data.")
+    table = table[:, table.var.probe == probe].copy()
+    if table.shape[1] == 0:
+        raise ValueError(f"Probe {probe} not found in data.")
+    table = _assign_genotype_calls(table, probe, wt_gf, alt_gf)
+
+    accuracy_data = {
+        'cell_line': [],
+        'accuracy': []
+    }
+    for cell_type, expected_genotype in celltype2genotype_acc.items():
+        subset = table.obs[table.obs['cell_line'] == cell_type]
+        if len(subset) == 0:
+            continue
+        correct_calls = subset[subset[probe] == expected_genotype]
+        if filter_na:
+            accuracy = len(correct_calls) / len(subset[subset[probe] != 'N/A'])
+        else:
+            accuracy = len(correct_calls) / len(subset)
+        accuracy_data['cell_line'].append(cell_type)
+        accuracy_data['accuracy'].append(accuracy)
+
+    plt.figure(figsize=(8, 6))
+    ax = sns.barplot(data=pd.DataFrame(accuracy_data), x='cell_line', y='accuracy')
+    plt.ylim(0, 1)
+    plt.title(f"Genotype Call Accuracy for {probe} by Cell Line")
+    plt.xlabel("Cell Line")
+    plt.ylabel("Accuracy")
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    return ax
