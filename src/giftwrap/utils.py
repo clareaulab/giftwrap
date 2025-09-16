@@ -1109,7 +1109,7 @@ class ProbeParser:
         """
         From the given read2 sequence, parse the probe, gapfill, probe bc, and process states.
         :param read2: The R2 sequence to parse.
-        :param max_mismatches: The maximum number of mismatches to allow per 10bp.p
+        :param max_mismatches: The maximum number of mismatches to allow per 10bp.
         :param skip_constant_seq: If True, do not filter out reads that do not have the constant sequence.
         :param flexible_start: If True, allow for flexible start positions for the LHS sequence (i.e. not anchored to the start of the read).
         :return: The probe index, gapfill sequence, gapfill_start, gapfill_end, probe barcode, and process states.

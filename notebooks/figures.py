@@ -162,12 +162,15 @@ def _assign_genotype_calls(table, probe, wt_gf, alt_gf):
     alt_mask = (table.var.probe == probe) & (table.var.gapfill == alt_gf)
     wt_present = table.X[:, np.where(wt_mask)[0]].flatten() > 0
     alt_present = table.X[:, np.where(alt_mask)[0]].flatten() > 0
+    if wt_present.shape != alt_present.shape:
+        table.obs['both_present'] = False
+        return table
     both_present = wt_present & alt_present
     table.obs['both_present'] = both_present
     table.obs.loc[table.obs['both_present'], probe] = 'HET'
     return table
 
-def genotype_cell_line_barplots(sdata, probe: str, wt_gf: str, alt_gf: str, resolution: int = 2):
+def genotype_cell_line_barplots(sdata, probe: str, wt_gf: str, alt_gf: str, resolution: int = 2, ax=None):
     table = sdata.tables[f'gf_square_{resolution:03d}um'].copy()
     # Add the cell_line annotation to the obs if it doesn't exist
     if 'cell_line' not in table.obs.columns:
@@ -181,7 +184,9 @@ def genotype_cell_line_barplots(sdata, probe: str, wt_gf: str, alt_gf: str, reso
     if table.shape[1] == 0:
         raise ValueError(f"Probe {probe} not found in data.")
     table = _assign_genotype_calls(table, probe, wt_gf, alt_gf)
-    plt.figure(figsize=(8, 6))
+    if ax is None:
+        plt.figure(figsize=(8, 6))
+        ax = plt.gca()
     prop_data = (
         table.obs.groupby(['cell_line', probe])
         .size()
@@ -192,16 +197,22 @@ def genotype_cell_line_barplots(sdata, probe: str, wt_gf: str, alt_gf: str, reso
     )
     # Filter N/A cell line
     prop_data = prop_data[prop_data['cell_line'] != 'N/A']
-    ax = sns.barplot(data=prop_data, x='cell_line', y='proportion', hue=probe)
-    plt.title(f"Genotype Call Proportions for {probe} by Cell Line")
-    plt.xlabel("Cell Line")
-    plt.ylabel("Proportion of Bins")
-    plt.legend(title="Genotype Call")
-    plt.xticks(rotation=90)
-    plt.tight_layout()
+    sns.barplot(
+        data=prop_data,
+        x='cell_line',
+        y='proportion',
+        hue=probe,
+        ax=ax,
+        palette={'N/A': 'orange', 'WT': 'blue', 'ALT': 'red', 'HET': 'green', 'Other': 'lightgray'}
+    )
+    ax.set_title(f"Genotype Call Proportions for {probe} by Cell Line")
+    ax.set_xlabel("Cell Line")
+    ax.set_ylabel("Proportion of Bins")
+    ax.legend(title="Genotype Call")
+    ax.set_xticklabels(ax.get_xticklabels(), rotation=90)
     return ax
 
-def genotype_accuracy_barplot(sdata, probe: str, wt_gf: str, alt_gf: str, celltype2genotype_acc: dict, resolution: int = 2, filter_na: bool = True):
+def genotype_accuracy_barplot(sdata, probe: str, wt_gf: str, alt_gf: str, celltype2genotype_acc: dict, resolution: int = 2, filter_na: bool = True, ax=None):
     table = sdata.tables[f'gf_square_{resolution:03d}um'].copy()
     if 'cell_line' not in table.obs.columns:
         wta = sdata.tables[f'square_{resolution:03d}um']
@@ -231,12 +242,14 @@ def genotype_accuracy_barplot(sdata, probe: str, wt_gf: str, alt_gf: str, cellty
         accuracy_data['cell_line'].append(cell_type)
         accuracy_data['accuracy'].append(accuracy)
 
-    plt.figure(figsize=(8, 6))
-    ax = sns.barplot(data=pd.DataFrame(accuracy_data), x='cell_line', y='accuracy')
-    plt.ylim(0, 1)
-    plt.title(f"Genotype Call Accuracy for {probe} by Cell Line")
-    plt.xlabel("Cell Line")
-    plt.ylabel("Accuracy")
-    plt.xticks(rotation=45)
-    plt.tight_layout()
+    if ax is None:
+        plt.figure(figsize=(8, 6))
+        ax = sns.barplot(data=pd.DataFrame(accuracy_data), x='cell_line', y='accuracy')
+    else:
+        sns.barplot(data=pd.DataFrame(accuracy_data), x='cell_line', y='accuracy', ax=ax)
+    ax.set_ylim(0, 1)
+    ax.set_title(f"Genotype Call Accuracy for {probe} by Cell Line")
+    ax.set_xlabel("Cell Line")
+    ax.set_ylabel("Accuracy")
+    ax.set_xticklabels(ax.get_xticklabels(), rotation=90)
     return ax
