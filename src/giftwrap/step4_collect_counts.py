@@ -18,7 +18,7 @@ from .utils import read_manifest, read_barcodes, maybe_multiprocess, maybe_gzip,
     _tx_barcode_to_oligo, compile_flatfile
 
 
-def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_df: pd.DataFrame, overwrite: bool, plex: int = 1, multiplex: bool = False, flatten: bool = False):
+def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_df: pd.DataFrame, overwrite: bool, plex: int = 1, multiplex: bool = False, flatten: bool = False, all_pcr_thresholds: bool = False):
     """
     Generate an h5 file with counts for each barcode.
     :param input: The input file.
@@ -28,6 +28,8 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
     :param overwrite: Overwrite the output file if it exists.
     :param plex: The plex number.
     :param multiplex: Whether the run was multiplexed.
+    :param flatten: Whether to also output a flattened tsv file.
+    :param all_pcr_thresholds: Whether to include counts for all PCR duplicate thresholds.
     """
     # Check if the output file exists
     final_output = output / f"counts.{plex}.h5"
@@ -53,6 +55,7 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
 
     # Use defaultdicts for faster accumulation
     counts_data = defaultdict(int)
+    dup_count_mapping = defaultdict(lambda: defaultdict(int))
     total_umi_data = defaultdict(int)
     percent_supporting_data = defaultdict(float)
     possible_probes = set()
@@ -93,7 +96,10 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
             # Store data for later matrix construction
             matrix_key = (cell_barcode_h5_idx, probe_key)
             counts_data[matrix_key] += 1
-            total_umi_data[matrix_key] += int(umi_dup_count)
+            umi_dup_count = int(umi_dup_count)
+            total_umi_data[matrix_key] += umi_dup_count
+            if all_pcr_thresholds:
+                dup_count_mapping[umi_dup_count][matrix_key] += 1
             percent_supporting_data[matrix_key] += float(percent_supporting)
             n_lines += 1
 
@@ -119,7 +125,7 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
     counts_vals = []
     umi_vals = []
     percent_vals = []
-
+    max_dups = max(total_umi_data.values())
     for (cell_idx, probe_key), count in counts_data.items():
         probe_idx = probe2h5_idx[probe_key]
         rows.append(cell_idx)
@@ -140,6 +146,21 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
     counts_matrix = scipy.sparse.coo_matrix((counts_vals, (rows, cols)), shape=(n_cells, n_probes), dtype=np.uint32)
     total_umi_dup_matrix = scipy.sparse.coo_matrix((umi_vals, (rows, cols)), shape=(n_cells, n_probes), dtype=np.uint32)
     percent_supporting_matrix = scipy.sparse.coo_matrix((percent_vals, (rows, cols)), shape=(n_cells, n_probes), dtype=np.float32)
+
+    # Now, we can compute matrices for all PCR thresholds if needed
+    # We will do this by progressively subtracing counts by dup count
+    filtered_counts = None
+    if all_pcr_thresholds:
+        filtered_counts = dict()
+        curr_counts_matrix = counts_matrix.copy().tolil()  # Start with full counts
+        for i in range(0, max_dups):  # Duplicate number to remove
+            if i in dup_count_mapping:
+                for (cell_idx, probe_key), dup_count in dup_count_mapping[i].items():
+                    probe_idx = probe2h5_idx[probe_key]
+                    curr_counts_matrix[cell_idx, probe_idx] -= dup_count
+            # Store a copy of the current counts matrix
+            filtered_counts[i+1] = curr_counts_matrix.copy().tocoo()
+
 
     print("Done.")
 
@@ -192,6 +213,15 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
         write_sparse_matrix(matrix_grp, "percent_supporting", percent_supporting_matrix)
         output_file.flush()
         del percent_supporting_matrix  # Free up memory
+
+        if all_pcr_thresholds:
+            all_pcr_grp = output_file.create_group("pcr_thresholded_counts")
+            all_pcr_grp.attrs['max_pcr_duplicates'] = max_dups
+            for dup_threshold, matrix in filtered_counts.items():
+                write_sparse_matrix(all_pcr_grp, f"pcr{dup_threshold}", matrix)
+                output_file.flush()
+                del matrix  # Free up memory
+
         print("Done.")
 
         print("Writing metadata...", end="")
@@ -215,10 +245,12 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
         output_file.attrs['n_cells'] = len(barcode2h5_idx)
         output_file.attrs['n_probes'] = int(manifest.shape[0])
         output_file.attrs['n_probe_gapfill_combinations'] = len(probe2h5_idx)
+        output_file.attrs['all_pcr_thresholds'] = all_pcr_thresholds
+        output_file.attrs['max_pcr_duplicates'] = max_dups
         print("Done.")
 
 
-def run(output: str, cores: int, overwrite: bool, was_multiplexed: bool, flatten: bool):
+def run(output: str, cores: int, overwrite: bool, was_multiplexed: bool, flatten: bool, all_pcr_thresholds: bool):
     if cores < 1:
         cores = os.cpu_count()
 
@@ -254,7 +286,7 @@ def run(output: str, cores: int, overwrite: bool, was_multiplexed: bool, flatten
             pool.starmap(
                 collect_counts,
                 [
-                    (input, output, manifest, barcodes_df[barcodes_df.plex == plex].copy(), overwrite, plex, flatten)
+                    (input, output, manifest, barcodes_df[barcodes_df.plex == plex].copy(), overwrite, plex, flatten, all_pcr_thresholds)
                     for plex in plexes
                 ]
             )
@@ -266,7 +298,7 @@ def run(output: str, cores: int, overwrite: bool, was_multiplexed: bool, flatten
             print("Detected single-plex run.")
         print("Collecting counts...")
         # No need to multithread
-        collect_counts(input, output, manifest, barcodes_df, overwrite, int(plexes[0]), was_multiplexed, flatten)
+        collect_counts(input, output, manifest, barcodes_df, overwrite, int(plexes[0]), was_multiplexed, flatten, all_pcr_thresholds)
         print(f"Counts data saved as counts.1.h5.")
 
     exit(0)
@@ -321,8 +353,15 @@ def main():
         help="Flatten the final output to a gzipped tsv file."
     )
 
+    parser.add_argument(
+        "--all_pcr_thresholds",
+        required=False,
+        action="store_true",
+        help="If set, the resultant counts file will contain filtered counts for all possible minimum number of PCR duplicates. The parsed object will then have a new obsm field 'X_pcr{n}' for n in 1 to the maximum number of PCR duplicates observed in the data. This will increase the size of the output file, but allow for more flexible downstream filtering."
+    )
+
     args = parser.parse_args()
-    run(args.output, args.cores, args.overwrite, args.multiplex, args.flatten)
+    run(args.output, args.cores, args.overwrite, args.multiplex, args.flatten, args.all_pcr_thresholds)
 
 
 if __name__ == "__main__":

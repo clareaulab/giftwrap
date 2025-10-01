@@ -191,6 +191,12 @@ def main():
         default=0,
         help="The minimum number of reads supporting a gapfill to include it in the final counts. Default is 0 (no filtering)."
     )
+    parser.add_argument(
+        "--all_pcr_thresholds",
+        required=False,
+        action="store_true",
+        help="If set, the resultant counts file will contain filtered counts for all possible minimum number of PCR duplicates. The parsed object will then have a new obsm field 'X_pcr{n}' for n in 1 to the maximum number of PCR duplicates observed in the data. This will increase the size of the output file, but allow for more flexible downstream filtering."
+    )
     args = parser.parse_args()
 
     probes = args.probes
@@ -311,6 +317,7 @@ def main():
             "-c", str(cores)
         ] + (['--multiplex'] if multiplex > 0 else [])
         + (['--overwrite'] if overwrite else [])
+        + (['--all_pcr_thresholds'] if args.all_pcr_thresholds else [])
         + (['--flatten'] if args.flatten else []))
         if returncode != 0:
             print("Error: Failed to collect counts.", file=sys.stderr, flush=True)
