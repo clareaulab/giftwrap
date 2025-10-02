@@ -1587,7 +1587,7 @@ def filter_h5_file_by_barcodes(input_file: Path, output_file: Path, barcodes_lis
         if bool(f.attrs['all_pcr_thresholds']):
             max_pcr_dups = int(f.attrs['max_pcr_duplicates'])
             all_pcr_grp = f["pcr_thresholded_counts"]
-            for pcr_dup in range(1, max_pcr_dups + 1):
+            for pcr_dup in range(1, max_pcr_dups):
                 layer_name = f"pcr{pcr_dup}"
                 if layer_name in all_pcr_grp:
                     data = read_sparse_matrix(all_pcr_grp, layer_name)
@@ -1860,7 +1860,7 @@ def read_h5_file(filename: str) -> ad.AnnData:
         if f.attrs['all_pcr_thresholds']:
             # We must read the pcr thresholds save the counts matrices for each threshold to the layers
             dup_grp = f['pcr_thresholded_counts']
-            for threshold in range(1, f.attrs['max_pcr_duplicates']+1):
+            for threshold in range(1, f.attrs['max_pcr_duplicates']):
                 adata.layers[f'X_pcr_threshold_{threshold+1}'] = read_sparse_matrix(dup_grp, f'pcr{threshold+1}')
 
     return adata
