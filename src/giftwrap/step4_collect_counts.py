@@ -24,14 +24,13 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
     :param input: The input file.
     :param output: The output directory.
     :param manifest: The manifest metadata.
-    :param barcodes_df: The dataframe containing all barcodes and metadata.
+    :param barcodes_df: The dataframe containing all barcodes and metadata for the current plex.
     :param overwrite: Overwrite the output file if it exists.
     :param plex: The plex number.
     :param multiplex: Whether the run was multiplexed.
     :param flatten: Whether to also output a flattened tsv file.
     :param all_pcr_thresholds: Whether to include counts for all PCR duplicate thresholds.
     """
-    # Check if the output file exists
     final_output = output / f"counts.{plex}.h5"
     if final_output.exists() and not overwrite:
         raise AssertionError(f"Output file already exists: {final_output}")
@@ -40,81 +39,73 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
 
     # Replace the barcode -plex with {probe bc}-1 to match cellranger output
     if multiplex:
-        barcodes_df.barcode = barcodes_df.barcode.str.replace(f"-{plex}", f"{_tx_barcode_to_oligo[plex]}-1")
+        barcodes_df.barcode = barcodes_df.barcode.str.replace(f"-{plex}", f"{_tx_barcode_to_oligo.get(plex, '')}-1")
 
+    # Pre-compute mappings to avoid extremely slow pandas lookups inside the main loop.
+    # 1. Map original cell index (from file) to the new, dense HDF5 index (0, 1, 2...)
+    original_idx_to_h5_idx = {orig_idx: h5_idx for h5_idx, orig_idx in enumerate(barcodes_df.index)}
+    valid_original_indices = set(barcodes_df.index)
+    # 2. Map probe name to its original index from the manifest file.
+    name_to_original_idx = pd.Series(manifest['index'].values, index=manifest['name']).to_dict()
+    # 3. Keep original mappings needed for file processing and writing.
     probe_idx2name = {idx: name for idx, name in enumerate(manifest['name'])}
-
-    # Get metadata cols
     barcode2h5_idx = {bc: idx for idx, bc in enumerate(barcodes_df.barcode.values)}
 
     if flatten:
-        compile_flatfile(manifest, str(input), barcodes_df.barcode.values.tolist(), plex, str(output / f'flat_counts.{plex}.tsv.gz'))
+        compile_flatfile(manifest, str(input), barcodes_df.barcode.values.tolist(), plex,
+                         str(output / f'flat_counts.{plex}.tsv.gz'))
 
-    # Single pass through file - collect all data at once
     print("Reading and processing file...", end="")
-
-    # Use defaultdicts for faster accumulation
     counts_data = defaultdict(int)
     dup_count_mapping = defaultdict(lambda: defaultdict(int))
     total_umi_data = defaultdict(int)
     percent_supporting_data = defaultdict(float)
     possible_probes = set()
-    # Track original indices for cells and probes
-    original_cell_indices = set()
-    original_probe_indices = set()
     n_lines = 0
-
-    # Pre-convert plex to int for faster comparison
     plex_int = int(plex)
-    barcode_h5_indices = set(barcode2h5_idx.values())
 
     with maybe_gzip(input, 'r') as input_file:
         # Skip the header
         next(input_file)
         for line in input_file:
-            cell_idx, probe_idx, probe_bc_idx, umi, gapfill, umi_dup_count, percent_supporting = line.strip().split("\t")
-            cell_idx = int(cell_idx)
-            probe_bc_idx = int(probe_bc_idx)
+            cell_idx_str, probe_idx_str, probe_bc_idx_str, _, gapfill, umi_dup_count_str, percent_supporting_str = line.strip().split("\t")
 
-            # Fast filtering
-            if cell_idx not in barcode_h5_indices or probe_bc_idx != plex_int:
+            # Fast filtering on probe barcode index
+            if int(probe_bc_idx_str) != plex_int:
                 continue
 
-            probe_idx = int(probe_idx)
+            # Fast filtering on original cell index
+            cell_idx = int(cell_idx_str)
+            if cell_idx not in valid_original_indices:
+                continue
+
+            # Process valid line
+            probe_idx = int(probe_idx_str)
             probe_name = probe_idx2name[probe_idx]
             probe_key = (probe_name, gapfill)
             possible_probes.add(probe_key)
 
-            # Track original indices
-            original_cell_indices.add(cell_idx)
-            original_probe_indices.add(probe_idx)
+            cell_barcode_h5_idx = original_idx_to_h5_idx[cell_idx]
 
-            # Get barcode directly - avoid double lookup
-            cell_barcode = barcodes_df.iloc[cell_idx].barcode
-            cell_barcode_h5_idx = barcode2h5_idx[cell_barcode]
-
-            # Store data for later matrix construction
             matrix_key = (cell_barcode_h5_idx, probe_key)
             counts_data[matrix_key] += 1
-            umi_dup_count = int(umi_dup_count)
+            umi_dup_count = int(umi_dup_count_str)
             total_umi_data[matrix_key] += umi_dup_count
+            percent_supporting_data[matrix_key] += float(percent_supporting_str)
             if all_pcr_thresholds:
                 dup_count_mapping[umi_dup_count][matrix_key] += 1
-            percent_supporting_data[matrix_key] += float(percent_supporting)
             n_lines += 1
 
     print(f"{len(possible_probes)} probe combinations found, {n_lines} valid lines processed.")
 
-    # Create probe index mapping and track original probe indices for each probe_key
     probe2h5_idx = {probe_key: idx for idx, probe_key in enumerate(sorted(possible_probes))}
     probe_key_to_original_idx = {}
     for probe_key in possible_probes:
         probe_name = probe_key[0]
-        # Find the original probe index from the manifest
-        original_idx = manifest[manifest['name'] == probe_name]['index'].iloc[0]
+        # OPTIMIZED: Use the pre-computed dictionary for a fast lookup.
+        original_idx = name_to_original_idx[probe_name]
         probe_key_to_original_idx[probe_key] = original_idx
 
-    # Build sparse matrices efficiently using COO format
     print("Building sparse matrices...", end="")
     n_cells = len(barcode2h5_idx)
     n_probes = len(probe2h5_idx)
@@ -132,21 +123,15 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
         cols.append(probe_idx)
         counts_vals.append(count)
         umi_vals.append(total_umi_data[(cell_idx, probe_key)])
-        # Normalize percent supporting by count
-        percent_vals.append(percent_supporting_data[(cell_idx, probe_key)] / count)
+        percent_vals.append(percent_supporting_data[(cell_idx, probe_key)] / (count+1e-4))
 
-    # Convert to numpy arrays for efficiency
-    rows = np.array(rows, dtype=np.int32)
-    cols = np.array(cols, dtype=np.int32)
-    counts_vals = np.array(counts_vals, dtype=np.uint32)
-    umi_vals = np.array(umi_vals, dtype=np.uint32)
-    percent_vals = np.array(percent_vals, dtype=np.float32)
-
-    # Create COO matrices
-    counts_matrix = scipy.sparse.coo_matrix((counts_vals, (rows, cols)), shape=(n_cells, n_probes), dtype=np.uint32)
-    total_umi_dup_matrix = scipy.sparse.coo_matrix((umi_vals, (rows, cols)), shape=(n_cells, n_probes), dtype=np.uint32)
-    percent_supporting_matrix = scipy.sparse.coo_matrix((percent_vals, (rows, cols)), shape=(n_cells, n_probes), dtype=np.float32)
-
+    rows, cols = np.array(rows, dtype=np.int32), np.array(cols, dtype=np.int32)
+    counts_matrix = scipy.sparse.coo_matrix((np.array(counts_vals, dtype=np.uint32), (rows, cols)),
+                                            shape=(n_cells, n_probes))
+    total_umi_dup_matrix = scipy.sparse.coo_matrix((np.array(umi_vals, dtype=np.uint32), (rows, cols)),
+                                                   shape=(n_cells, n_probes))
+    percent_supporting_matrix = scipy.sparse.coo_matrix((np.array(percent_vals, dtype=np.float32), (rows, cols)),
+                                                        shape=(n_cells, n_probes))
     # Now, we can compute matrices for all PCR thresholds if needed
     # We will do this by progressively subtracing counts by dup count
     filtered_counts = None
@@ -161,56 +146,42 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
             # Store a copy of the current counts matrix
             filtered_counts[i+1] = curr_counts_matrix.copy().tocoo()
 
-
     print("Done.")
 
-    # Next we start writing the file
     with h5py.File(final_output, 'w') as output_file:
-        # Prepare groups/datasets based on raw_probe_bc_matrix.h5 returned by cellranger
         matrix_grp = output_file.create_group("matrix")
-        # List of barcodes
-        matrix_grp.create_dataset("barcode",
-                                  data=np.array(list(barcode2h5_idx.keys()), dtype='S'),
-                                  compression='gzip')
-        # Store original cell indices corresponding to each barcode
-        original_cell_idx_array = np.array([barcodes_df.index[barcodes_df.barcode == bc].tolist()[0]
-                                          for bc in barcode2h5_idx.keys()], dtype=np.uint32)
-        matrix_grp.create_dataset("cell_index",
-                                  data=original_cell_idx_array,
-                                  compression='gzip')
+        matrix_grp.create_dataset("barcode", data=np.array(list(barcode2h5_idx.keys()), dtype='S'), compression='gzip')
 
-        # List of probes
-        matrix_grp.create_dataset("probe",
-                                  data=np.array(list(probe2h5_idx.keys()), dtype='S'),
-                                  compression='gzip')
-        # Store original probe indices corresponding to each probe_key
-        original_probe_idx_array = np.array([probe_key_to_original_idx[probe_key]
-                                           for probe_key in sorted(probe2h5_idx.keys())], dtype=np.uint32)
-        matrix_grp.create_dataset("probe_index",
-                                  data=original_probe_idx_array,
-                                  compression='gzip')
+        # The order of barcodes in barcode2h5_idx is the same as in barcodes_df.
+        # We can directly use the index of the dataframe, which is much faster than a list comprehension with lookups.
+        original_cell_idx_array = barcodes_df.index.values.astype(np.uint32)
+        matrix_grp.create_dataset("cell_index", data=original_cell_idx_array, compression='gzip')
+
+        sorted_probe_keys = sorted(probe2h5_idx.keys())
+        matrix_grp.create_dataset("probe", data=np.array(sorted_probe_keys, dtype='S'), compression='gzip')
+
+        original_probe_idx_array = np.array([probe_key_to_original_idx[pk] for pk in sorted_probe_keys],
+                                            dtype=np.uint32)
+        matrix_grp.create_dataset("probe_index", data=original_probe_idx_array, compression='gzip')
         output_file.flush()
 
-        # Save cell metadata
         cell_metadata_grp = output_file.create_group("cell_metadata")
-        cell_metadata_grp.create_dataset("columns", data=np.array(barcodes_df.columns.values.tolist(), dtype='S'), compression='gzip')
+        cell_metadata_grp.create_dataset("columns", data=np.array(barcodes_df.columns.values.tolist(), dtype='S'),
+                                         compression='gzip')
         for col in barcodes_df.columns:
             values = barcodes_df[col].values
-            # If it is not an integer or float, then convert to string
             if not np.issubdtype(values.dtype, np.number):
                 values = values.astype('S')
             cell_metadata_grp.create_dataset(col, data=values, compression='gzip')
         output_file.flush()
 
         print("Writing counts...", end="")
-
-        write_sparse_matrix(matrix_grp, "data", counts_matrix)  # Shuffle for better compression
-        output_file.flush()
-        del counts_matrix  # Free up memory
+        write_sparse_matrix(matrix_grp, "data", counts_matrix)
+        del counts_matrix
         write_sparse_matrix(matrix_grp, "total_reads", total_umi_dup_matrix)
-        output_file.flush()
-        del total_umi_dup_matrix  # Free up memory
+        del total_umi_dup_matrix
         write_sparse_matrix(matrix_grp, "percent_supporting", percent_supporting_matrix)
+        del percent_supporting_matrix
         output_file.flush()
         del percent_supporting_matrix  # Free up memory
 
@@ -225,26 +196,21 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
         print("Done.")
 
         print("Writing metadata...", end="")
-        # Save the manifest data
         manifest_grp = output_file.create_group("probe_metadata")
-
-        # Save the manifest dataframe in a separate dataset
-        manifest_grp.create_dataset("name", data=np.array(manifest['name'], dtype='S'), compression='gzip')
-        if 'gene' in manifest.columns:
-            manifest_grp.create_dataset("gene", data=np.array(manifest['gene'], dtype='S'), compression='gzip')
-        manifest_grp.create_dataset("lhs_probe", data=np.array(manifest['lhs_probe'], dtype='S'), compression='gzip')
-        manifest_grp.create_dataset("rhs_probe", data=np.array(manifest['rhs_probe'], dtype='S'), compression='gzip')
-        manifest_grp.create_dataset("gap_probe_sequence", data=np.array(manifest['gap_probe_sequence'], dtype='S'), compression='gzip')
-        manifest_grp.create_dataset("original_sequence", data=np.array(manifest['original_gap_probe_sequence'], dtype='S'), compression='gzip')
+        for col in ['name', 'gene', 'lhs_probe', 'rhs_probe', 'gap_probe_sequence']:
+            if col in manifest.columns:
+                manifest_grp.create_dataset(col, data=np.array(manifest[col], dtype='S'), compression='gzip')
+        manifest_grp.create_dataset("original_sequence",
+                                    data=np.array(manifest['original_gap_probe_sequence'], dtype='S'),
+                                    compression='gzip')
         manifest_grp.create_dataset("index", data=np.array(manifest['index'], dtype=np.uint32), compression='gzip')
 
-        # Save some attributes
         output_file.attrs['plex'] = plex
         output_file.attrs['project'] = output.name
         output_file.attrs['created_date'] = str(pd.Timestamp.now())
-        output_file.attrs['n_cells'] = len(barcode2h5_idx)
+        output_file.attrs['n_cells'] = n_cells
         output_file.attrs['n_probes'] = int(manifest.shape[0])
-        output_file.attrs['n_probe_gapfill_combinations'] = len(probe2h5_idx)
+        output_file.attrs['n_probe_gapfill_combinations'] = n_probes
         output_file.attrs['all_pcr_thresholds'] = all_pcr_thresholds
         output_file.attrs['max_pcr_duplicates'] = max_dups
         print("Done.")
@@ -255,51 +221,42 @@ def run(output: str, cores: int, overwrite: bool, was_multiplexed: bool, flatten
         cores = os.cpu_count()
 
     output = Path(output)
-    assert output.exists(), f"Output directory does not exist."
-    input = output / "probe_reads.tsv.gz"
-    if not input.exists():
-        input = output / "probe_reads.tsv"
-    assert input.exists(), f"Input file not found: {input}"
+    assert output.exists(), f"Output directory does not exist: {output}"
+    input_gz = output / "probe_reads.tsv.gz"
+    input_tsv = output / "probe_reads.tsv"
+    input = input_gz if input_gz.exists() else input_tsv
+    assert input.exists(), f"Input file not found in {output}"
 
     print("Reading manifest and barcodes...", end="")
     manifest = read_manifest(output)
     barcodes_df = read_barcodes(output)
     print("Done.")
 
-    # Multiplexed if there is more than one unique number plex indicated
     plexes = barcodes_df.plex.unique().tolist()
     multiplex = len(plexes) > 1
-    # # Detect multiplexed experiment
-    # demultiplexed_barcodes = dict()
-    # for idx, bc in barcodes.items():
-    #     probe_bc = bc.split("-")[1]
-    #     if probe_bc not in demultiplexed_barcodes:
-    #         demultiplexed_barcodes[probe_bc] = dict()
-    #     demultiplexed_barcodes[probe_bc][idx] = bc
 
-    if multiplex > 1:
-        # Multiplexed run
-        print(f"Detected {multiplex}-multiplexed run.")
-        print("Collecting counts for each probe barcode...")
+    if multiplex:
+        print(f"Detected {len(plexes)}-plex run. Collecting counts for each probe barcode...")
         mp = maybe_multiprocess(cores)
         with mp as pool:
             pool.starmap(
                 collect_counts,
                 [
-                    (input, output, manifest, barcodes_df[barcodes_df.plex == plex].copy(), overwrite, plex, flatten, all_pcr_thresholds)
+                    (input, output, manifest, barcodes_df[barcodes_df.plex == plex].copy(), overwrite, plex, multiplex,
+                     flatten, all_pcr_thresholds)
                     for plex in plexes
                 ]
             )
-        print(f"Counts data saved as counts.[{','.join(plexes)}].h5")
+        print(f"Counts data saved as counts.[{','.join(map(str, sorted(plexes)))}].h5")
     else:
-        if was_multiplexed or plexes[0] > 1:
-            print(f"Detected multiplexed run using BC{plexes[0]}.")
+        plex = int(plexes[0])
+        if was_multiplexed or plex > 1:
+            print(f"Detected single-plex run using BC{plex}.")
         else:
             print("Detected single-plex run.")
         print("Collecting counts...")
-        # No need to multithread
-        collect_counts(input, output, manifest, barcodes_df, overwrite, int(plexes[0]), was_multiplexed, flatten, all_pcr_thresholds)
-        print(f"Counts data saved as counts.1.h5.")
+        collect_counts(input, output, manifest, barcodes_df, overwrite, plex, was_multiplexed, flatten, all_pcr_thresholds)
+        print(f"Counts data saved as counts.{plex}.h5.")
 
     exit(0)
 

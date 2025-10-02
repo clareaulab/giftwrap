@@ -236,9 +236,9 @@ def genotype_accuracy_barplot(sdata, probe: str, wt_gf: str, alt_gf: str, cellty
             continue
         correct_calls = subset[subset[probe] == expected_genotype]
         if filter_na:
-            accuracy = len(correct_calls) / len(subset[subset[probe] != 'N/A'])
+            accuracy = len(correct_calls) / (len(subset[subset[probe] != 'N/A'])+1e-4)
         else:
-            accuracy = len(correct_calls) / len(subset)
+            accuracy = len(correct_calls) / (len(subset)+1e-4)
         accuracy_data['cell_line'].append(cell_type)
         accuracy_data['accuracy'].append(accuracy)
 
@@ -253,3 +253,45 @@ def genotype_accuracy_barplot(sdata, probe: str, wt_gf: str, alt_gf: str, cellty
     ax.set_ylabel("Accuracy")
     ax.set_xticklabels(ax.get_xticklabels(), rotation=90)
     return ax
+
+
+def psuedobulk_labels(sdata, probe: str, resolution: int = 2) -> pd.DataFrame:
+    """
+    Create a dataframe that simply contains the counts for each gapfill grouped by annotated cell lines in space.
+    """
+    table = sdata.tables[f'gf_square_{resolution:03d}um'].copy()
+    if 'cell_line' not in table.obs.columns:
+        wta = sdata.tables[f'square_{resolution:03d}um']
+        if 'cell_line' in wta.obs.columns:
+            # Add cell_line to gf table from wta by matching indices
+            table.obs['cell_line'] = wta.obs.loc[table.obs_names, 'cell_line'].values
+        else:
+            raise ValueError("cell_line annotation not found in either gf or wta data.")
+    table = table[:, table.var.probe == probe].copy()
+    if table.shape[1] == 0:
+        raise ValueError(f"Probe {probe} not found in data.")
+    df = pd.DataFrame(table.X.toarray(), columns=table.var['gapfill'], index=table.obs_names)
+    df = df.join(table.obs[['cell_line']])
+    df = df.groupby('cell_line').sum().reset_index()
+    return df
+
+
+def pseudobulk_genotype_table(sdata, probe: str, wt_gf: str, alt_gf: str, celltype2genotype_acc: dict, resolution: int = 2):
+    labels = psuedobulk_labels(sdata, probe, resolution)
+    # First, remove unlabelled cell lines
+    labels = labels[labels['cell_line'] != 'N/A']
+    # Next rename gapfills to WT, ALT, Other
+    gapfill_to_genotype = {wt_gf: 'WT', alt_gf: 'ALT'}
+    labels = labels.rename(columns=gapfill_to_genotype)
+    labels = labels.rename(columns={col: 'Othertmp' for col in labels.columns if col not in ['cell_line', 'WT', 'ALT']})
+    # Sum all 'Other' columns into a single 'Other' column
+    if 'Othertmp' in labels.columns:
+        labels['Other'] = labels[['Othertmp']].sum(axis=1)
+        labels = labels[['cell_line', 'WT', 'ALT', 'Other']]
+    else:
+        labels['Other'] = 0
+        labels = labels[['cell_line', 'WT', 'ALT', 'Other']]
+
+    # Next, add a column for expected genotype
+    labels['expected_genotype'] = labels['cell_line'].map(celltype2genotype_acc)
+    return labels
