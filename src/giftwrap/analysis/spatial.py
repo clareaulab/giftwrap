@@ -14,6 +14,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
 import scipy
+import scipy.sparse
 
 import giftwrap.analysis.tools as tl
 try:
@@ -85,34 +86,42 @@ def bin(adata: ad.AnnData, resolution: int = 8) -> ad.AnnData:
     # Get unique bin IDs and an array telling us which bin each row belongs to
     unique_bins, inverse_idx = np.unique(bin_idx, return_inverse=True)
 
-    X_summed = np.zeros((len(unique_bins), adata.shape[1]))
-
-    # Accumulate sums for each group: np.add.at does this in-place
-    #   X_summed[i, :] += X[j, :] for all j that have inverse_idx[j] = i
+    # Optimized aggregation using scipy.sparse functions for better performance
     if scipy.sparse.issparse(adata.X):
-        for i in range(adata.X.shape[0]):
-            np.add.at(X_summed, inverse_idx[i], adata.X[i].toarray().ravel())
-    else:
-        np.add.at(X_summed, inverse_idx, adata.X)
+        # Use scipy.sparse coo_matrix for efficient aggregation
+        from scipy.sparse import coo_matrix
+        X_coo = adata.X.tocoo()
 
-    # Build obs_names for each unique bin
-    obs_names = []
-    array_col = []
-    array_row = []
-    for b in unique_bins:
-        new_y = b // new_ncol
-        new_x = b % new_ncol
-        obs_names.append(f's_{resolution:03d}um_{new_y:05d}_{new_x:05d}-1')
-        array_col.append(new_x)
-        array_row.append(new_y)
+        # Map original row indices to bin indices
+        new_row_indices = inverse_idx[X_coo.row]
+
+        # Create new sparse matrix with aggregated data
+        X_summed_sparse = coo_matrix(
+            (X_coo.data, (new_row_indices, X_coo.col)),
+            shape=(len(unique_bins), adata.shape[1])
+        ).tocsr()
+
+        # Sum duplicate entries (same bin, same gene)
+        X_summed_sparse.sum_duplicates()
+        X_summed = X_summed_sparse
+    else:
+        # For dense matrices, use the original approach but optimize with bincount
+        X_summed = np.zeros((len(unique_bins), adata.shape[1]))
+        for j in range(adata.shape[1]):
+            X_summed[:, j] = np.bincount(inverse_idx, weights=adata.X[:, j], minlength=len(unique_bins))
+
+    # Vectorized obs_names generation
+    new_y_coords = unique_bins // new_ncol
+    new_x_coords = unique_bins % new_ncol
+    obs_names = [f's_{resolution:03d}um_{y:05d}_{x:05d}-1' for y, x in zip(new_y_coords, new_x_coords)]
 
     new_adata = ad.AnnData(
         X=X_summed,
         obs=pd.DataFrame(
             index=obs_names,
             data={
-                'array_col': array_col,
-                'array_row': array_row
+                'array_col': new_x_coords,
+                'array_row': new_y_coords
             }
         ),
         var=adata.var.copy(),
@@ -137,47 +146,101 @@ def join_with_wta(wta: 'sd.SpatialData', gf_adata: ad.AnnData) -> 'sd.SpatialDat
     """
     assert_spatial(gf_adata)
 
-    def _build_adata(_wta, _gf, resolution):
-        _gf = bin(_gf, resolution)
-        # Re-order and filter the "cells" in my adata object to match the 2 micron
-        # resolution barcode labels.
-        _gf = _gf[_gf.obs.index.isin(_wta.obs.index), :]
+    def _build_adata(_wta, resolution):
+        _gf = bin(gf_adata, resolution)
 
-        # Fill in missing cells with zeros
-        missing_cells = _wta.obs.index.difference(_gf.obs.index).values
+        # Use more efficient index operations
+        wta_index = _wta.obs.index
+        gf_index = _gf.obs.index
+
+        # Find intersection and missing cells in one pass
+        intersection_mask = gf_index.isin(wta_index)
+        _gf_filtered = _gf[intersection_mask, :]
+        missing_cells = wta_index.difference(gf_index)
+
         if len(missing_cells) > 0:
-            # Store the original var dataframe to preserve all columns
+            # More efficient missing cell creation using sparse matrices when possible
+            n_missing = len(missing_cells)
+            n_genes = _gf.shape[1]
+
+            # Store the original var dataframe and uns dict to preserve all data
             original_var = _gf.var.copy()
+            original_uns = dict(_gf.uns)
 
-            # Concatenate and fill in missing values with nan
-            missing_adata = ad.AnnData(X=np.zeros((len(missing_cells), _gf.shape[1])),
-                                       obs=pd.DataFrame(index=missing_cells),
-                                       var=original_var,
-                                       varm={k: v.copy() for k,v in _gf.varm.items()},
-                                       uns=dict(_gf.uns),
-                                       obsm={k: pd.DataFrame(index=missing_cells, columns=v.columns) for k,v in _gf.obsm.items()},
-                                       layers={k: np.zeros((len(missing_cells), _gf.shape[1])) for k in _gf.layers})
-            _gf = ad.concat([_gf, missing_adata], axis=0)
+            # Use sparse matrix for X if original is sparse
+            if scipy.sparse.issparse(_gf.X):
+                missing_X = scipy.sparse.csr_matrix((n_missing, n_genes))
+            else:
+                missing_X = np.zeros((n_missing, n_genes))
 
-            # Ensure var dataframe is preserved after concatenation
-            _gf.var = original_var
+            # Create missing obs DataFrame more efficiently
+            missing_obs = pd.DataFrame(index=missing_cells)
 
-        # Re-order the cells to match the original data.
-        return _gf[_wta.obs.index]
+            # Only copy necessary varm data
+            missing_varm = {k: v.copy() for k, v in _gf.varm.items()} if _gf.varm else {}
+            missing_uns = dict(_gf.uns)
+            missing_obsm = {}
+            if _gf.obsm:
+                for k, v in _gf.obsm.items():
+                    if hasattr(v, 'columns'):  # DataFrame
+                        missing_obsm[k] = pd.DataFrame(
+                            index=missing_cells,
+                            columns=v.columns,
+                            dtype=v.dtypes.iloc[0] if len(v.columns) == 1 else None
+                        )
+                    else:  # Array-like
+                        missing_obsm[k] = np.full((n_missing, v.shape[1]), np.nan, dtype=v.dtype)
 
-    # Find all the coordinate systems associated with the original data.
-    for table in ['square_002um', 'square_008um', 'square_016um']:
-        if table not in wta.tables:
+            # Create layers data more efficiently
+            missing_layers = {}
+            if _gf.layers:
+                for k in _gf.layers:
+                    if scipy.sparse.issparse(_gf.layers[k]):
+                        missing_layers[k] = scipy.sparse.csr_matrix((n_missing, n_genes))
+                    else:
+                        missing_layers[k] = np.zeros((n_missing, n_genes))
+
+            missing_adata = ad.AnnData(
+                X=missing_X,
+                obs=missing_obs,
+                var=original_var,
+                varm=missing_varm,
+                uns=missing_uns,
+                obsm=missing_obsm,
+                layers=missing_layers
+            )
+
+            _gf_complete = ad.concat([_gf_filtered, missing_adata], axis=0)
+
+            # Ensure var dataframe and uns dict are preserved after concatenation
+            _gf_complete.var = original_var
+            _gf_complete.uns = original_uns
+        else:
+            _gf_complete = _gf_filtered
+
+        # Reorder to match wta index - use reindex for efficiency
+        return _gf_complete[wta_index]
+
+    # Process tables more efficiently
+    available_tables = ['square_002um', 'square_008um', 'square_016um']
+    resolutions = [2, 8, 16]
+
+    for table_name, resolution in zip(available_tables, resolutions):
+        if table_name not in wta.tables:
             continue
-        wta_table = wta.tables[table]
-        gf_table = _build_adata(wta_table, gf_adata, int(table.split('_')[-1].replace('um', '')))
-        # Copy over all metadata since the cells should be consistent
-        gf_table.uns[sd.models.TableModel.ATTRS_KEY] = wta_table.uns[sd.models.TableModel.ATTRS_KEY].copy()
-        gf_table.obsm['spatial'] = wta_table.obsm['spatial'].copy()
-        gf_table.obs['region'] = wta_table.obs['region'].copy()
-        gf_table.obs['location_id'] = wta_table.obs['location_id'].copy()
 
-        wta.tables['gf_' + table] = gf_table
+        wta_table = wta.tables[table_name]
+        gf_table = _build_adata(wta_table, resolution)
+
+        # Copy metadata more efficiently - avoid unnecessary deep copies
+        gf_table.uns[sd.models.TableModel.ATTRS_KEY] = wta_table.uns[sd.models.TableModel.ATTRS_KEY].copy()
+
+        # Use direct assignment for better performance
+        gf_table.obsm['spatial'] = wta_table.obsm['spatial']
+        gf_table.obs['region'] = wta_table.obs['region']
+        gf_table.obs['location_id'] = wta_table.obs['location_id']
+
+        wta.tables['gf_' + table_name] = gf_table
 
     return wta
 
