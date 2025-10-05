@@ -1,3 +1,5 @@
+from collections import defaultdict
+
 import giftwrap as gw
 import anndata as ad
 import matplotlib.pyplot as plt
@@ -253,6 +255,114 @@ def genotype_accuracy_barplot(sdata, probe: str, wt_gf: str, alt_gf: str, cellty
     ax.set_ylabel("Accuracy")
     ax.set_xticklabels(ax.get_xticklabels(), rotation=90)
     return ax
+
+
+def genotype_psuedobulk_accuracy_by_pcr(
+    sdata, probe: str, wt_gf: str, alt_gf: str, celltype2genotype_acc: dict, celltypes: list[str],
+    resolution: int = 2, max_threshold: int = None
+):
+    # Get the table once and keep it in memory
+    table = sdata.tables[f'gf_square_{resolution:03d}um']
+    assert table.uns['all_pcr_thresholds']
+    if max_threshold is None:
+        max_threshold = table.uns['max_pcr_duplicates']
+
+    # Prepare cell line annotations once
+    if 'cell_line' not in table.obs.columns:
+        wta = sdata.tables[f'square_{resolution:03d}um']
+        if 'cell_line' in wta.obs.columns:
+            # Create a copy only if we need to add cell_line annotations
+            table = table.copy()
+            table.obs['cell_line'] = wta.obs.loc[table.obs_names, 'cell_line'].values
+        else:
+            raise ValueError("cell_line annotation not found in either gf or wta data.")
+
+    # Filter to probe once
+    probe_mask = table.var.probe == probe
+    if not probe_mask.any():
+        raise ValueError(f"Probe {probe} not found in data.")
+
+    # Get the probe-specific data once
+    probe_table = table[:, probe_mask]
+    gapfills = probe_table.var['gapfill'].values
+    cell_lines = probe_table.obs['cell_line'].values
+
+    # Create gapfill mapping once
+    gapfill_to_idx = {gf: i for i, gf in enumerate(gapfills)}
+    wt_idx = gapfill_to_idx.get(wt_gf, -1)
+    alt_idx = gapfill_to_idx.get(alt_gf, -1)
+
+    data = defaultdict(list)
+
+    for threshold in range(1, max_threshold):
+        # Get the appropriate data matrix for this threshold
+        if threshold == 1:
+            X_data = probe_table.X
+        else:
+            X_data = probe_table.layers[f'X_pcr_threshold_{threshold}']
+
+        # Calculate pseudobulk counts efficiently without creating DataFrames
+        pseudobulk_counts = {}
+
+        # Group by cell line and sum counts for each gapfill
+        for celltype in set(cell_lines):
+            if celltype == 'N/A':
+                continue
+
+            # Find indices for this cell type
+            celltype_mask = cell_lines == celltype
+            if not celltype_mask.any():
+                continue
+
+            # Sum counts for this cell type across all spots
+            if hasattr(X_data, 'toarray'):
+                # Handle sparse matrices efficiently
+                celltype_counts = X_data[celltype_mask, :].sum(axis=0).A1
+            else:
+                # Handle dense matrices
+                celltype_counts = X_data[celltype_mask, :].sum(axis=0)
+
+            pseudobulk_counts[celltype] = celltype_counts
+
+        # Calculate accuracy for each requested cell type
+        for celltype in celltypes:
+            if celltype not in pseudobulk_counts:
+                data[celltype].append(0.0)
+                continue
+
+            counts = pseudobulk_counts[celltype]
+
+            # Calculate WT, ALT, and Other counts
+            wt_count = counts[wt_idx] if wt_idx >= 0 else 0
+            alt_count = counts[alt_idx] if alt_idx >= 0 else 0
+            other_count = counts.sum() - wt_count - alt_count
+
+            total = wt_count + alt_count + other_count
+
+            if total == 0:
+                accuracy = 0.0
+            else:
+                expected_genotype = celltype2genotype_acc.get(celltype, None)
+                if expected_genotype == 'WT':
+                    correct = wt_count
+                elif expected_genotype == 'ALT':
+                    correct = alt_count
+                else:
+                    correct = 0
+                accuracy = correct / total
+
+            data[celltype].append(accuracy)
+
+    # Plot the data
+    plt.figure(figsize=(8, 6))
+    for celltype, accuracies in data.items():
+        plt.plot(range(1, max_threshold), accuracies, label=celltype)
+    plt.xlabel("PCR Duplicate Threshold")
+    plt.ylabel("Genotype Call Accuracy")
+    plt.title(f"Genotype Call Accuracy for {probe} by Cell Line vs PCR Duplicate Threshold")
+    plt.ylim(0, 1)
+    plt.legend(title="Cell Line")
+    plt.show()
 
 
 def psuedobulk_labels(sdata, probe: str, resolution: int = 2) -> pd.DataFrame:
