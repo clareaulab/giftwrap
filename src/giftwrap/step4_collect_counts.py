@@ -183,7 +183,6 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
         write_sparse_matrix(matrix_grp, "percent_supporting", percent_supporting_matrix)
         del percent_supporting_matrix
         output_file.flush()
-        del percent_supporting_matrix  # Free up memory
 
         if all_pcr_thresholds:
             all_pcr_grp = output_file.create_group("pcr_thresholded_counts")
