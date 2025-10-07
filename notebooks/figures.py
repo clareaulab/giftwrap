@@ -283,7 +283,7 @@ def genotype_psuedobulk_accuracy_by_pcr(
         raise ValueError(f"Probe {probe} not found in data.")
 
     # Get the probe-specific data once
-    probe_table = table[:, probe_mask]
+    probe_table = table[:, probe_mask.values]
     gapfills = probe_table.var['gapfill'].values
     cell_lines = probe_table.obs['cell_line'].values
 
@@ -294,6 +294,10 @@ def genotype_psuedobulk_accuracy_by_pcr(
 
     data = defaultdict(list)
 
+    # Precompute celltype masks to avoid repeated computation
+    unique_celltypes = set(cell_lines)
+    celltype_masks = {ct: (cell_lines == ct) for ct in unique_celltypes if ct != 'N/A'}
+
     for threshold in range(1, max_threshold):
         # Get the appropriate data matrix for this threshold
         if threshold == 1:
@@ -301,42 +305,29 @@ def genotype_psuedobulk_accuracy_by_pcr(
         else:
             X_data = probe_table.layers[f'X_pcr_threshold_{threshold}']
 
-        # Calculate pseudobulk counts efficiently without creating DataFrames
+        if hasattr(X_data, 'toarray'):
+            X_data = X_data.toarray()
+
         pseudobulk_counts = {}
 
-        # Group by cell line and sum counts for each gapfill
-        for celltype in set(cell_lines):
-            if celltype == 'N/A':
+        for celltype, mask in celltype_masks.items():
+            if not mask.any():
+                pseudobulk_counts[celltype] = np.zeros(X_data.shape[1], dtype=X_data.dtype)
                 continue
+            counts = X_data[mask, :].sum(axis=0)
+            if hasattr(counts, 'A1'):
+                counts = counts.A1
+            pseudobulk_counts[celltype] = counts
 
-            # Find indices for this cell type
-            celltype_mask = cell_lines == celltype
-            if not celltype_mask.any():
-                continue
-
-            # Sum counts for this cell type across all spots
-            if hasattr(X_data, 'toarray'):
-                # Handle sparse matrices efficiently
-                celltype_counts = X_data[celltype_mask, :].sum(axis=0).A1
-            else:
-                # Handle dense matrices
-                celltype_counts = X_data[celltype_mask, :].sum(axis=0)
-
-            pseudobulk_counts[celltype] = celltype_counts
-
-        # Calculate accuracy for each requested cell type
         for celltype in celltypes:
-            if celltype not in pseudobulk_counts:
+            counts = pseudobulk_counts.get(celltype, None)
+            if counts is None or counts.sum() == 0:
                 data[celltype].append(0.0)
                 continue
 
-            counts = pseudobulk_counts[celltype]
-
-            # Calculate WT, ALT, and Other counts
             wt_count = counts[wt_idx] if wt_idx >= 0 else 0
             alt_count = counts[alt_idx] if alt_idx >= 0 else 0
             other_count = counts.sum() - wt_count - alt_count
-
             total = wt_count + alt_count + other_count
 
             if total == 0:
@@ -353,7 +344,10 @@ def genotype_psuedobulk_accuracy_by_pcr(
 
             data[celltype].append(accuracy)
 
-    # Plot the data
+        # Explicitly delete large arrays to help GC
+        del X_data
+        del pseudobulk_counts
+
     plt.figure(figsize=(8, 6))
     for celltype, accuracies in data.items():
         plt.plot(range(1, max_threshold), accuracies, label=celltype)
@@ -363,28 +357,35 @@ def genotype_psuedobulk_accuracy_by_pcr(
     plt.ylim(0, 1)
     plt.legend(title="Cell Line")
     plt.show()
+    plt.clf()
 
 
 def psuedobulk_labels(sdata, probe: str, resolution: int = 2) -> pd.DataFrame:
     """
     Create a dataframe that simply contains the counts for each gapfill grouped by annotated cell lines in space.
+    Optimized to avoid unnecessary copies and dense conversions.
     """
-    table = sdata.tables[f'gf_square_{resolution:03d}um'].copy()
+    table = sdata.tables[f'gf_square_{resolution:03d}um']
     if 'cell_line' not in table.obs.columns:
         wta = sdata.tables[f'square_{resolution:03d}um']
         if 'cell_line' in wta.obs.columns:
             # Add cell_line to gf table from wta by matching indices
+            table = table.copy()
             table.obs['cell_line'] = wta.obs.loc[table.obs_names, 'cell_line'].values
         else:
             raise ValueError("cell_line annotation not found in either gf or wta data.")
-    table = table[:, table.var.probe == probe].copy()
-    if table.shape[1] == 0:
+    probe_mask = table.var.probe == probe
+    if not probe_mask.any():
         raise ValueError(f"Probe {probe} not found in data.")
-    df = pd.DataFrame(table.X.toarray(), columns=table.var['gapfill'], index=table.obs_names)
+    # Avoid .copy() and .toarray() if possible
+    X = table.X[:, probe_mask.values]
+    if hasattr(X, "toarray"):
+        # Only convert to dense if needed for DataFrame construction
+        X = X.toarray()
+    df = pd.DataFrame(X, columns=table.var['gapfill'][probe_mask], index=table.obs_names)
     df = df.join(table.obs[['cell_line']])
-    df = df.groupby('cell_line').sum().reset_index()
+    df = df.groupby('cell_line').sum(numeric_only=True).reset_index()
     return df
-
 
 def pseudobulk_genotype_table(sdata, probe: str, wt_gf: str, alt_gf: str, celltype2genotype_acc: dict, resolution: int = 2):
     labels = psuedobulk_labels(sdata, probe, resolution)
@@ -393,15 +394,20 @@ def pseudobulk_genotype_table(sdata, probe: str, wt_gf: str, alt_gf: str, cellty
     # Next rename gapfills to WT, ALT, Other
     gapfill_to_genotype = {wt_gf: 'WT', alt_gf: 'ALT'}
     labels = labels.rename(columns=gapfill_to_genotype)
-    labels = labels.rename(columns={col: 'Othertmp' for col in labels.columns if col not in ['cell_line', 'WT', 'ALT']})
+    # Identify columns that are not cell_line, WT, or ALT
+    other_cols = [col for col in labels.columns if col not in ['cell_line', 'WT', 'ALT']]
+    # Ensure WT and ALT columns exist, create with zeros if missing
+    if 'WT' not in labels.columns:
+        labels['WT'] = 0
+    if 'ALT' not in labels.columns:
+        labels['ALT'] = 0
     # Sum all 'Other' columns into a single 'Other' column
-    if 'Othertmp' in labels.columns:
-        labels['Other'] = labels[['Othertmp']].sum(axis=1)
+    if other_cols:
+        labels['Other'] = labels[other_cols].sum(axis=1)
         labels = labels[['cell_line', 'WT', 'ALT', 'Other']]
     else:
         labels['Other'] = 0
         labels = labels[['cell_line', 'WT', 'ALT', 'Other']]
-
     # Next, add a column for expected genotype
     labels['expected_genotype'] = labels['cell_line'].map(celltype2genotype_acc)
     return labels
