@@ -27,6 +27,15 @@ def plot_library_size(sdata, table, resolution: int = 2, include_0bp: bool = Fal
                 .pl.show(coordinate_systems="", figsize=(25, 25), na_in_legend=False, title="Library Size")
             )
 
+def plot_library_specific_probe(sdata, probe: str, gapfill: str, resolution: int = 2):
+    table = "gf_"
+    sdata[f'square_{resolution:03d}um'].obs['library_size'] = sdata.tables[f'{table}square_{resolution:03d}um'][:, (sdata.tables[f'{table}square_{resolution:03d}um'].var.probe == probe) & (sdata.tables[f'{table}square_{resolution:03d}um'].var.gapfill == gapfill)].X.sum(1)
+    return (sdata.pl.render_images(f"_hires_image", alpha=0.8)
+                .pl.render_shapes(element=f'_square_{resolution:03d}um', color='library_size', method='matplotlib', v='p98')
+                .pl.show(coordinate_systems="", figsize=(25, 25), na_in_legend=False, title=f"Library Size for {probe} {gapfill}")
+            )
+
+
 def compare_library_size_per_bin(sdata, resolution: int = 2, include_0bp: bool = False):
     # Compare library size per bin between WTA and GIFT-seq
     wta_lib = sdata.tables[f'square_{resolution:03d}um'].X.sum(1).__array__().flatten()
