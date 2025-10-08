@@ -158,6 +158,9 @@ def join_with_wta(wta: 'sd.SpatialData', gf_adata: ad.AnnData) -> 'sd.SpatialDat
         _gf_filtered = _gf[intersection_mask, :]
         missing_cells = wta_index.difference(gf_index)
 
+        # Ensure missing_cells has unique values
+        missing_cells = missing_cells.drop_duplicates()
+
         if len(missing_cells) > 0:
             # More efficient missing cell creation using sparse matrices when possible
             n_missing = len(missing_cells)
