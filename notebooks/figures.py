@@ -420,3 +420,63 @@ def pseudobulk_genotype_table(sdata, probe: str, wt_gf: str, alt_gf: str, cellty
     # Next, add a column for expected genotype
     labels['expected_genotype'] = labels['cell_line'].map(celltype2genotype_acc)
     return labels
+
+
+def _collect_dual_vs_gapfill(dual_sdata, gap_sdata, probe_dual, probe_gf, wt_gfs, alt_gfs, celltype2genotype_acc, resolution=2):
+    # Ignoring het cell lines:
+    celltype2genotype_acc = celltype2genotype_acc.copy()
+    celltype2genotype_acc = {k: v for k, v in celltype2genotype_acc.items() if v in ('WT', 'ALT')}
+
+    df = {
+        'true_call': [],
+        'predicted_call': [],
+        'method': []
+    }
+
+    for ct, true_call in celltype2genotype_acc.items():
+        dual_table = dual_sdata.tables[f'gf_square_{resolution:03d}um'].copy()
+        dual_table = dual_table[dual_table.obs['cell_line'] == ct, dual_table.var.probe == probe_dual]
+        gap_table = gap_sdata.tables[f'gf_square_{resolution:03d}um'].copy()
+        gap_table = gap_table[gap_table.obs['cell_line'] == ct, gap_table.var.probe == probe_gf]
+        if dual_table.shape[0] == 0 or gap_table.shape[0] == 0:
+            continue
+        # Select cells that have at least one count for the probe
+        dual_table.obs['library_size'] = dual_table.X.sum(1)
+        dual_table = dual_table[dual_table.obs['library_size'] > 0, :]
+        gap_table.obs['library_size'] = gap_table.X.sum(1)
+        gap_table = gap_table[gap_table.obs['library_size'] > 0, :]
+        if dual_table.shape[0] == 0 or gap_table.shape[0] == 0:
+            raise ValueError(f"No cells with counts for probe {probe_dual} in dual or {probe_gf} in gapfill for cell type {ct}")
+        # For each cell, get the gapfill with the only count. If multiple, then set to Het
+        dual_calls = []
+        for i in range(dual_table.shape[0]):
+            counts = dual_table.X[i, :].toarray().flatten() if hasattr(dual_table.X, 'toarray') else dual_table.X[i, :].flatten()
+            if counts.sum() == 0:
+                dual_calls.append('N/A')
+            elif (counts > 0).sum() > 1:
+                dual_calls.append('HET')
+            else:
+                gf = dual_table.var['gapfill'][counts > 0].values[0]
+                call = 'WT' if gf in wt_gfs else 'ALT' if gf in alt_gfs else 'Other'
+                dual_calls.append(call)
+        gap_calls = []
+        for i in range(gap_table.shape[0]):
+            counts = gap_table.X[i, :].toarray().flatten() if hasattr(gap_table.X, 'toarray') else gap_table.X[i, :].flatten()
+            if counts.sum() == 0:
+                gap_calls.append('N/A')
+            elif (counts > 0).sum() > 1:
+                gap_calls.append('HET')
+            else:
+                gf = gap_table.var['gapfill'][counts > 0].values[0]
+                call = 'WT' if gf in wt_gfs else 'ALT' if gf in alt_gfs else 'Other'
+                gap_calls.append(call)
+        df['true_call'].extend([true_call] * len(dual_calls))
+        df['predicted_call'].extend(dual_calls)
+        df['method'].extend(['Dual'] * len(dual_calls))
+        df['true_call'].extend([true_call] * len(gap_calls))
+        df['predicted_call'].extend(gap_calls)
+        df['method'].extend(['Gapfill'] * len(gap_calls))
+
+    df = pd.DataFrame(df)
+    df['probe'] = probe_dual
+    return df
