@@ -86,29 +86,37 @@ def bin(adata: ad.AnnData, resolution: int = 8) -> ad.AnnData:
     # Get unique bin IDs and an array telling us which bin each row belongs to
     unique_bins, inverse_idx = np.unique(bin_idx, return_inverse=True)
 
-    # Optimized aggregation using scipy.sparse functions for better performance
-    if scipy.sparse.issparse(adata.X):
-        # Use scipy.sparse coo_matrix for efficient aggregation
-        from scipy.sparse import coo_matrix
-        X_coo = adata.X.tocoo()
+    n_bins = len(unique_bins)
+    n_genes = adata.shape[1]
 
-        # Map original row indices to bin indices
-        new_row_indices = inverse_idx[X_coo.row]
+    def _aggregate_matrix(mat):
+        """Aggregate a matrix-like object (sparse or dense) by bin indices."""
+        if scipy.sparse.issparse(mat):
+            from scipy.sparse import coo_matrix
+            mat_coo = mat.tocoo()
+            new_row_indices = inverse_idx[mat_coo.row]
+            agg = coo_matrix(
+                (mat_coo.data, (new_row_indices, mat_coo.col)),
+                shape=(n_bins, n_genes)
+            ).tocsr()
+            agg.sum_duplicates()
+            return agg
+        else:
+            agg = np.zeros((n_bins, n_genes), dtype=mat.dtype if hasattr(mat, "dtype") else float)
+            # aggregate per column using bincount
+            for j in range(n_genes):
+                agg[:, j] = np.bincount(inverse_idx, weights=mat[:, j], minlength=n_bins)
+            return agg
 
-        # Create new sparse matrix with aggregated data
-        X_summed_sparse = coo_matrix(
-            (X_coo.data, (new_row_indices, X_coo.col)),
-            shape=(len(unique_bins), adata.shape[1])
-        ).tocsr()
+    # Aggregate the primary matrix
+    X_summed = _aggregate_matrix(adata.X)
 
-        # Sum duplicate entries (same bin, same gene)
-        X_summed_sparse.sum_duplicates()
-        X_summed = X_summed_sparse
-    else:
-        # For dense matrices, use the original approach but optimize with bincount
-        X_summed = np.zeros((len(unique_bins), adata.shape[1]))
-        for j in range(adata.shape[1]):
-            X_summed[:, j] = np.bincount(inverse_idx, weights=adata.X[:, j], minlength=len(unique_bins))
+    # Aggregate layers that start with the prefix 'X_'
+    new_layers = {}
+    if adata.layers:
+        for layer_key, layer_val in adata.layers.items():
+            if layer_key.startswith("X_"):
+                new_layers[layer_key] = _aggregate_matrix(layer_val)
 
     # Vectorized obs_names generation
     new_y_coords = unique_bins // new_ncol
@@ -126,7 +134,8 @@ def bin(adata: ad.AnnData, resolution: int = 8) -> ad.AnnData:
         ),
         var=adata.var.copy(),
         varm=adata.varm.copy(),
-        uns=dict(adata.uns)
+        uns=dict(adata.uns),
+        layers=new_layers if new_layers else {}
     )
 
     if 'genotype' in adata.obsm:

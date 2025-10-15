@@ -423,6 +423,21 @@ def pseudobulk_genotype_table(sdata, probe: str, wt_gf: str, alt_gf: str, cellty
 
 
 def _collect_dual_vs_gapfill(dual_sdata, gap_sdata, probe_dual, probe_gf, wt_gfs, alt_gfs, celltype2genotype_acc, resolution=2):
+    if 'cell_line' not in dual_sdata.tables[f'gf_square_{resolution:03d}um'].obs.columns:
+        wta = dual_sdata.tables[f'square_{resolution:03d}um']
+        if 'cell_line' in wta.obs.columns:
+            # Add cell_line to gf table from wta by matching indices
+            dual_sdata.tables[f'gf_square_{resolution:03d}um'].obs['cell_line'] = wta.obs.loc[dual_sdata.tables[f'gf_square_{resolution:03d}um'].obs_names, 'cell_line'].values
+        else:
+            raise ValueError("cell_line annotation not found in either dual or wta data.")
+    if 'cell_line' not in gap_sdata.tables[f'gf_square_{resolution:03d}um'].obs.columns:
+        wta = gap_sdata.tables[f'square_{resolution:03d}um']
+        if 'cell_line' in wta.obs.columns:
+            # Add cell_line to gf table from wta by matching indices
+            gap_sdata.tables[f'gf_square_{resolution:03d}um'].obs['cell_line'] = wta.obs.loc[gap_sdata.tables[f'gf_square_{resolution:03d}um'].obs_names, 'cell_line'].values
+        else:
+            raise ValueError("cell_line annotation not found in either gapfill or wta data.")
+
     # Ignoring het cell lines:
     celltype2genotype_acc = celltype2genotype_acc.copy()
     celltype2genotype_acc = {k: v for k, v in celltype2genotype_acc.items() if v in ('WT', 'ALT')}
@@ -446,7 +461,8 @@ def _collect_dual_vs_gapfill(dual_sdata, gap_sdata, probe_dual, probe_gf, wt_gfs
         gap_table.obs['library_size'] = gap_table.X.sum(1)
         gap_table = gap_table[gap_table.obs['library_size'] > 0, :]
         if dual_table.shape[0] == 0 or gap_table.shape[0] == 0:
-            raise ValueError(f"No cells with counts for probe {probe_dual} in dual or {probe_gf} in gapfill for cell type {ct}")
+            print(f"Warning: No cells with counts for probe {probe_dual} in dual or {probe_gf} in gapfill for cell type {ct}")
+            continue
         # For each cell, get the gapfill with the only count. If multiple, then set to Het
         dual_calls = []
         for i in range(dual_table.shape[0]):
@@ -480,3 +496,85 @@ def _collect_dual_vs_gapfill(dual_sdata, gap_sdata, probe_dual, probe_gf, wt_gfs
     df = pd.DataFrame(df)
     df['probe'] = probe_dual
     return df
+
+def boxplot_of_dualprobe_vs_gapfill(
+    dual_sdata, gap_sdata, annotated_genotypes, celltype_genotypes, wt_alleles, alt_alleles, resolution=2
+):
+    # Suppress ImplicitModificationWarning
+    import warnings
+    from anndata import ImplicitModificationWarning
+    warnings.filterwarnings("ignore", category=ImplicitModificationWarning)
+    dfs = []
+    for probe in gap_sdata.tables[f'gf_square_{resolution:03d}um'].var.probe.unique():
+        probe_norm = probe.split("|")
+        if len(probe_norm) > 1:
+            probe_norm = " ".join(probe_norm[1:3])
+        else:
+            probe_norm = probe
+        if probe_norm not in annotated_genotypes:
+            continue
+
+        # Now find the corresponding dual probe
+        dual_probe = None
+        for dp in dual_sdata.tables[f'gf_square_{resolution:03d}um'].var.probe.unique():
+            if dp.split(">")[0] == probe_norm.split(">")[0]:
+                dual_probe = dp
+                break
+        if dual_probe is None:
+            print(f"Could not find dual probe for {probe}")
+            continue
+        print(f"Comparing dual probe {dual_probe} to gapfill probe {probe}")
+        gf_wt_allele = wt_alleles[probe_norm]
+        gf_alt_allele = alt_alleles[probe_norm]
+        dp_wt_allele = "" if ">" not in dual_probe else dual_probe.split(">")[0][-1]
+        dp_alt_allele = "" if ">" not in dual_probe else dual_probe.split(">")[1]
+        ct_dict = {
+            "HEL": "HET" if len(celltype_genotypes["HEL"][probe_norm]) > 1 else ("WT" if wt_alleles[probe_norm] in celltype_genotypes["HEL"][probe_norm] else "ALT"),
+            "K562": "HET" if len(celltype_genotypes["K562"][probe_norm]) > 1 else ("WT" if wt_alleles[probe_norm] in celltype_genotypes["K562"][probe_norm] else "ALT"),
+            "SET2": "HET" if len(celltype_genotypes["SET2"][probe_norm]) > 1 else ("WT" if wt_alleles[probe_norm] in celltype_genotypes["SET2"][probe_norm] else "ALT"),
+        }
+        df = _collect_dual_vs_gapfill(
+            dual_sdata, gap_sdata, dual_probe, probe,
+            wt_gfs=[dp_wt_allele, gf_wt_allele], alt_gfs=[dp_alt_allele, gf_alt_allele],
+            celltype2genotype_acc=ct_dict, resolution=resolution
+        )
+        dfs.append(df)
+    df = pd.concat(dfs, axis=0)
+
+    # Compute the proportion of correct calls for each method and probe split by WT and ALT
+    summary = (
+        df.groupby(['probe', 'method', 'true_call'])
+        .apply(lambda x: (x['predicted_call'] == x['true_call']).sum() / len(x))
+        .reset_index(name='proportion_correct')
+    )
+
+    # Now make a box plot for WT and one for ALT
+    # Each will plot the distribution of correct calls for dual probe and gapfill probe side-by-side
+    fig, axes = plt.subplots(1, 2, figsize=(12, 6), sharey=True)
+    sns.boxplot(
+        data=summary[summary['true_call'] == 'WT'],
+        x='method',
+        y='proportion_correct',
+        ax=axes[0],
+        palette={'Dual': 'blue', 'Gapfill': 'orange'}
+    )
+    axes[0].set_title("WT Genotype Call Accuracy")
+    axes[0].set_ylabel("Proportion of Correct Calls")
+    axes[0].set_xlabel("Method")
+    axes[0].set_ylim(0, 1)
+
+    sns.boxplot(
+        data=summary[summary['true_call'] == 'ALT'],
+        x='method',
+        y='proportion_correct',
+        ax=axes[1],
+        palette={'Dual': 'blue', 'Gapfill': 'orange'}
+    )
+    axes[1].set_title("ALT Genotype Call Accuracy")
+    axes[1].set_ylabel("Proportion of Correct Calls")
+    axes[1].set_xlabel("Method")
+    axes[1].set_ylim(0, 1)
+    plt.suptitle("Genotype Call Accuracy: Dual Probe vs Gapfill Probe")
+    plt.tight_layout()
+    plt.show()
+    return fig, axes
