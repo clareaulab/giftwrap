@@ -1863,6 +1863,36 @@ def read_h5_file(filename: str) -> ad.AnnData:
             for threshold in range(1, f.attrs['max_pcr_duplicates']):
                 adata.layers[f'X_pcr_threshold_{threshold+1}'] = read_sparse_matrix(dup_grp, f'pcr{threshold+1}')
 
+    # Check if array_col and array_row exist in obs
+    # If present, verify that all are integers
+    if 'array_col' in adata.obs.columns and 'array_row' in adata.obs.columns:
+        # Check if any values are not integers
+        any_not_int = not np.issubdtype(adata.obs['array_col'].dtype, np.integer) or not np.issubdtype(adata.obs['array_row'].dtype, np.integer)
+        # Check if null or nan values exist
+        any_nulls = adata.obs['array_col'].isnull().any() or adata.obs['array_row'].isnull().any()
+        if any_not_int or any_nulls:
+            # We will need to regenerate the array_col and array_row values and coerce to ints
+            print("Warning: 'array_col' and 'array_row' in obs contain non-integer or null values. Regenerating these values.")
+            # We can parse the barcode names to regenerate these values
+            array_cols = []
+            array_rows = []
+            for barcode in adata.obs['barcode']:
+                try:
+                    parts = barcode.split('-')[0].split("_")
+                    if len(parts) >= 3:
+                        array_col = int(parts[-1])
+                        array_row = int(parts[-2])
+                    else:
+                        array_col = -1
+                        array_row = -1
+                except:
+                    array_col = -1
+                    array_row = -1
+                array_cols.append(array_col)
+                array_rows.append(array_row)
+            adata.obs['array_col'] = np.array(array_cols, dtype=int)
+            adata.obs['array_row'] = np.array(array_rows, dtype=int)
+
     return adata
 
 
