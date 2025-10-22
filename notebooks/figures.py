@@ -544,8 +544,12 @@ def boxplot_of_dualprobe_vs_gapfill(
     # Compute the proportion of correct calls for each method and probe split by WT and ALT
     summary = (
         df.groupby(['probe', 'method', 'true_call'])
-        .apply(lambda x: (x['predicted_call'] == x['true_call']).sum() / len(x))
-        .reset_index(name='proportion_correct')
+        .apply(lambda x: pd.Series({
+            'count_correct': (x['predicted_call'] == x['true_call']).sum(),
+            'count_incorrect': (x['predicted_call'] != x['true_call']).sum(),
+            'proportion_correct': (x['predicted_call'] == x['true_call']).mean()
+        }))
+        .reset_index()
     )
 
     # Now make a box plot for WT and one for ALT
@@ -577,4 +581,4 @@ def boxplot_of_dualprobe_vs_gapfill(
     plt.suptitle("Genotype Call Accuracy: Dual Probe vs Gapfill Probe")
     plt.tight_layout()
     plt.show()
-    return fig, axes
+    return summary, (fig, axes)

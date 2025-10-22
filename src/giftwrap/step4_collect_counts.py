@@ -18,7 +18,7 @@ from .utils import read_manifest, read_barcodes, maybe_multiprocess, maybe_gzip,
     _tx_barcode_to_oligo, compile_flatfile
 
 
-def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_df: pd.DataFrame, overwrite: bool, plex: int = 1, multiplex: bool = False, flatten: bool = False, all_pcr_thresholds: bool = False):
+def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_df: pd.DataFrame, overwrite: bool, plex: int = 1, multiplex: bool = False, flatten: bool = False, max_pcr_thresholds: int = 10):
     """
     Generate an h5 file with counts for each barcode.
     :param input: The input file.
@@ -29,7 +29,7 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
     :param plex: The plex number.
     :param multiplex: Whether the run was multiplexed.
     :param flatten: Whether to also output a flattened tsv file.
-    :param all_pcr_thresholds: Whether to include counts for all PCR duplicate thresholds.
+    :param max_pcr_thresholds: If greater than 1, generate counts matrices for PCR duplicate thresholds up to this number.
     """
     final_output = output / f"counts.{plex}.h5"
     if final_output.exists() and not overwrite:
@@ -92,8 +92,7 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
             umi_dup_count = int(umi_dup_count_str)
             total_umi_data[matrix_key] += umi_dup_count
             percent_supporting_data[matrix_key] += float(percent_supporting_str)
-            if all_pcr_thresholds:
-                dup_count_mapping[umi_dup_count][matrix_key] += 1
+            dup_count_mapping[umi_dup_count][matrix_key] += 1
             n_lines += 1
 
     print(f"{len(possible_probes)} probe combinations found, {n_lines} valid lines processed.")
@@ -135,10 +134,10 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
     # Now, we can compute matrices for all PCR thresholds if needed
     # We will do this by progressively subtracing counts by dup count
     filtered_counts = None
-    if all_pcr_thresholds:
+    if max_pcr_thresholds > 1:
         filtered_counts = dict()
         curr_counts_matrix = counts_matrix.copy().tolil()  # Start with full counts
-        for i in range(0, max_dups):  # Duplicate number to remove
+        for i in range(0, min(max_pcr_thresholds, max_dups)):  # Duplicate number to remove
             if i in dup_count_mapping:
                 for (cell_idx, probe_key), dup_count in dup_count_mapping[i].items():
                     probe_idx = probe2h5_idx[probe_key]
@@ -184,7 +183,7 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
         del percent_supporting_matrix
         output_file.flush()
 
-        if all_pcr_thresholds:
+        if max_pcr_thresholds > 1:
             all_pcr_grp = output_file.create_group("pcr_thresholded_counts")
             all_pcr_grp.attrs['max_pcr_duplicates'] = max_dups
             for dup_threshold, matrix in filtered_counts.items():
@@ -210,12 +209,11 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
         output_file.attrs['n_cells'] = n_cells
         output_file.attrs['n_probes'] = int(manifest.shape[0])
         output_file.attrs['n_probe_gapfill_combinations'] = n_probes
-        output_file.attrs['all_pcr_thresholds'] = all_pcr_thresholds
         output_file.attrs['max_pcr_duplicates'] = max_dups
         print("Done.")
 
 
-def run(output: str, cores: int, overwrite: bool, was_multiplexed: bool, flatten: bool, all_pcr_thresholds: bool):
+def run(output: str, cores: int, overwrite: bool, was_multiplexed: bool, flatten: bool, max_pcr_thresholds: int):
     if cores < 1:
         cores = os.cpu_count()
 
@@ -242,7 +240,7 @@ def run(output: str, cores: int, overwrite: bool, was_multiplexed: bool, flatten
                 collect_counts,
                 [
                     (input, output, manifest, barcodes_df[barcodes_df.plex == plex].copy(), overwrite, plex, multiplex,
-                     flatten, all_pcr_thresholds)
+                     flatten, max_pcr_thresholds)
                     for plex in plexes
                 ]
             )
@@ -254,7 +252,7 @@ def run(output: str, cores: int, overwrite: bool, was_multiplexed: bool, flatten
         else:
             print("Detected single-plex run.")
         print("Collecting counts...")
-        collect_counts(input, output, manifest, barcodes_df, overwrite, plex, was_multiplexed, flatten, all_pcr_thresholds)
+        collect_counts(input, output, manifest, barcodes_df, overwrite, plex, was_multiplexed, flatten, max_pcr_thresholds)
         print(f"Counts data saved as counts.{plex}.h5.")
 
     exit(0)
@@ -310,14 +308,15 @@ def main():
     )
 
     parser.add_argument(
-        "--all_pcr_thresholds",
+        "--max_pcr_thresholds",
         required=False,
-        action="store_true",
-        help="If set, the resultant counts file will contain filtered counts for all possible minimum number of PCR duplicates. The parsed object will then have a new obsm field 'X_pcr{n}' for n in 1 to the maximum number of PCR duplicates observed in the data. This will increase the size of the output file, but allow for more flexible downstream filtering."
+        type=int,
+        default=10,
+        help="If greater than 1, the parsed object will then have a new layer field 'X_pcr{n}' for n in 1 to the maximum number of PCR duplicates observed in the data. This will increase the size of the output file, but allow for more flexible downstream filtering."
     )
 
     args = parser.parse_args()
-    run(args.output, args.cores, args.overwrite, args.multiplex, args.flatten, args.all_pcr_thresholds)
+    run(args.output, args.cores, args.overwrite, args.multiplex, args.flatten, args.max_pcr_thresholds)
 
 
 if __name__ == "__main__":

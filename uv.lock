@@ -962,6 +962,7 @@ docs = [
     { name = "mkdocs-jupyter" },
     { name = "mkdocs-material" },
     { name = "mkdocs-open-in-new-tab" },
+    { name = "mkdocs-panzoom-plugin" },
     { name = "mkdocstrings", extra = ["python"] },
     { name = "pymdown-extensions" },
     { name = "termynal" },
@@ -971,11 +972,6 @@ spatial = [
     { name = "spatialdata" },
     { name = "spatialdata-plot" },
     { name = "squidpy" },
-]
-
-[package.dev-dependencies]
-docs = [
-    { name = "mkdocs-panzoom-plugin" },
 ]
 
 [package.metadata]
@@ -999,8 +995,9 @@ requires-dist = [
     { name = "mkdocs-awesome-pages-plugin", marker = "extra == 'docs'", specifier = ">=2.10.1" },
     { name = "mkdocs-git-revision-date-localized-plugin", marker = "extra == 'docs'", specifier = ">=1.4.7" },
     { name = "mkdocs-jupyter", marker = "extra == 'docs'", specifier = ">=0.25.1" },
-    { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.6.14" },
+    { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.6.18" },
     { name = "mkdocs-open-in-new-tab", marker = "extra == 'docs'", specifier = ">=1.0.8" },
+    { name = "mkdocs-panzoom-plugin", marker = "extra == 'docs'", specifier = ">=0.4.2" },
     { name = "mkdocstrings", extras = ["python"], marker = "extra == 'docs'", specifier = ">=0.29.1" },
     { name = "numba", marker = "extra == 'all'", specifier = ">=0.61.0" },
     { name = "numba", marker = "extra == 'analysis'", specifier = ">=0.61.0" },
@@ -1029,9 +1026,6 @@ requires-dist = [
     { name = "tqdm", specifier = ">=4.66.5" },
 ]
 provides-extras = ["spatial", "analysis", "all", "docs"]
-
-[package.metadata.requires-dev]
-docs = [{ name = "mkdocs-panzoom-plugin", specifier = ">=0.2.2" }]
 
 [[package]]
 name = "gitdb"
@@ -1939,14 +1933,14 @@ wheels = [
 
 [[package]]
 name = "mkdocs-panzoom-plugin"
-version = "0.4.1"
+version = "0.4.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "mkdocs" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/64/92/502e76a2a200acd61aed94808df07dc8657e09a49c20c85a2af46ea31496/mkdocs_panzoom_plugin-0.4.1.tar.gz", hash = "sha256:28c04961e48f752a359867da022231a6f93db0e5fb4345f98464828ba8811bf7", size = 22115, upload-time = "2025-08-28T17:13:24.793Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c1/4c/38af1aa9dadf5c298515e66a813abc70e2b4e0c81e713f768b807b10c4e5/mkdocs_panzoom_plugin-0.4.2.tar.gz", hash = "sha256:ad43b983a56c02002db322b318d799d51b51507ef343f38fc71071e5af7e2ff4", size = 22138, upload-time = "2025-09-05T17:01:31.303Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/33/8a/1afb9075d3b0edef4d51049892d933d1acaca37510cd7a2b574759d27ab5/mkdocs_panzoom_plugin-0.4.1-py3-none-any.whl", hash = "sha256:ff4ac0ce16bda9752ff08e943b42186c7ba0db939ae565b30b09512a1879c4a5", size = 22506, upload-time = "2025-08-28T17:13:23.145Z" },
+    { url = "https://files.pythonhosted.org/packages/63/92/211706b72821d8afbd5f1b17e7adc8db01bd0a10bab8537a14ae42683960/mkdocs_panzoom_plugin-0.4.2-py3-none-any.whl", hash = "sha256:6f3f4f29baef73ad4310535427e92ee4f71075bb3900b7a7756110c095de3dc5", size = 22522, upload-time = "2025-09-05T17:01:29.831Z" },
 ]
 
 [[package]]

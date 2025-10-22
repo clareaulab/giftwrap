@@ -192,10 +192,11 @@ def main():
         help="The minimum number of reads supporting a gapfill to include it in the final counts. Default is 0 (no filtering)."
     )
     parser.add_argument(
-        "--all_pcr_thresholds",
+        "--max_pcr_thresholds",
         required=False,
-        action="store_true",
-        help="If set, the resultant counts file will contain filtered counts for all possible minimum number of PCR duplicates. The parsed object will then have a new obsm field 'X_pcr{n}' for n in 1 to the maximum number of PCR duplicates observed in the data. This will increase the size of the output file, but allow for more flexible downstream filtering."
+        type=int,
+        default=10,
+        help="The maximum number of PCR duplicate thresholds to consider when storing various layers when collecting counts. Default is 10."
     )
     args = parser.parse_args()
 
@@ -212,6 +213,7 @@ def main():
     cellranger_output = args.cellranger_output
     overwrite = args.overwrite
     skip_constant_seq = args.skip_constant_seq
+    max_pcr_thresholds = int(args.max_pcr_thresholds)
 
 
     print("Gapfill counts pipeline started.")
@@ -314,10 +316,10 @@ def main():
             # sys.executable,
             sys.path[0] + "/giftwrap-collect",
             "-o", str(output),
-            "-c", str(cores)
+            "-c", str(cores),
+            '--max_pcr_thresholds', str(max_pcr_thresholds)
         ] + (['--multiplex'] if multiplex > 0 else [])
         + (['--overwrite'] if overwrite else [])
-        + (['--all_pcr_thresholds'] if args.all_pcr_thresholds else [])
         + (['--flatten'] if args.flatten else []))
         if returncode != 0:
             print("Error: Failed to collect counts.", file=sys.stderr, flush=True)
