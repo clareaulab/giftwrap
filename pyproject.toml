@@ -80,7 +80,8 @@ docs = [
     "mkdocs-awesome-pages-plugin>=2.10.1",
     "mkdocs-git-revision-date-localized-plugin>=1.4.7",
     "mkdocs-jupyter>=0.25.1",
-    "mkdocs-material>=9.6.14",
+    "mkdocs-material>=9.6.18",
+    "mkdocs-panzoom-plugin>=0.4.2",
     "mkdocs-open-in-new-tab>=1.0.8",
     "mkdocstrings[python]>=0.29.1",
     "pymdown-extensions>=10.15",
@@ -113,8 +114,3 @@ exclude = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/giftwrap"]
-
-[dependency-groups]
-docs = [
-    "mkdocs-panzoom-plugin>=0.2.2",
-]

@@ -33,7 +33,7 @@ jobs:
 
       # ② Sync just the docs group (+ project code)
       - name: Install doc deps
-        run: uv sync --no-default-groups --group docs
+        run: uv sync --no-default-groups --extra docs
 
       # ③ Build & publish with MkDocs
       - name: Deploy docs

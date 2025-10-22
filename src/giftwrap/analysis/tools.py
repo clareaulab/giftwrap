@@ -376,118 +376,168 @@ def _impute_within_cluster(adata: ad.AnnData,
     if to_genotype.shape[0] == 0:
         # Can't genotype
         return pd.DataFrame(index=adata.obs_names, columns=adata.obsm['genotype'].columns), \
-            pd.DataFrame(index=adata.obs_names, columns=adata.obsm['genotype'].columns)
+            pd.DataFrame(index=adata.obs_names, columns=adata.obsm['genotype'].columns), 0.0
 
-    # Expand the genotypes to one-hot and concatenate to one big matrix
-    genotypes_matrix = []  # Will be n_cells x n_genotypes
-    genotype_allele = []  # Will be n_genotypes x n_genotypes
-    genotype_labels = []  # Will be n_genotypes
-    for geno in to_genotype.obsm['genotype'].columns.values:
-        # De-concatenate genotypes (i.e. split CAG/GAG to two genotypes: CAG and GAG)
-        raw_genotypes = to_genotype.obsm['genotype'][geno].str.split("/").explode().unique()
-        # Convert nan strings back to NaN
-        raw_genotypes = np.where(raw_genotypes == "nan", np.nan, raw_genotypes)
-        allele_indicators = []
-        allele = []
-        for raw_genotype in raw_genotypes:
-            if raw_genotype == "nan" or pd.isna(raw_genotype):
-                continue
-            # Check if cells contain any of the raw genotypes
-            allele_indicators.append(
-                (to_genotype.obsm['genotype'][geno].str.split("/").apply(
-                    lambda x: raw_genotype in x if isinstance(x, list) else (np.nan if pd.isna(x) else x == raw_genotype)
-                )).astype(float)
-            )
-            allele.append(np.nan if raw_genotype == "nan" else raw_genotype)  # FIXME: Fix the string coercsion in the .str.split call chains
-        if len(allele_indicators) == 0:  # No genotypes found for this probe
+    # Optimize genotype matrix construction
+    genotypes_matrix = []
+    genotype_allele = []
+    genotype_labels = []
+    
+    # Pre-split all genotypes to avoid repeated string operations
+    genotype_data = to_genotype.obsm['genotype']
+    for geno in genotype_data.columns.values:
+        # Use vectorized operations for splitting genotypes
+        split_series = genotype_data[geno].str.split("/")
+        
+        # Get all unique alleles more efficiently
+        all_alleles = set()
+        for cell_alleles in split_series.dropna():
+            if isinstance(cell_alleles, list):
+                all_alleles.update(cell_alleles)
+            else:
+                all_alleles.add(cell_alleles)
+        
+        # Remove nan strings
+        all_alleles.discard("nan")
+        all_alleles = [a for a in all_alleles if pd.notna(a)]
+        
+        if len(all_alleles) == 0:
             genotypes_matrix.append(np.full((0, to_genotype.shape[0]), np.nan))
-            genotype_allele.append(np.full((0, to_genotype.shape[0]), np.nan))
-            genotype_labels.append(geno)
+            genotype_allele.append(np.full((0,), np.nan))
         else:
-            genotypes_matrix.append(np.stack(allele_indicators))
-            genotype_allele.append(np.stack(allele))
-            genotype_labels.append(geno)
+            # Vectorized indicator computation
+            indicators = np.zeros((len(all_alleles), to_genotype.shape[0]))
+            for i, allele in enumerate(all_alleles):
+                # Vectorized check for allele presence
+                has_allele = split_series.apply(
+                    lambda x: allele in x if isinstance(x, list) else (
+                        np.nan if pd.isna(x) else x == allele
+                    )
+                ).astype(float)
+                indicators[i, :] = has_allele.values
+            
+            genotypes_matrix.append(indicators)
+            genotype_allele.append(np.array(all_alleles))
+        
+        genotype_labels.append(geno)
 
-    # To fill
-    distance_matrix = np.full((to_genotype.shape[0], to_genotype.shape[0]), np.nan)
-    # Set diagonal to 0
-    distance_matrix[np.diag_indices_from(distance_matrix)] = 0.0
-    # Compute all possible combinations
-    for i,j in itertools.combinations(range(to_genotype.shape[0]), 2):
-        if i == j:
-            continue
-        # Extract all genotypes from the nested data
-        cell_i_vector = np.concatenate([g[:, i] for g in genotypes_matrix], axis=0)
-        cell_j_vector = np.concatenate([g[:, j] for g in genotypes_matrix], axis=0)
-        distance_matrix[i,j] = _nan_aware_distance(cell_i_vector, cell_j_vector)
-        distance_matrix[j,i] = distance_matrix[i,j]
+    # Vectorized distance matrix computation
+    n_cells = to_genotype.shape[0]
+    
+    # Concatenate all genotype vectors for efficient distance computation
+    all_genotype_vectors = np.concatenate([g for g in genotypes_matrix], axis=0)
+    all_genotype_vectors = all_genotype_vectors.T  # Shape: (n_cells, n_features)
+    
+    # Compute pairwise distances using vectorized operations
+    distance_matrix = np.full((n_cells, n_cells), np.nan)
+    np.fill_diagonal(distance_matrix, 0.0)
+    
+    # Use broadcasting for efficient distance computation
+    for i in range(n_cells):
+        for j in range(i + 1, n_cells):
+            vec_i = all_genotype_vectors[i]
+            vec_j = all_genotype_vectors[j]
+            
+            # Find non-NaN features
+            valid_mask = ~(np.isnan(vec_i) | np.isnan(vec_j))
+            if not valid_mask.any():
+                continue
+            
+            # Compute distance only on valid features
+            valid_i = vec_i[valid_mask]
+            valid_j = vec_j[valid_mask]
+            dist = scipy.spatial.distance.euclidean(valid_i, valid_j)
+            
+            # Normalize and penalize for NaN features
+            n_valid = valid_mask.sum()
+            n_nan = (~valid_mask).sum()
+            normalized_dist = (dist / n_valid) * n_nan if n_valid > 0 else np.nan
+            
+            distance_matrix[i, j] = normalized_dist
+            distance_matrix[j, i] = normalized_dist
 
     # Finally, for each cell compute the nearest neighbors to impute missing genotypes
     # Get all indices with any NA (so that we can ignore cells with no missing genotypes
     to_fill_mask = np.full((to_genotype.shape[0], to_genotype.obsm['genotype'].shape[1]), True) if impute_all else to_genotype.obsm['genotype'].isna().values
-    # Get indices with at least one genotype to impute
-    for idx in np.argwhere(np.any(to_fill_mask, axis=1)):
-        idx = idx.item()
-        genotypes_to_fill = to_fill_mask[idx, :]
-        # Get the nearest neighbors
-        neighbor_indices = np.argsort(distance_matrix[idx, :], axis=0)
-        for genotype_idx in np.argwhere(genotypes_to_fill):
-            genotype_idx = genotype_idx.item()
-            genotype_vector = genotypes_matrix[genotype_idx][:, neighbor_indices]  # Get the genotype vector for this genotype
+    
+    # Pre-compute neighbor indices for all cells to avoid repeated sorting
+    neighbor_indices_all = np.argsort(distance_matrix, axis=1)
+    
+    # Vectorize where possible
+    cells_to_process = np.where(np.any(to_fill_mask, axis=1))[0]
+    
+    for cell_idx in cells_to_process:
+        genotypes_to_fill = to_fill_mask[cell_idx, :]
+        neighbor_indices = neighbor_indices_all[cell_idx]
+        
+        for genotype_idx in np.where(genotypes_to_fill)[0]:
+            genotype_vector = genotypes_matrix[genotype_idx][:, neighbor_indices]
+            
             if np.all(np.isnan(genotype_vector)):
                 # If all neighbors have NaN genotype, skip this genotype
                 continue
-            # Get the nearest neighbors that have a genotype in this position
-            nearest = genotype_vector[:, ~np.isnan(genotype_vector).all(0)][:, 1:k+1]  # Skip the first one, which is the cell itself
-            if nearest.size == 0:  # No neighbors to impute
+            
+            # Get valid neighbors (skip self at index 0)
+            valid_neighbors = ~np.isnan(genotype_vector).all(0)
+            if not valid_neighbors[1:k+1].any():
                 continue
-            # Select the genotypes from the neighbors
+            
+            nearest = genotype_vector[:, valid_neighbors][:, 1:k+1]
+            if nearest.size == 0:
+                continue
+            
             possible_genotypes = genotype_allele[genotype_idx]
-            if len(possible_genotypes) == 0:  # No genotypes to impute
+            if len(possible_genotypes) == 0:
                 continue
-            genotype_counts = np.nansum(nearest, axis=1)  # Get the counts of the genotypes in the neighbors
-            # correct_genotype = original_genotypes[has_genotype].iloc[idx, genotype_idx]
-            # Explode the genotype strings if heterozygous (via /) and duplicate the counts accordingly
-            if any("/" in g for g in possible_genotypes):
-                new_genotypes = {}
+            
+            genotype_counts = np.nansum(nearest, axis=1)
+            
+            # Optimize heterozygous genotype handling
+            if any("/" in str(g) for g in possible_genotypes):
+                genotype_count_dict = {}
                 for g, c in zip(possible_genotypes, genotype_counts):
                     if pd.isna(g):
                         continue
-                    # Split the genotype by / and duplicate the counts accordingly
-                    alleles = g.split("/")
+                    alleles = str(g).split("/")
                     for allele in alleles:
-                        if allele not in new_genotypes:
-                            new_genotypes[allele] = 0
-                        new_genotypes[allele] += c
-                possible_genotypes = np.array(new_genotypes.keys())
-                genotype_counts = np.array(new_genotypes.values())
-            # Collect the cumulative proportion of counts >=50%
+                        genotype_count_dict[allele] = genotype_count_dict.get(allele, 0) + c
+                
+                possible_genotypes = np.array(list(genotype_count_dict.keys()))
+                genotype_counts = np.array(list(genotype_count_dict.values()))
+            
             total_count = np.sum(genotype_counts)
             if total_count == 0:
                 continue
+            
+            # Use vectorized operations for sorting and cumulative computation
             sorted_indices = np.argsort(genotype_counts)[::-1]
-            cumulative_proportion = np.cumsum(genotype_counts[sorted_indices] / total_count)
+            sorted_genotypes = possible_genotypes[sorted_indices]
+            cumulative_proportion = np.cumsum(genotype_counts[sorted_indices]) / total_count
+            
             best_idx = np.argmax(cumulative_proportion >= threshold)
-            if best_idx == 0:  # Scalar
-                new_genotype = possible_genotypes[sorted_indices[0]]
+            
+            if best_idx == 0:
+                new_genotype = str(sorted_genotypes[0])
             else:
-                new_genotype = "/".join(possible_genotypes[sorted_indices[:best_idx + 1]])
-            to_genotype.obsm['genotype'].iloc[idx, to_genotype.obsm['genotype'].columns.get_loc(genotype_labels[genotype_idx])] = str(new_genotype)
-            to_genotype.obsm['genotype_certainty'].iloc[idx, to_genotype.obsm['genotype_certainty'].columns.get_loc(genotype_labels[genotype_idx])] = float(cumulative_proportion[best_idx])
+                new_genotype = "/".join(str(g) for g in sorted_genotypes[:best_idx + 1])
+            
+            # Direct assignment using iloc for better performance
+            genotype_col_name = genotype_labels[genotype_idx]
+            to_genotype.obsm['genotype'].iloc[cell_idx, to_genotype.obsm['genotype'].columns.get_loc(genotype_col_name)] = new_genotype
+            to_genotype.obsm['genotype_certainty'].iloc[cell_idx, to_genotype.obsm['genotype_certainty'].columns.get_loc(genotype_col_name)] = float(cumulative_proportion[best_idx])
 
     # Validate the imputed genotypes
     correct_genotypes = 0.
     if mask is not None:
-        # Check the imputed genotypes against the original genotypes
-        new_masked_genotypes = to_genotype.obsm['genotype'].values[mask]
-        old_masked_genotypes = original_genotypes.values[mask]
-
-        correct_genotypes += np.sum(
-            new_masked_genotypes == old_masked_genotypes
-        )
-
-        if not impute_all:  # Replace the imputed genotypes where we know the truth with the original genotypes
-            to_genotype.obsm['genotype'].loc[mask] = original_genotypes.loc[mask]
+        # Vectorized comparison
+        mask_subset = mask[has_genotype]
+        new_masked = to_genotype.obsm['genotype'].values[mask_subset]
+        old_masked = original_genotypes.values[has_genotype][mask_subset]
+        
+        correct_genotypes = np.sum(new_masked == old_masked)
+        
+        if not impute_all:
+            to_genotype.obsm['genotype'].loc[mask_subset] = original_genotypes.loc[has_genotype][mask_subset]
 
     # Recompile the adata by adding the non-imputed cells back
     adata = ad.concat([to_genotype, adata[unable_to_impute]], axis=0)
@@ -558,26 +608,45 @@ def _correct_off_by_one_job(adata: ad.AnnData, probes: list[str]) -> ad.AnnData:
     """
     import rapidfuzz
 
-    for cell in adata.obs_names:
+    # Create a copy to avoid modifying views
+    adata = adata.copy()
+
+    for cell_idx, cell in enumerate(adata.obs_names):
         for probe in probes:
-            subset_adata = adata[cell, (adata.var["probe"] == probe)]
-            if subset_adata.shape[1] < 2 or subset_adata.X.sum() < 2:
+            probe_mask = (adata.var["probe"] == probe).values
+            subset_var_names = adata.var_names[probe_mask]
+
+            # Get UMI counts for this cell and probe
+            if scipy.sparse.issparse(adata.X):
+                cell_counts = adata.X[cell_idx, probe_mask].toarray().flatten()
+            else:
+                cell_counts = adata.X[cell_idx, probe_mask].flatten()
+
+            # Remove gapfills with no UMIs
+            nonzero_mask = cell_counts > 0
+            if nonzero_mask.sum() < 2:
                 continue  # There aren't multiple gapfills for this probe in this cell, skip it
-            # Remove combos with no UMIs
-            gapfills = subset_adata.var_names[np.array(subset_adata.X.sum(axis=0)).flatten() > 0]
-            if len(gapfills) < 2:  # There aren't multiple gapfills for this probe in this cell, skip it
-                continue
+
+            active_var_names = subset_var_names[nonzero_mask]
+            active_counts = cell_counts[nonzero_mask]
 
             # Get the length of the gapfills
-            gapfill_lengths = subset_adata.var.loc[gapfills].apply(lambda x: len(x['gapfill']), axis=1).values
+            gapfill_lengths = np.array([len(adata.var.loc[var_name, 'gapfill']) for var_name in active_var_names])
+
             # Only retain gapfills that are pairwise off-by-one
             gapfills_to_check = list()
             for length in np.unique(gapfill_lengths):
                 # Find the gapfills are one base shorter than the current length
-                shorter_gapfills = gapfills[gapfill_lengths == length - 1]
-                if len(shorter_gapfills) == 0:
+                longer_mask = gapfill_lengths == length
+                shorter_mask = gapfill_lengths == length - 1
+
+                if not shorter_mask.any():
                     continue
-                gapfills_to_check.append((gapfills[gapfill_lengths == length], shorter_gapfills))
+
+                longer_vars = active_var_names[longer_mask]
+                shorter_vars = active_var_names[shorter_mask]
+                gapfills_to_check.append((longer_vars, shorter_vars))
+
             if len(gapfills_to_check) == 0:
                 continue
 
@@ -587,18 +656,29 @@ def _correct_off_by_one_job(adata: ad.AnnData, probes: list[str]) -> ad.AnnData:
                 # shorter gapfills are truncated versions of the longer gapfill, so we skip this case
                 if len(longer_gapfills) == 1 and len(shorter_gapfills) > 1:
                     continue
-                # Collect the counts of the gapfills
-                longer_counts = subset_adata[:, longer_gapfills].X.toarray().flatten()
-                longer_sequences = subset_adata.var.loc[longer_gapfills].gapfill.values
-                shorter_counts = subset_adata[:, shorter_gapfills].X.toarray().flatten()
-                shorter_sequences = subset_adata.var.loc[shorter_gapfills].gapfill.values
+
+                # Get counts and sequences
+                longer_indices = [np.where(active_var_names == var)[0][0] for var in longer_gapfills]
+                shorter_indices = [np.where(active_var_names == var)[0][0] for var in shorter_gapfills]
+
+                longer_counts = active_counts[longer_indices]
+                shorter_counts = active_counts[shorter_indices]
+
+                longer_sequences = [adata.var.loc[var, 'gapfill'] for var in longer_gapfills]
+                shorter_sequences = [adata.var.loc[var, 'gapfill'] for var in shorter_gapfills]
+
                 # The longer counts must be greater than the shorter counts if this was truly a rare base deletion error
                 if longer_counts.sum() <= shorter_counts.sum():
                     continue
+
                 # Finally, we can compute alignments
-                # Map each gapfill to its count
-                longer_gapfill_counts = {gapfill: count for gapfill, count in zip(longer_gapfills, longer_sequences, longer_counts)}
-                shorter_gapfill_counts = {gapfill: count for gapfill, count in zip(shorter_gapfills, shorter_sequences, shorter_counts)}
+                # Map each gapfill to its count - convert numpy types to Python native types
+                longer_gapfill_counts = {seq: float(count) for seq, count in zip(longer_sequences, longer_counts)}
+                shorter_gapfill_counts = {seq: float(count) for seq, count in zip(shorter_sequences, shorter_counts)}
+
+                # Create mappings from original sequences to variable names
+                longer_seq_to_var = {seq: var for var, seq in zip(longer_gapfills, longer_sequences)}
+                shorter_seq_to_var = {seq: var for var, seq in zip(shorter_gapfills, shorter_sequences)}
 
                 aligned_longer, aligned_shorter = _compute_alignments(
                     ref_frequencies=longer_gapfill_counts,
@@ -606,6 +686,20 @@ def _correct_off_by_one_job(adata: ad.AnnData, probes: list[str]) -> ad.AnnData:
                     align=True,  # Align the motifs
                     threads=1,  # Use a single thread for alignment
                 )
+
+                # Create mappings from aligned sequences back to original sequences
+                longer_aligned_to_original = {}
+                shorter_aligned_to_original = {}
+
+                for aligned_seq in aligned_longer.keys():
+                    # Remove gaps to get original sequence
+                    original_seq = aligned_seq.replace('-', '')
+                    longer_aligned_to_original[aligned_seq] = original_seq
+
+                for aligned_seq in aligned_shorter.keys():
+                    # Remove gaps to get original sequence
+                    original_seq = aligned_seq.replace('-', '')
+                    shorter_aligned_to_original[aligned_seq] = original_seq
 
                 # We will be conservative and only correct if there were gaps introduced into the longer sequence
                 # since that would indicate there is too much uncertainty in the gapfill sequence.
@@ -617,49 +711,100 @@ def _correct_off_by_one_job(adata: ad.AnnData, probes: list[str]) -> ad.AnnData:
                 # Finally, we can try to correct the gapfills
                 # If there is exactly one shorter and one longer gapfill, we can directly correct it
                 if len(aligned_longer) == 1 and len(aligned_shorter) == 1:
-                    longer_gapfill = next(iter(aligned_longer.keys()))
-                    shorter_gapfill = next(iter(aligned_shorter.keys()))
+                    aligned_longer_gapfill = next(iter(aligned_longer.keys()))
+                    aligned_shorter_gapfill = next(iter(aligned_shorter.keys()))
+
+                    # Map back to original sequences and then to variable names
+                    original_longer_seq = longer_aligned_to_original[aligned_longer_gapfill]
+                    original_shorter_seq = shorter_aligned_to_original[aligned_shorter_gapfill]
+                    longer_var_name = longer_seq_to_var[original_longer_seq]
+                    shorter_var_name = shorter_seq_to_var[original_shorter_seq]
+
+                    # Get the column indices for modification
+                    shorter_col_idx = np.where(adata.var_names == shorter_var_name)[0][0]
+                    longer_col_idx = np.where(adata.var_names == longer_var_name)[0][0]
+
                     # Correct the shorter gapfill to the longer gapfill
-                    shorter_count = aligned_shorter[shorter_gapfill]
-                    adata[cell, shorter_gapfill].X = 0.
-                    adata[cell, longer_gapfill].X += shorter_count
+                    shorter_count = aligned_shorter[aligned_shorter_gapfill]
+
+                    # Modify the sparse matrix directly
+                    if scipy.sparse.issparse(adata.X):
+                        adata.X[cell_idx, shorter_col_idx] = 0
+                        current_longer_count = adata.X[cell_idx, longer_col_idx]
+                        adata.X[cell_idx, longer_col_idx] = current_longer_count + shorter_count
+                    else:
+                        adata.X[cell_idx, shorter_col_idx] = 0.
+                        adata.X[cell_idx, longer_col_idx] += shorter_count
+
                 elif len(aligned_longer) == 1 and len(aligned_shorter) > 1:
                     # Should never happen
                     raise ValueError("There are multiple shorter gapfills for a single longer gapfill, this should not happen.")
                 else:
                     # We will map each short gapfill to its longest counterpart
                     # When multiple have the same distance, we will redistribute the counts
-                    for shorter_gapfill, shorter_count in aligned_shorter.items():
+                    for aligned_shorter_gapfill, shorter_count in aligned_shorter.items():
+                        original_shorter_seq = shorter_aligned_to_original[aligned_shorter_gapfill]
+                        shorter_var_name = shorter_seq_to_var[original_shorter_seq]
+
                         # Compute the edit distance to the longer gapfills
                         min_distance = float('inf')
-                        longer_gapfills = []
-                        for longer_gapfill, longer_count in aligned_longer.items():
+                        best_longer_vars = []
+                        for aligned_longer_gapfill, longer_count in aligned_longer.items():
                             distance = rapidfuzz.distance.Levenshtein.distance(
-                                shorter_gapfill, longer_gapfill
+                                aligned_shorter_gapfill, aligned_longer_gapfill
                             )
                             if distance < min_distance:
                                 min_distance = distance
-                                longer_gapfills = [longer_gapfill]
+                                original_longer_seq = longer_aligned_to_original[aligned_longer_gapfill]
+                                best_longer_vars = [longer_seq_to_var[original_longer_seq]]
                             elif distance == min_distance:
-                                longer_gapfills.append(longer_gapfill)
+                                original_longer_seq = longer_aligned_to_original[aligned_longer_gapfill]
+                                best_longer_vars.append(longer_seq_to_var[original_longer_seq])
 
-                        if len(longer_gapfills) == 0:
+                        if len(best_longer_vars) == 0:
                             raise ValueError("We lost our longer gapfills, this should not happen.")
-                        elif len(longer_gapfills) == 1:
+                        elif len(best_longer_vars) == 1:
                             # Exactly one, directly convert
-                            longer_gapfill = longer_gapfills[0]
-                            adata[cell, shorter_gapfill].X = 0.
-                            adata[cell, longer_gapfill].X += shorter_count
+                            longer_var_name = best_longer_vars[0]
+
+                            # Get column indices
+                            shorter_col_idx = np.where(adata.var_names == shorter_var_name)[0][0]
+                            longer_col_idx = np.where(adata.var_names == longer_var_name)[0][0]
+
+                            # Modify the sparse matrix directly
+                            if scipy.sparse.issparse(adata.X):
+                                adata.X[cell_idx, shorter_col_idx] = 0
+                                current_longer_count = adata.X[cell_idx, longer_col_idx]
+                                adata.X[cell_idx, longer_col_idx] = current_longer_count + shorter_count
+                            else:
+                                adata.X[cell_idx, shorter_col_idx] = 0.
+                                adata.X[cell_idx, longer_col_idx] += shorter_count
                         else:
                             # Redistribute relative to the counts of the longer gapfills
-                            longer_counts = np.array([aligned_longer[lg] for lg in longer_gapfills])
-                            relative_counts = longer_counts / longer_counts.sum()
+                            longer_counts_array = np.array([
+                                aligned_longer[aligned_seq] for aligned_seq in aligned_longer.keys()
+                                if longer_seq_to_var[longer_aligned_to_original[aligned_seq]] in best_longer_vars
+                            ])
+                            relative_counts = longer_counts_array / longer_counts_array.sum()
                             new_counts = (relative_counts * shorter_count).round().astype(int)
+
+                            # Get column indices
+                            shorter_col_idx = np.where(adata.var_names == shorter_var_name)[0][0]
+
                             # Set the counts for the shorter gapfill to 0
-                            adata[cell, shorter_gapfill].X = 0.
+                            if scipy.sparse.issparse(adata.X):
+                                adata.X[cell_idx, shorter_col_idx] = 0
+                            else:
+                                adata.X[cell_idx, shorter_col_idx] = 0.
+
                             # Add the new counts to the longer gapfills
-                            for longer_gapfill, new_count in zip(longer_gapfills, new_counts):
-                                adata[cell, longer_gapfill].X += new_count
+                            for longer_var_name, new_count in zip(best_longer_vars, new_counts):
+                                longer_col_idx = np.where(adata.var_names == longer_var_name)[0][0]
+                                if scipy.sparse.issparse(adata.X):
+                                    current_count = adata.X[cell_idx, longer_col_idx]
+                                    adata.X[cell_idx, longer_col_idx] = current_count + new_count
+                                else:
+                                    adata.X[cell_idx, longer_col_idx] += new_count
 
     # Finally, we can return the corrected adata
     return adata
@@ -730,11 +875,11 @@ def _generate_genotype_frequencies(gapfill_adata: ad.AnnData,
 
 
 def _compute_alignments(
-        ref_frequencies: dict[str, tuple[str, float]],
-        alt_frequencies: dict[str, tuple[str, float]] | None,
+        ref_frequencies: dict[str, float],
+        alt_frequencies: dict[str, float] | None,
         align: bool = True,
         threads: int = 1,
-) -> tuple[dict[str, tuple[str, float]], dict[str, tuple[str, float]] | None]:
+) -> tuple[dict[str, float], dict[str, float] | None]:
     """
     Compute alignments for the motif plot.
     :param ref_frequencies: A dictionary of reference frequencies for the probe.
@@ -754,13 +899,13 @@ def _compute_alignments(
         # Pad the motifs with gaps to the same length
         if alt_frequencies is None:
             max_length = max(len(motif) for motif in ref_frequencies.keys())
-            ref_frequencies = {gapfill: (motif.ljust(max_length, '-'), freq) for gapfill, (motif, freq) in ref_frequencies.items()}
+            ref_frequencies = {motif.ljust(max_length, '-'): freq for motif, freq in ref_frequencies.items()}
             return ref_frequencies, None
         else:
             max_length = max(max(len(motif) for motif in ref_frequencies.keys()),
                              max(len(motif) for motif in alt_frequencies.keys()))
-            ref_frequencies = {gapfill: (motif.ljust(max_length, '-'), freq) for gapfill, (motif, freq) in ref_frequencies.items()}
-            alt_frequencies = {gapfill: (motif.ljust(max_length, '-'), freq) for gapfill, (motif, freq) in alt_frequencies.items()}
+            ref_frequencies = {motif.ljust(max_length, '-'): freq for motif, freq in ref_frequencies.items()}
+            alt_frequencies = {motif.ljust(max_length, '-'): freq for motif, freq in alt_frequencies.items()}
             return ref_frequencies, alt_frequencies
 
 
@@ -774,7 +919,7 @@ def _compute_alignments(
         scoring_matrix=scoring_matrices.ScoringMatrix.from_name('BLOSUM62'),
     )
     # Sort the references by frequency (descending)
-    sorted_ref = dict(sorted(ref_frequencies.items(), key=lambda x: x[1][1], reverse=True))
+    sorted_ref = dict(sorted(ref_frequencies.items(), key=lambda x: x[1], reverse=True))
 
     if alt_frequencies is None:  # Only need to worry about one group
         if len(sorted_ref) < 2:  # Skip alignment
@@ -786,12 +931,12 @@ def _compute_alignments(
             )
         # Align the motifs
         sequences = [
-            pyfamsa.Sequence(f">{i}${gapfill}${freq}".encode(), seq.encode())
-            for i, (gapfill, (seq, freq)) in enumerate(sorted_ref.items())
+            pyfamsa.Sequence(f">{i}${motif}${freq}".encode(), motif.encode())
+            for i, (motif, freq) in enumerate(sorted_ref.items())
         ]
         msa = aligner.align(sequences)
         return {
-            (seq.sequence.decode(), float(seq.id.decode().split("$")[2]))
+            seq.sequence.decode(): float(seq.id.decode().split("$")[2])
             for seq in msa
         }, None  # No alternative frequencies to return
     else: # Need to align both groups
@@ -816,11 +961,11 @@ def _compute_alignments(
             msa = aligner.align(all_sequences)
             # Parse the aligned sequences back into dictionaries
             ref_frequencies_aligned = {
-                seq.sequence.decode(): float(seq.id.decode().split(" ")[1])
+                seq.sequence.decode(): float(seq.id.decode().split(" ")[-1])
                 for seq in msa if seq.id.decode().startswith('>ref_')
             }
             alt_frequencies_aligned = {
-                seq.sequence.decode(): float(seq.id.decode().split(" ")[1])
+                seq.sequence.decode(): float(seq.id.decode().split(" ")[-1])
                 for seq in msa if seq.id.decode().startswith('>alt_')
             }
 
@@ -844,11 +989,11 @@ def _compute_alignments(
             )
 
             ref_frequencies_aligned = {
-                seq.sequence.decode(): float(seq.id.decode().split(" ")[1])
+                seq.sequence.decode(): float(seq.id.decode().split(" ")[-1])
                 for seq in total_msa if seq.id.decode().startswith('>ref_')
             }
             alt_frequencies_aligned = {
-                seq.sequence.decode(): float(seq.id.decode().split(" ")[1])
+                seq.sequence.decode(): float(seq.id.decode().split(" ")[-1])
                 for seq in total_msa if seq.id.decode().startswith('>alt_')
             }
             return ref_frequencies_aligned, alt_frequencies_aligned

@@ -1584,23 +1584,24 @@ def filter_h5_file_by_barcodes(input_file: Path, output_file: Path, barcodes_lis
             write_sparse_matrix(f['matrix'], layer_name, data)
 
         # If all_pcr_thresholds is present, filter it as well
-        if bool(f.attrs['all_pcr_thresholds']):
+        if 'max_pcr_duplicates' in f.attrs:
             max_pcr_dups = int(f.attrs['max_pcr_duplicates'])
-            all_pcr_grp = f["pcr_thresholded_counts"]
-            for pcr_dup in range(1, max_pcr_dups):
-                layer_name = f"pcr{pcr_dup}"
-                if layer_name in all_pcr_grp:
-                    data = read_sparse_matrix(all_pcr_grp, layer_name)
-                    data = data[barcode_indices, :]
+            if max_pcr_dups > 1:
+                all_pcr_grp = f["pcr_thresholded_counts"]
+                for pcr_dup in range(1, max_pcr_dups):
+                    layer_name = f"pcr{pcr_dup}"
+                    if layer_name in all_pcr_grp:
+                        data = read_sparse_matrix(all_pcr_grp, layer_name)
+                        data = data[barcode_indices, :]
 
-                    # Add padding only if needed
-                    if len(padded_barcodes) > 0:
-                        # Create empty sparse matrix only once with correct dimensions
-                        padding = scipy.sparse.csr_matrix((len(padded_barcodes), data.shape[1]), dtype=data.dtype)
-                        data = scipy.sparse.vstack([data, padding])
+                        # Add padding only if needed
+                        if len(padded_barcodes) > 0:
+                            # Create empty sparse matrix only once with correct dimensions
+                            padding = scipy.sparse.csr_matrix((len(padded_barcodes), data.shape[1]), dtype=data.dtype)
+                            data = scipy.sparse.vstack([data, padding])
 
-                    del all_pcr_grp[layer_name]
-                    write_sparse_matrix(all_pcr_grp, layer_name, data)
+                        del all_pcr_grp[layer_name]
+                        write_sparse_matrix(all_pcr_grp, layer_name, data)
 
         # Process cell metadata more efficiently
         if 'cell_metadata' in f:
@@ -1853,11 +1854,10 @@ def read_h5_file(filename: str) -> ad.AnnData:
                                 "n_cells": f.attrs['n_cells'],
                                 "n_probes": f.attrs['n_probes'],
                                 "n_probe_gapfill_combinations": f.attrs['n_probe_gapfill_combinations'],
-                                "all_pcr_thresholds": f.attrs['all_pcr_thresholds'],
-                                "max_pcr_duplicates": f.attrs['max_pcr_duplicates'],
+                                "max_pcr_duplicates": f.attrs['max_pcr_duplicates'] if 'max_pcr_duplicates' in f.attrs else -1,
                            })
 
-        if f.attrs['all_pcr_thresholds']:
+        if 'max_pcr_duplicates' in f.attrs and int(f.attrs['max_pcr_duplicates']) > 1:
             # We must read the pcr thresholds save the counts matrices for each threshold to the layers
             dup_grp = f['pcr_thresholded_counts']
             for threshold in range(1, f.attrs['max_pcr_duplicates']):
