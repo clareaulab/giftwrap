@@ -1876,7 +1876,7 @@ def read_h5_file(filename: str) -> ad.AnnData:
             # We can parse the barcode names to regenerate these values
             array_cols = []
             array_rows = []
-            for barcode in adata.obs['barcode']:
+            for barcode in adata.obs.index.values:
                 try:
                     parts = barcode.split('-')[0].split("_")
                     if len(parts) >= 3:

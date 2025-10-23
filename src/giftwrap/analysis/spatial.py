@@ -149,6 +149,7 @@ def bin(adata: ad.AnnData, resolution: int = 8) -> ad.AnnData:
 def join_with_wta(wta: 'sd.SpatialData', gf_adata: ad.AnnData) -> 'sd.SpatialData':
     """
     Join the spatial data with the whole transcriptome data. Adds additional gapfill tables.
+    Note that NaN genotypes will be replaced with the string "N/A" for zarr compatibility.
     :param wta: The whole transcriptome data.
     :param gf_adata: The spatial gapfill data.
     :return: The joined data.
@@ -156,7 +157,7 @@ def join_with_wta(wta: 'sd.SpatialData', gf_adata: ad.AnnData) -> 'sd.SpatialDat
     assert_spatial(gf_adata)
 
     def _build_adata(_wta, resolution):
-        _gf = bin(gf_adata, resolution)
+        _gf = bin(gf_adata.copy(), resolution)
 
         # Use more efficient index operations
         wta_index = _wta.obs.index
@@ -165,7 +166,7 @@ def join_with_wta(wta: 'sd.SpatialData', gf_adata: ad.AnnData) -> 'sd.SpatialDat
         # Find intersection and missing cells in one pass
         intersection_mask = gf_index.isin(wta_index)
         _gf_filtered = _gf[intersection_mask, :]
-        missing_cells = wta_index.difference(gf_index)
+        misscing_cells = wta_index.difference(gf_index)
 
         # Ensure missing_cells has unique values
         missing_cells = missing_cells.drop_duplicates()
@@ -268,7 +269,7 @@ def plot_genotypes(sdata: 'sd.SpatialData',
     res_name = f"square_{resolution:03d}um"
 
     # Create points for the genotype where not NA
-    genotype = sdata.tables[f'gf_{res_name}'].obsm['genotype'][probe].fillna("NA")
+    genotype = sdata.tables[f'gf_{res_name}'].obsm['genotype'][probe]#.fillna("N/A")
     sdata[res_name].obs['giftwrap_genotype'] = genotype
 
     ax = sdata.pl.render_images(f"{dataset_id}_{image_name}", alpha=0.8) \
@@ -308,9 +309,9 @@ def _(adata: ad.AnnData,
     genotypes = adata.obsm['genotype'][probe]
     genotype_value_counts = genotypes.value_counts(dropna=True)
     unique_genos = genotypes.dropna().unique().tolist()
-    unique_genos = ['NA'] + list(sorted(unique_genos, key=lambda x: -genotype_value_counts.get(x, 0)))
+    unique_genos = ['N/A'] + list(sorted(unique_genos, key=lambda x: -genotype_value_counts.get(x, 0)))
     category_colors = {geno: cmap(i) for i, geno in enumerate(unique_genos)}
-    category_colors['NA'] = (*category_colors['NA'][:3], 0.3)
+    category_colors['N/A'] = (*category_colors['N/A'][:3], 0.3)
 
     # Compute the image
     size = max(adata.obs['array_row'].max(), adata.obs['array_col'].max()) + 1
@@ -320,7 +321,7 @@ def _(adata: ad.AnnData,
     genotypes_array = genotypes.values
 
     # Replace NaN with 'NA'
-    genotypes_array = np.where(pd.isna(genotypes_array), 'NA', genotypes_array)
+    genotypes_array = np.where(pd.isna(genotypes_array), 'N/A', genotypes_array)
     image[array_cols, array_rows] = [category_colors[geno] for geno in genotypes_array]
 
     # Downsample the image if needed

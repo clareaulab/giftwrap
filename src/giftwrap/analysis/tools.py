@@ -135,7 +135,14 @@ def call_genotypes(adata: ad.AnnData,
         "threshold": threshold,
         "cores": cores
     }
-    adata.obsm["genotype"] = pd.DataFrame(genotypes, index=adata.obs.index)
+
+    # Create DataFrames and convert genotypes to nullable string categorical dtype
+    genotype_df = pd.DataFrame(genotypes, index=adata.obs.index)
+    for col in genotype_df.columns:
+        # Convert to nullable string dtype first, then to category to handle NaNs properly
+        genotype_df[col] = genotype_df[col].astype("string").astype('category')
+
+    adata.obsm["genotype"] = genotype_df
     adata.obsm["genotype_counts"] = pd.DataFrame(genotypes_counts, index=adata.obs.index)
     adata.obsm["genotype_proportion"] = pd.DataFrame(genotypes_p, index=adata.obs.index)
     return adata
@@ -222,12 +229,17 @@ def transfer_genotypes(wta_adata: ad.AnnData, gapfill_adata: ad.AnnData) -> ad.A
 
     if intersected_cell_ids.shape[0] == cell_ids_wta.shape[0]:
         # All WTA cells are in the gapfill data
-        wta_adata.obsm["genotype"] = gapfill_adata[cell_ids_wta].obsm["genotype"]
+        genotype_df = gapfill_adata[cell_ids_wta].obsm["genotype"].copy()
+        # Ensure nullable string categorical dtype is preserved
+        for col in genotype_df.columns:
+            genotype_df[col] = genotype_df[col].astype("string").astype('category')
+
+        wta_adata.obsm["genotype"] = genotype_df
         wta_adata.obsm["genotype_proportion"] = gapfill_adata[cell_ids_wta].obsm["genotype_proportion"]
         wta_adata.obsm["genotype_counts"] = gapfill_adata[cell_ids_wta].obsm["genotype_counts"]
     elif intersected_cell_ids.shape[0] < cell_ids_wta.shape[0]:
         # Not all WTA cells have gapfill. Need to pad with NaNs.
-        genotype = gapfill_adata[intersected_cell_ids].obsm["genotype"]
+        genotype = gapfill_adata[intersected_cell_ids].obsm["genotype"].copy()
         genotype_p = gapfill_adata[intersected_cell_ids].obsm["genotype_proportion"]
         genotype_counts = gapfill_adata[intersected_cell_ids].obsm["genotype_counts"]
         # Append missing ids with NaNs
@@ -236,6 +248,11 @@ def transfer_genotypes(wta_adata: ad.AnnData, gapfill_adata: ad.AnnData) -> ad.A
         genotype = pd.concat([genotype, pd.DataFrame(index=missing_ids, columns=genotype.columns)], axis=0)
         genotype_p = pd.concat([genotype_p, pd.DataFrame(index=missing_ids, columns=genotype_p.columns)], axis=0)
         genotype_counts = pd.concat([genotype_counts, pd.DataFrame(index=missing_ids, columns=genotype_counts.columns)], axis=0)
+
+        # Convert genotypes to nullable string categorical dtype
+        for col in genotype.columns:
+            genotype[col] = genotype[col].astype("string").astype('category')
+
         # Re-order the WTA
         wta_adata = wta_adata[intersected_cell_ids]
         wta_adata.obsm["genotype"] = genotype
@@ -312,6 +329,10 @@ def impute_genotypes(adata: ad.AnnData,
         accuracy = sum(correct_imputation_counts) / mask.sum()
         adata.uns['imputation_accuracy'] = accuracy
         print(f"Imputation accuracy: {accuracy:.2f} ({mask.sum():,} out of {mask.size:,} cell/allele pairs held out)")
+
+    # Convert imputed genotypes to nullable string categorical dtype
+    for col in imputed_genotypes.columns:
+        imputed_genotypes[col] = imputed_genotypes[col].astype("string").astype('category')
 
     # Add to AnnData object
     adata.obsm['genotype_imputed'] = imputed_genotypes.loc[adata.obs_names]
@@ -400,7 +421,7 @@ def _impute_within_cluster(adata: ad.AnnData,
         # Remove nan strings
         all_alleles.discard("nan")
         all_alleles = [a for a in all_alleles if pd.notna(a)]
-        
+
         if len(all_alleles) == 0:
             genotypes_matrix.append(np.full((0, to_genotype.shape[0]), np.nan))
             genotype_allele.append(np.full((0,), np.nan))
@@ -459,7 +480,7 @@ def _impute_within_cluster(adata: ad.AnnData,
     # Finally, for each cell compute the nearest neighbors to impute missing genotypes
     # Get all indices with any NA (so that we can ignore cells with no missing genotypes
     to_fill_mask = np.full((to_genotype.shape[0], to_genotype.obsm['genotype'].shape[1]), True) if impute_all else to_genotype.obsm['genotype'].isna().values
-    
+
     # Pre-compute neighbor indices for all cells to avoid repeated sorting
     neighbor_indices_all = np.argsort(distance_matrix, axis=1)
     

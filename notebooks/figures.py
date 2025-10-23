@@ -11,6 +11,13 @@ import adjustText
 import seaborn as sns
 mpl.rcParams['figure.dpi'] = 300
 
+
+def plot_HE(sdata):
+    return (sdata.pl.render_images(f"_hires_image")
+                .pl.show(coordinate_systems="", figsize=(25, 25), na_in_legend=False, title="Hematoxylin & Eosin Stain")
+            )
+
+
 def plot_library_size(sdata, table, resolution: int = 2, include_0bp: bool = False):
     assert table in ('gf', '')
     if table == 'gf':
@@ -25,6 +32,15 @@ def plot_library_size(sdata, table, resolution: int = 2, include_0bp: bool = Fal
     return (sdata.pl.render_images(f"_hires_image", alpha=0.8)
                 .pl.render_shapes(element=f'_square_{resolution:03d}um', color='library_size', method='matplotlib', v='p98')
                 .pl.show(coordinate_systems="", figsize=(25, 25), na_in_legend=False, title="Library Size")
+            )
+
+def plot_sites_genotyped(sdata, resolution: int = 2):
+    number_genotyped = (~(sdata.tables[f'gf_square_{resolution:03d}um'].obsm['genotype'].isna() | (sdata.tables[f'gf_square_{resolution:03d}um'].obsm['genotype'].isna() != "N/A"))).sum(1).values
+    total_genotypes = sdata.tables[f'gf_square_{resolution:03d}um'].obsm['genotype'].shape[1]
+    sdata[f'square_{resolution:03d}um'].obs['percent_genotyped'] = number_genotyped / total_genotypes * 100
+    return (sdata.pl.render_images(f"_hires_image", alpha=0.8)
+                .pl.render_shapes(element=f'_square_{resolution:03d}um', color='percent_genotyped', method='matplotlib')
+                .pl.show(coordinate_systems="", figsize=(25, 25), na_in_legend=False, title="Percent of Sites Genotyped")
             )
 
 def plot_library_specific_probe(sdata, probe: str, gapfill: str, resolution: int = 2):
