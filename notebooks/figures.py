@@ -30,18 +30,29 @@ def plot_library_size(sdata, table, resolution: int = 2, include_0bp: bool = Fal
         library = sdata.tables[f'{table}square_{resolution:03d}um'].X.sum(1)
     sdata[f'square_{resolution:03d}um'].obs['library_size'] = library
     return (sdata.pl.render_images(f"_hires_image", alpha=0.8)
-                .pl.render_shapes(element=f'_square_{resolution:03d}um', color='library_size', method='matplotlib', v='p98')
+                .pl.render_shapes(element=f'_square_{resolution:03d}um', color='library_size', method='matplotlib', v='p95')
                 .pl.show(coordinate_systems="", figsize=(25, 25), na_in_legend=False, title="Library Size")
             )
 
-def plot_sites_genotyped(sdata, resolution: int = 2):
-    number_genotyped = (~(sdata.tables[f'gf_square_{resolution:03d}um'].obsm['genotype'].isna() | (sdata.tables[f'gf_square_{resolution:03d}um'].obsm['genotype'].isna() != "N/A"))).sum(1).values
-    total_genotypes = sdata.tables[f'gf_square_{resolution:03d}um'].obsm['genotype'].shape[1]
-    sdata[f'square_{resolution:03d}um'].obs['percent_genotyped'] = number_genotyped / total_genotypes * 100
-    return (sdata.pl.render_images(f"_hires_image", alpha=0.8)
-                .pl.render_shapes(element=f'_square_{resolution:03d}um', color='percent_genotyped', method='matplotlib')
-                .pl.show(coordinate_systems="", figsize=(25, 25), na_in_legend=False, title="Percent of Sites Genotyped")
-            )
+def plot_sites_genotyped(sdata, resolution: int = 2, at_least_one: bool = False):
+    genotype_df = sdata.tables[f'gf_square_{resolution:03d}um'].obsm['genotype'].copy()
+    # Remove 0bp
+    zero_bp_probes = get_all_0bp_probes(sdata.tables[f'gf_square_{resolution:03d}um'])
+    genotype_df = genotype_df.loc[:, ~genotype_df.columns.isin(zero_bp_probes)]
+    number_genotyped = (~(genotype_df.isna() | (genotype_df == "N/A"))).sum(1).values
+    if at_least_one:
+        sdata[f'square_{resolution:03d}um'].obs['any_genotyped'] = number_genotyped >= 1
+        return (sdata.pl.render_images(f"_hires_image", alpha=0.8)
+                    .pl.render_shapes(element=f'_square_{resolution:03d}um', color='any_genotyped', method='matplotlib', cmap='bwr', cmin=0, cmax=1)
+                    .pl.show(coordinate_systems="", figsize=(25, 25), na_in_legend=False, title="Bins with Any Genotype Called")
+                )
+    else:
+        total_genotypes = genotype_df.shape[1]
+        sdata[f'square_{resolution:03d}um'].obs['percent_genotyped'] = number_genotyped / total_genotypes * 100
+        return (sdata.pl.render_images(f"_hires_image", alpha=0.8)
+                    .pl.render_shapes(element=f'_square_{resolution:03d}um', color='percent_genotyped', method='matplotlib', cmap='bwr', cmin=0, cmax=100)
+                    .pl.show(coordinate_systems="", figsize=(25, 25), na_in_legend=False, title="Percent of Sites Genotyped")
+                )
 
 def plot_library_specific_probe(sdata, probe: str, gapfill: str, resolution: int = 2):
     table = "gf_"
@@ -247,7 +258,7 @@ def genotype_accuracy_barplot(sdata, probe: str, wt_gf: str, alt_gf: str, cellty
             # Add cell_line to gf table from wta by matching indices
             table.obs['cell_line'] = wta.obs.loc[table.obs_names, 'cell_line'].values
         else:
-            raise ValueError("cell_line annotation not found in either gf or wta data.")
+            raise ValueError("cell_line annotation not found in either wta data.")
     table = table[:, table.var.probe == probe].copy()
     if table.shape[1] == 0:
         raise ValueError(f"Probe {probe} not found in data.")
@@ -598,3 +609,495 @@ def boxplot_of_dualprobe_vs_gapfill(
     plt.tight_layout()
     plt.show()
     return summary, (fig, axes)
+
+def plot_genotype_umi_comparison(sdata, cell_line1: str, cell_line2: str, annotated_genotypes, celltype_genotypes, wt_alleles, alt_alleles, resolution: int = 2, min_umi_threshold: int = 0):
+    """
+    Compare UMI counts between two cell lines for probes with different genotypes.
+
+    Parameters:
+    -----------
+    sdata : SpatialData or AnnData
+        Spatial data object containing gapfill data
+    cell_line1 : str
+        Name of first cell line
+    cell_line2 : str
+        Name of second cell line
+    annotated_genotypes : list or set
+        List/set of probe names that have genotype annotations
+    celltype_genotypes : dict
+        Dict mapping cell line names to probe genotypes.
+        Format: {cell_line: {probe: [alleles]}}
+    wt_alleles : dict
+        Dict mapping probe names to WT alleles.
+        Format: {probe: 'A'/'C'/'G'/'T'}
+    alt_alleles : dict
+        Dict mapping probe names to ALT alleles.
+        Format: {probe: 'A'/'C'/'G'/'T'}
+    resolution : int
+        Resolution in microns (default: 2)
+    min_umi_threshold : int
+        Minimum UMI count threshold to include a probe (default: 0)
+
+    Returns:
+    --------
+    fig, ax, df : matplotlib figure and axis objects, and the underlying dataframe
+    """
+    # Get the gapfill table
+    if isinstance(sdata, ad.AnnData):
+        table = sdata
+    else:
+        table = sdata.tables[f'gf_square_{resolution:03d}um']
+
+    # Add cell line annotations if not present
+    if 'cell_line' not in table.obs.columns:
+        if not isinstance(sdata, ad.AnnData):
+            wta = sdata.tables[f'square_{resolution:03d}um']
+            if 'cell_line' in wta.obs.columns:
+                table = table.copy()
+                table.obs['cell_line'] = wta.obs.loc[table.obs_names, 'cell_line'].values
+            else:
+                raise ValueError("cell_line annotation not found in data.")
+        else:
+            raise ValueError("cell_line annotation not found in data.")
+
+    # Get non-0bp probes
+    zero_bp_probes = get_all_0bp_probes(table)
+    non_zero_probes = [p for p in table.var.probe.unique() if p not in zero_bp_probes]
+
+    # Prepare data for plotting
+    plot_data = {
+        'probe': [],
+        'genotype': [],
+        f'{cell_line1}_umi': [],
+        f'{cell_line2}_umi': [],
+        'label': [],
+        f'{cell_line1}_genotype': [],
+        f'{cell_line2}_genotype': []
+    }
+
+    for probe in non_zero_probes:
+        # Normalize probe name (same logic as boxplot_of_dualprobe_vs_gapfill)
+        probe_norm = probe.split("|")
+        if len(probe_norm) > 1:
+            probe_norm = " ".join(probe_norm[1:3])
+        else:
+            probe_norm = probe
+
+        # Check if probe has genotype information
+        if probe_norm not in annotated_genotypes:
+            continue
+
+        # Check if both cell lines have genotype info
+        if cell_line1 not in celltype_genotypes or cell_line2 not in celltype_genotypes:
+            continue
+
+        if probe_norm not in celltype_genotypes[cell_line1] or probe_norm not in celltype_genotypes[cell_line2]:
+            continue
+
+        # Determine genotype call (WT, ALT, or HET)
+        gt1 = "HET" if len(celltype_genotypes[cell_line1][probe_norm]) > 1 else ("WT" if wt_alleles[probe_norm] in celltype_genotypes[cell_line1][probe_norm] else "ALT")
+        gt2 = "HET" if len(celltype_genotypes[cell_line2][probe_norm]) > 1 else ("WT" if wt_alleles[probe_norm] in celltype_genotypes[cell_line2][probe_norm] else "ALT")
+
+        # Skip if either is HET
+        if gt1 == 'HET' or gt2 == 'HET':
+            continue
+
+        # Skip if both have the same genotype (WT/WT or ALT/ALT)
+        if gt1 == gt2:
+            continue
+
+        # Get probe-specific data
+        probe_mask = table.var.probe == probe
+        probe_table = table[:, probe_mask]
+
+        # Detect if this is dual probe or gapfill probe data
+        available_gapfills = probe_table.var.gapfill.unique().tolist()
+        is_dual_probe = all(len(gf) == 1 for gf in available_gapfills if gf)  # Single nucleotide gapfills
+
+        # Get WT and ALT alleles for this probe
+        if is_dual_probe:
+            # For dual probes, extract from probe name (e.g., "AKAP9 c.1389G>T" -> WT='G', ALT='T')
+            if ">" in probe_norm:
+                variant_part = probe_norm.split()[-1]  # Get "c.1389G>T"
+                if ">" in variant_part:
+                    bases = variant_part.split(">")
+                    wt_allele = bases[0][-1]  # Last character before '>'
+                    alt_allele = bases[1]     # Everything after '>'
+                else:
+                    continue
+            else:
+                continue
+        else:
+            # For gapfill probes, use the provided dictionaries
+            wt_allele = wt_alleles[probe_norm]
+            alt_allele = alt_alleles[probe_norm]
+
+        # Calculate UMI sums for WT and ALT genotypes in each cell line
+        for genotype, allele in [('WT', wt_allele), ('ALT', alt_allele)]:
+            # Filter to gapfills matching this genotype
+            gf_mask = probe_table.var.gapfill == allele
+
+            if not gf_mask.any():
+                continue
+
+            gf_data = probe_table[:, gf_mask]
+
+            # Sum UMIs for cell line 1
+            cl1_mask = gf_data.obs['cell_line'] == cell_line1
+            cl1_sum = gf_data.X[cl1_mask, :].sum() if cl1_mask.any() else 0
+
+            # Sum UMIs for cell line 2
+            cl2_mask = gf_data.obs['cell_line'] == cell_line2
+            cl2_sum = gf_data.X[cl2_mask, :].sum() if cl2_mask.any() else 0
+
+            # Apply threshold filter
+            if cl1_sum < min_umi_threshold and cl2_sum < min_umi_threshold:
+                continue
+
+            plot_data['probe'].append(probe)
+            plot_data['genotype'].append(genotype)
+            plot_data[f'{cell_line1}_umi'].append(cl1_sum)
+            plot_data[f'{cell_line2}_umi'].append(cl2_sum)
+            plot_data['label'].append(f"{probe}|{genotype}")
+            plot_data[f'{cell_line1}_genotype'].append(gt1)
+            plot_data[f'{cell_line2}_genotype'].append(gt2)
+
+    df = pd.DataFrame(plot_data)
+
+    if len(df) == 0:
+        raise ValueError(f"No probes found with different non-HET genotypes between {cell_line1} and {cell_line2}")
+
+    # Create scatterplot with color coding by genotype
+    fig, ax = plt.subplots(figsize=(10, 10))
+
+    # Color by genotype
+    colors = {'WT': 'blue', 'ALT': 'red'}
+    for genotype in ['WT', 'ALT']:
+        mask = df['genotype'] == genotype
+        if mask.any():
+            ax.scatter(
+                df.loc[mask, f'{cell_line1}_umi'],
+                df.loc[mask, f'{cell_line2}_umi'],
+                alpha=0.6,
+                s=50,
+                c=colors[genotype],
+                label=genotype
+            )
+
+    # Add diagonal line for reference
+    max_val = max(df[f'{cell_line1}_umi'].max(), df[f'{cell_line2}_umi'].max())
+    ax.plot([0, max_val], [0, max_val], 'k--', alpha=0.3, label='y=x')
+
+    ax.set_xlabel(f'{cell_line1} UMI Sum')
+    ax.set_ylabel(f'{cell_line2} UMI Sum')
+    ax.set_title(f'UMI Comparison: {cell_line1} vs {cell_line2}\n(Probes with Different Non-HET Genotypes)')
+    ax.legend()
+
+    # Optionally add labels for high-count probes
+    if len(df) > 0:
+        high_count_threshold = df[[f'{cell_line1}_umi', f'{cell_line2}_umi']].max().max() * 0.5
+        texts = []
+        for idx, row in df.iterrows():
+            if row[f'{cell_line1}_umi'] > high_count_threshold or row[f'{cell_line2}_umi'] > high_count_threshold:
+                texts.append(ax.text(row[f'{cell_line1}_umi'], row[f'{cell_line2}_umi'],
+                                   row['label'], fontsize=8, alpha=0.7))
+
+        if texts:
+            adjustText.adjust_text(texts, ax=ax, arrowprops=dict(arrowstyle='->', lw=0.5, alpha=0.5))
+
+    plt.tight_layout()
+
+    return fig, ax, df
+
+
+def plot_celltype_specific_probes_spatial(
+    sdata,
+    cell_line: str,
+    annotated_genotypes,
+    celltype_genotypes,
+    wt_alleles,
+    alt_alleles,
+    resolution: int = 2,
+    include_het: bool = False,
+    figsize: tuple = (15, 15)
+):
+    """
+    Plot spatial distribution of UMI counts for cell type-specific probes with marginal histograms.
+
+    This function identifies probes where the specified cell line has a different genotype compared
+    to other cell lines (e.g., cell line is ALT while others are WT, or vice versa). It then
+    visualizes the spatial distribution of these cell-type specific probes with marginal histograms
+    showing aggregate UMI counts along x and y axes.
+
+    Parameters:
+    -----------
+    sdata : SpatialData or AnnData
+        Spatial data object containing gapfill and spatial coordinate data
+    cell_line : str
+        Name of the cell line to analyze (e.g., 'HEL', 'K562', 'SET2')
+    annotated_genotypes : list or set
+        List/set of probe names that have genotype annotations
+    celltype_genotypes : dict
+        Dict mapping cell line names to probe genotypes.
+        Format: {cell_line: {probe: [alleles]}}
+    wt_alleles : dict
+        Dict mapping probe names to WT alleles.
+        Format: {probe: 'A'/'C'/'G'/'T'}
+    alt_alleles : dict
+        Dict mapping probe names to ALT alleles.
+        Format: {probe: 'A'/'C'/'G'/'T'}
+    resolution : int
+        Resolution in microns (default: 2)
+    include_het : bool
+        If True, include HET genotypes in the analysis. When comparing genotypes,
+        a HET genotype (e.g., ['A', 'T']) is considered different from a homozygous
+        genotype if any of its alleles differ (default: False)
+    figsize : tuple
+        Figure size for the plot (default: (15, 15))
+
+    Returns:
+    --------
+    fig, axes, df : matplotlib figure, axes objects (main, top, right), and the underlying dataframe
+    """
+    from matplotlib.gridspec import GridSpec
+
+    # Get the gapfill table
+    if isinstance(sdata, ad.AnnData):
+        table = sdata
+    else:
+        table = sdata.tables[f'gf_square_{resolution:03d}um']
+
+    # Add cell line annotations if not present
+    if 'cell_line' not in table.obs.columns:
+        if not isinstance(sdata, ad.AnnData):
+            wta = sdata.tables[f'square_{resolution:03d}um']
+            if 'cell_line' in wta.obs.columns:
+                table = table.copy()
+                table.obs['cell_line'] = wta.obs.loc[table.obs_names, 'cell_line'].values
+            else:
+                raise ValueError("cell_line annotation not found in data.")
+        else:
+            raise ValueError("cell_line annotation not found in data.")
+
+    # Extract spatial coordinates from bin names (e.g., "s_002um_00123_00456-1")
+    coords = []
+    for bin_name in table.obs_names:
+        parts = bin_name.split('_')
+        if len(parts) >= 4:
+            y_coord = int(parts[2])
+            x_coord = int(parts[3].split('-')[0])
+            coords.append((x_coord, y_coord))
+        else:
+            coords.append((np.nan, np.nan))
+
+    table.obs['x_coord'] = [c[0] for c in coords]
+    table.obs['y_coord'] = [c[1] for c in coords]
+
+    # Get non-0bp probes
+    zero_bp_probes = get_all_0bp_probes(table)
+    non_zero_probes = [p for p in table.var.probe.unique() if p not in zero_bp_probes]
+
+    # Prepare data for identifying cell-type specific probes
+    probe_info = {
+        'probe': [],
+        'probe_norm': [],
+        'target_genotype': [],
+        'is_specific': []
+    }
+
+    for probe in non_zero_probes:
+        # Normalize probe name (same logic as boxplot_of_dualprobe_vs_gapfill)
+        probe_norm = probe.split("|")
+        if len(probe_norm) > 1:
+            probe_norm = " ".join(probe_norm[1:3])
+        else:
+            probe_norm = probe
+
+        # Check if probe has genotype information
+        if probe_norm not in annotated_genotypes:
+            continue
+
+        if cell_line not in celltype_genotypes:
+            continue
+
+        if probe_norm not in celltype_genotypes[cell_line]:
+            continue
+
+        # Get alleles for target cell line
+        target_alleles = set(celltype_genotypes[cell_line][probe_norm])
+
+        # Determine genotype call (WT, ALT, or HET) for target cell line
+        if len(target_alleles) > 1:
+            target_genotype = "HET"
+        elif wt_alleles[probe_norm] in target_alleles:
+            target_genotype = "WT"
+        else:
+            target_genotype = "ALT"
+
+        # Skip HET genotypes if not including them
+        if not include_het and target_genotype == 'HET':
+            continue
+
+        # Check if this cell line has a different genotype from other cell lines
+        is_specific = False
+        for other_cell_line, genotypes in celltype_genotypes.items():
+            if other_cell_line == cell_line:
+                continue
+            if probe_norm in genotypes:
+                other_alleles = set(genotypes[probe_norm])
+
+                if include_het:
+                    # When including HET, consider alleles different if they don't match exactly
+                    if target_alleles != other_alleles:
+                        is_specific = True
+                        break
+                else:
+                    # When not including HET, compare genotype classifications
+                    if len(other_alleles) > 1:
+                        other_genotype = "HET"
+                    elif wt_alleles[probe_norm] in other_alleles:
+                        other_genotype = "WT"
+                    else:
+                        other_genotype = "ALT"
+
+                    # Skip comparison with HET and check if different
+                    if other_genotype != 'HET' and other_genotype != target_genotype:
+                        is_specific = True
+                        break
+
+        probe_info['probe'].append(probe)
+        probe_info['probe_norm'].append(probe_norm)
+        probe_info['target_genotype'].append(target_genotype)
+        probe_info['is_specific'].append(is_specific)
+
+    # Filter to only cell-type specific probes
+    df_probes = pd.DataFrame(probe_info)
+    df_probes = df_probes[df_probes['is_specific']]
+
+    if len(df_probes) == 0:
+        raise ValueError(f"No cell-type specific probes found for {cell_line}")
+
+    # Filter table to cell line of interest
+    cell_line_mask = table.obs['cell_line'] == cell_line
+    cell_line_table = table[cell_line_mask, :]
+
+    # Calculate UMI counts per spatial location for cell-type specific probes
+    umi_counts = np.zeros(cell_line_table.shape[0])
+
+    for _, row in df_probes.iterrows():
+        probe = row['probe']
+        probe_norm = row['probe_norm']
+        target_genotype = row['target_genotype']
+
+        # Get valid alleles for this probe based on genotype
+        wt_allele = wt_alleles[probe_norm]
+        alt_allele = alt_alleles[probe_norm]
+
+        if target_genotype == 'WT':
+            valid_alleles = [wt_allele]
+        elif target_genotype == 'ALT':
+            valid_alleles = [alt_allele]
+        elif target_genotype == 'HET':
+            # For HET, accept either WT OR ALT (OR operation)
+            valid_alleles = [wt_allele, alt_allele]
+        else:
+            continue
+
+        # Filter to probe and only gapfills matching valid alleles
+        probe_mask = cell_line_table.var.probe == probe
+        gapfill_mask = cell_line_table.var.gapfill.isin(valid_alleles)
+        combined_mask = probe_mask & gapfill_mask
+
+        if combined_mask.any():
+            probe_counts = cell_line_table[:, combined_mask].X.sum(axis=1)
+            if hasattr(probe_counts, 'A1'):
+                probe_counts = probe_counts.A1
+            umi_counts += probe_counts.flatten()
+
+    # Prepare spatial data for plotting
+    x_coords = cell_line_table.obs['x_coord'].values
+    y_coords = cell_line_table.obs['y_coord'].values
+
+    # Remove NaN coordinates
+    valid_mask = ~(np.isnan(x_coords) | np.isnan(y_coords))
+    x_coords = x_coords[valid_mask]
+    y_coords = y_coords[valid_mask]
+    umi_counts_valid = umi_counts[valid_mask]
+
+    if len(x_coords) == 0:
+        raise ValueError(f"No valid spatial coordinates found for {cell_line}")
+
+    # Create 2D matrix for heatmap
+    x_coords = x_coords.astype(int)
+    y_coords = y_coords.astype(int)
+
+    # Get unique coordinates and create mapping
+    unique_x = np.unique(x_coords)
+    unique_y = np.unique(y_coords)
+
+    x_to_idx = {x: i for i, x in enumerate(unique_x)}
+    y_to_idx = {y: i for i, y in enumerate(unique_y)}
+
+    # Create 2D matrix
+    heatmap_matrix = np.zeros((len(unique_y), len(unique_x)))
+
+    for x, y, count in zip(x_coords, y_coords, umi_counts_valid):
+        heatmap_matrix[y_to_idx[y], x_to_idx[x]] = count
+
+    # Prepare dataframe for return
+    spatial_data = {
+        'x_coord': x_coords,
+        'y_coord': y_coords,
+        'umi_count': umi_counts_valid
+    }
+    df_spatial = pd.DataFrame(spatial_data)
+
+    # Create figure with GridSpec for main plot + marginal histograms
+    fig = plt.figure(figsize=figsize)
+    gs = GridSpec(4, 4, figure=fig, hspace=0.05, wspace=0.05)
+
+    # Main heatmap
+    ax_main = fig.add_subplot(gs[1:, :-1])
+
+    # Top histogram (x-axis marginal)
+    ax_top = fig.add_subplot(gs[0, :-1], sharex=ax_main)
+
+    # Right histogram (y-axis marginal)
+    ax_right = fig.add_subplot(gs[1:, -1], sharey=ax_main)
+
+    # Main spatial heatmap
+    im = ax_main.imshow(
+        heatmap_matrix,
+        cmap='viridis',
+        aspect='auto',
+        interpolation='nearest',
+        origin='lower',
+        extent=[unique_x.min(), unique_x.max(), unique_y.min(), unique_y.max()]
+    )
+    ax_main.set_xlabel('X Coordinate')
+    ax_main.set_ylabel('Y Coordinate')
+    ax_main.set_title(f'Spatial Distribution of {cell_line}-Specific Probe UMIs\n({len(df_probes)} probes)')
+
+    # Add colorbar
+    cbar = plt.colorbar(im, ax=ax_main)
+    cbar.set_label('UMI Count')
+
+    # Compute sums along axes for marginal histograms
+    x_sums = heatmap_matrix.sum(axis=0)
+    y_sums = heatmap_matrix.sum(axis=1)
+
+    # Top histogram (sum along x-axis)
+    ax_top.bar(unique_x, x_sums, width=np.diff(unique_x).mean() if len(unique_x) > 1 else 1, color='steelblue', alpha=0.7)
+    ax_top.set_ylabel('Sum UMI')
+    ax_top.tick_params(labelbottom=False)
+    ax_top.set_title('X-axis Marginal')
+
+    # Right histogram (sum along y-axis)
+    ax_right.barh(unique_y, y_sums, height=np.diff(unique_y).mean() if len(unique_y) > 1 else 1, color='steelblue', alpha=0.7)
+    ax_right.set_xlabel('Sum UMI')
+    ax_right.tick_params(labelleft=False)
+    ax_right.set_title('Y-axis Marginal', rotation=270, labelpad=15)
+
+    plt.suptitle(f'{cell_line} Cell Type-Specific Probes', fontsize=16, y=0.995)
+
+    return fig, (ax_main, ax_top, ax_right), df_spatial

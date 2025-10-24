@@ -102,10 +102,10 @@ def bin(adata: ad.AnnData, resolution: int = 8) -> ad.AnnData:
             agg.sum_duplicates()
             return agg
         else:
+            # Use vectorized approach with numba or advanced indexing
             agg = np.zeros((n_bins, n_genes), dtype=mat.dtype if hasattr(mat, "dtype") else float)
-            # aggregate per column using bincount
-            for j in range(n_genes):
-                agg[:, j] = np.bincount(inverse_idx, weights=mat[:, j], minlength=n_bins)
+            # Use np.add.at for vectorized accumulation - much faster than loop
+            np.add.at(agg, inverse_idx, mat)
             return agg
 
     # Aggregate the primary matrix
@@ -166,7 +166,7 @@ def join_with_wta(wta: 'sd.SpatialData', gf_adata: ad.AnnData) -> 'sd.SpatialDat
         # Find intersection and missing cells in one pass
         intersection_mask = gf_index.isin(wta_index)
         _gf_filtered = _gf[intersection_mask, :]
-        misscing_cells = wta_index.difference(gf_index)
+        missing_cells = wta_index.difference(gf_index)
 
         # Ensure missing_cells has unique values
         missing_cells = missing_cells.drop_duplicates()
@@ -184,14 +184,37 @@ def join_with_wta(wta: 'sd.SpatialData', gf_adata: ad.AnnData) -> 'sd.SpatialDat
             if scipy.sparse.issparse(_gf.X):
                 missing_X = scipy.sparse.csr_matrix((n_missing, n_genes))
             else:
-                missing_X = np.zeros((n_missing, n_genes))
+                missing_X = np.zeros((n_missing, n_genes), dtype=_gf.X.dtype)
 
-            # Create missing obs DataFrame more efficiently
-            missing_obs = pd.DataFrame(index=missing_cells)
+            # Parse spatial coordinates from cell barcodes
+            parts = missing_cells.to_series().str.rsplit('_', n=2, expand=True)
+            array_row = parts[1].astype(int).to_numpy()
+            array_col = parts[2].str.split('-', n=1, expand=True)[0].astype(int).to_numpy()
+            # Create missing obs DataFrame with spatial coordinates
+            missing_obs = pd.DataFrame(
+                index=missing_cells,
+                data={
+                    'array_row': array_row,
+                    'array_col': array_col
+                }
+            )
 
-            # Only copy necessary varm data
+            # Add any additional obs columns from _gf.obs with NaN/None values - vectorized
+            additional_cols = [col for col in _gf.obs.columns if col not in missing_obs.columns]
+            if additional_cols:
+                numeric_cols = [col for col in additional_cols if pd.api.types.is_numeric_dtype(_gf.obs[col])]
+                object_cols = [col for col in additional_cols if col not in numeric_cols]
+
+                if numeric_cols:
+                    missing_obs[numeric_cols] = np.nan
+                if object_cols:
+                    missing_obs[object_cols] = None
+
+            # Copy all metadata structures
             missing_varm = {k: v.copy() for k, v in _gf.varm.items()} if _gf.varm else {}
             missing_uns = dict(_gf.uns)
+
+            # Optimized obsm creation using comprehension
             missing_obsm = {}
             if _gf.obsm:
                 for k, v in _gf.obsm.items():
@@ -199,19 +222,25 @@ def join_with_wta(wta: 'sd.SpatialData', gf_adata: ad.AnnData) -> 'sd.SpatialDat
                         missing_obsm[k] = pd.DataFrame(
                             index=missing_cells,
                             columns=v.columns,
-                            dtype=v.dtypes.iloc[0] if len(v.columns) == 1 else None
+                            dtype=v.dtypes.iloc[0] if len(v.columns) == 1 else object
                         )
                     else:  # Array-like
                         missing_obsm[k] = np.full((n_missing, v.shape[1]), np.nan, dtype=v.dtype)
 
-            # Create layers data more efficiently
+            # Optimized layers creation using comprehension
             missing_layers = {}
             if _gf.layers:
-                for k in _gf.layers:
-                    if scipy.sparse.issparse(_gf.layers[k]):
-                        missing_layers[k] = scipy.sparse.csr_matrix((n_missing, n_genes))
+                for k, layer in _gf.layers.items():
+                    if scipy.sparse.issparse(layer):
+                        missing_layers[k] = scipy.sparse.csr_matrix((n_missing, n_genes), dtype=layer.dtype)
                     else:
-                        missing_layers[k] = np.zeros((n_missing, n_genes))
+                        missing_layers[k] = np.zeros((n_missing, n_genes), dtype=layer.dtype)
+
+            # Preserve obsp (pairwise obs annotations) if present - leave empty for missing cells
+            missing_obsp = {}
+
+            # Preserve varp (pairwise var annotations) if present
+            missing_varp = {k: v.copy() for k, v in _gf.varp.items()} if _gf.varp else {}
 
             missing_adata = ad.AnnData(
                 X=missing_X,
@@ -220,10 +249,12 @@ def join_with_wta(wta: 'sd.SpatialData', gf_adata: ad.AnnData) -> 'sd.SpatialDat
                 varm=missing_varm,
                 uns=missing_uns,
                 obsm=missing_obsm,
+                obsp=missing_obsp,
+                varp=missing_varp,
                 layers=missing_layers
             )
 
-            _gf_complete = ad.concat([_gf_filtered, missing_adata], axis=0)
+            _gf_complete = ad.concat([_gf_filtered, missing_adata], axis=0, merge='same')
 
             # Ensure var dataframe and uns dict are preserved after concatenation
             _gf_complete.var = original_var
@@ -322,7 +353,12 @@ def _(adata: ad.AnnData,
 
     # Replace NaN with 'NA'
     genotypes_array = np.where(pd.isna(genotypes_array), 'N/A', genotypes_array)
-    image[array_cols, array_rows] = [category_colors[geno] for geno in genotypes_array]
+
+    # Vectorized color assignment - directly iterate through each genotype once
+    for geno in unique_genos:
+        mask = genotypes_array == geno
+        if mask.any():
+            image[array_cols[mask], array_rows[mask]] = category_colors[geno]
 
     # Downsample the image if needed
     if resolution != 2:
@@ -348,30 +384,36 @@ def _downsample_image(image, factor=2):
     assert image.shape[1] == N, "Image must be NxN"
     assert image.shape[2] == 4, "Image must have 4 channels"
 
-    # Create an empty downsampled image of size N/2 x N/2 x 4
-    downsampled_image = np.zeros((N // factor, N // factor, 4), dtype=image.dtype)
+    # Reshape to group pixels into factor x factor blocks
+    new_size = N // factor
+    # Reshape: (N, N, 4) -> (new_size, factor, new_size, factor, 4)
+    reshaped = image.reshape(new_size, factor, new_size, factor, 4)
+    # Rearrange to: (new_size, new_size, factor, factor, 4)
+    reshaped = reshaped.transpose(0, 2, 1, 3, 4)
+    # Reshape to: (new_size, new_size, factor*factor, 4)
+    blocks = reshaped.reshape(new_size, new_size, factor * factor, 4)
 
-    # Loop through each pixel in the downsampled image
-    for i in range(N // factor):
-        for j in range(N // factor):
-            # Calculate the corresponding position in the original image
-            original_i = i * factor
-            original_j = j * factor
+    # Create mask for transparent/empty pixels (all zeros)
+    is_empty = np.all(blocks == 0.0, axis=-1)  # Shape: (new_size, new_size, factor*factor)
 
-            # Get the 2x2 block of pixels in the original image
-            block = image[original_i:original_i+factor, original_j:original_j+factor]
+    # Create mask for low alpha pixels (< 0.5)
+    low_alpha = blocks[:, :, :, 3] <= 0.5
 
-            # Filter out white pixels
-            block = block[~np.all(block == [0.0, 0.0, 0.0, 0.0], axis=-1)]
-            block = block[(block[:, 3] > 0.5) | (np.all(block[:,3] <= 0.5, axis=0))]
+    # Combine masks: keep pixels that are not empty AND (have high alpha OR all pixels in block have low alpha)
+    all_low_alpha = np.all(low_alpha, axis=2, keepdims=True)  # Shape: (new_size, new_size, 1)
+    valid_mask = ~is_empty & (blocks[:, :, :, 3:4] > 0.5 | all_low_alpha)
+    valid_mask = valid_mask.squeeze(-1)  # Shape: (new_size, new_size, factor*factor)
 
-            # If there are non-white pixels, take the average
-            if block.size > 0:
-                mean_img = np.mean(block, axis=0)
-                # mean_img[-1] = 1.0
-                downsampled_image[i, j] = mean_img
-            else:
-                downsampled_image[i, j] = [0.0, 0.0, 0.0, 0.0]  # Default to white if no color pixels
+    # Compute mean only over valid pixels
+    # Replace invalid pixels with 0 for computation
+    masked_blocks = np.where(valid_mask[:, :, :, np.newaxis], blocks, 0.0)
+    count = valid_mask.sum(axis=2, keepdims=True)  # Count of valid pixels per block
+
+    # Avoid division by zero
+    with np.errstate(divide='ignore', invalid='ignore'):
+        downsampled_image = masked_blocks.sum(axis=2) / np.maximum(count, 1)
+        # Set pixels with no valid data to [0, 0, 0, 0]
+        downsampled_image = np.where(count > 0, downsampled_image, 0.0)
 
     return downsampled_image
 

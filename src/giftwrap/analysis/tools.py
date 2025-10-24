@@ -25,21 +25,50 @@ def collapse_gapfills(adata: ad.AnnData) -> ad.AnnData:
     :return: A stripped-down copy of the AnnData object with the gapfills collapsed.
     """
     # Collapse the gapfills that have the same probe value
-    new_X = np.zeros((adata.shape[0], adata.var["probe"].nunique()))
     new_obs = adata.obs.copy()
     new_var = adata.var.groupby("probe").first().reset_index().drop(columns=["gapfill"]).set_index("probe")
-    for i, probe in enumerate(new_var.index.values):
-        new_X[:, i] = adata[:, adata.var["probe"] == probe].X.sum(axis=1).flatten()
-    # Do the same for layers
-    new_layers = dict()
-    for layer in adata.layers.keys():
-        new_X_layer = np.zeros((adata.shape[0], adata.var["probe"].nunique()))
+
+    # Create probe to column index mapping for fast lookup
+    probe_to_cols = adata.var.groupby("probe").indices
+
+    # Vectorized X aggregation
+    n_cells = adata.shape[0]
+    n_probes = len(new_var)
+
+    if scipy.sparse.issparse(adata.X):
+        # For sparse matrices, convert to CSC for efficient column operations
+        X_csc = adata.X.tocsc()
+        new_X = np.zeros((n_cells, n_probes))
         for i, probe in enumerate(new_var.index.values):
-            if layer == 'percent_supporting':
-                new_X_layer[:, i] = adata[:, adata.var["probe"] == probe].layers[layer].mean(axis=1).flatten()
-            else:
-                new_X_layer[:, i] = adata[:, adata.var["probe"] == probe].layers[layer].sum(axis=1).flatten()
-        new_layers[layer] = new_X_layer
+            cols = probe_to_cols[probe]
+            new_X[:, i] = X_csc[:, cols].sum(axis=1).A1
+    else:
+        new_X = np.zeros((n_cells, n_probes))
+        for i, probe in enumerate(new_var.index.values):
+            cols = probe_to_cols[probe]
+            new_X[:, i] = adata.X[:, cols].sum(axis=1)
+
+    # Do the same for layers using vectorized operations
+    new_layers = dict()
+    for layer_name, layer_data in adata.layers.items():
+        new_layer = np.zeros((n_cells, n_probes))
+        if scipy.sparse.issparse(layer_data):
+            layer_csc = layer_data.tocsc()
+            for i, probe in enumerate(new_var.index.values):
+                cols = probe_to_cols[probe]
+                if layer_name == 'percent_supporting':
+                    new_layer[:, i] = layer_csc[:, cols].mean(axis=1).A1
+                else:
+                    new_layer[:, i] = layer_csc[:, cols].sum(axis=1).A1
+        else:
+            for i, probe in enumerate(new_var.index.values):
+                cols = probe_to_cols[probe]
+                if layer_name == 'percent_supporting':
+                    new_layer[:, i] = layer_data[:, cols].mean(axis=1)
+                else:
+                    new_layer[:, i] = layer_data[:, cols].sum(axis=1)
+        new_layers[layer_name] = new_layer
+
     return ad.AnnData(X=new_X, obs=new_obs, var=new_var, layers=new_layers)
 
 
@@ -50,8 +79,9 @@ def intersect_wta(wta_adata: ad.AnnData, gapfill_adata: ad.AnnData) -> (ad.AnnDa
     :param gapfill_adata: The AnnData object containing the gapfill data.
     :return: Returns a tuple of the two AnnData objects with the cells that are not in both datasets removed.
     """
-    x = [x for x in wta_adata.obs.index.values if x in gapfill_adata.obs.index.values]
-    return wta_adata[x, :], gapfill_adata[x, :]
+    # Use numpy intersect1d for O(n log n) complexity instead of O(n²)
+    intersected_cells = np.intersect1d(wta_adata.obs.index.values, gapfill_adata.obs.index.values)
+    return wta_adata[intersected_cells, :], gapfill_adata[intersected_cells, :]
 
 
 def call_genotypes(adata: ad.AnnData,
@@ -136,11 +166,11 @@ def call_genotypes(adata: ad.AnnData,
         "cores": cores
     }
 
-    # Create DataFrames and convert genotypes to nullable string categorical dtype
-    genotype_df = pd.DataFrame(genotypes, index=adata.obs.index)
-    for col in genotype_df.columns:
-        # Convert to nullable string dtype first, then to category to handle NaNs properly
-        genotype_df[col] = genotype_df[col].astype("string").astype('category')
+    # Create DataFrames - optimize categorical conversion by doing it during DataFrame creation
+    # This is much faster than converting each column individually
+    genotype_df = pd.DataFrame(genotypes, index=adata.obs.index, dtype="string")
+    # Convert all columns to category at once using apply - faster than column-by-column
+    genotype_df = genotype_df.astype('category')
 
     adata.obsm["genotype"] = genotype_df
     adata.obsm["genotype_counts"] = pd.DataFrame(genotypes_counts, index=adata.obs.index)
@@ -198,14 +228,23 @@ def _genotype_call_job(genotypes: np.array, counts: np.array, threshold: float) 
 
         # Find the index where cumulative proportion exceeds the threshold
         idx = np.argmax(cumulative >= threshold, axis=-1)
-        # Finally, compute the genotype calls, counts, and proportions
-        for subset_i, orig_i in enumerate(np.where(remaining_mask)[0]):
-            # Get the index of the first genotype that exceeds the threshold
-            if idx[subset_i] == 0:
-                calls[orig_i] = sorted_genotypes[subset_i, 0]
-                n_umis[orig_i] = sorted_counts[subset_i, 0]
-                p_umis[orig_i] = 1.0
-            else:
+
+        # Vectorize the genotype call computation
+        orig_indices = np.where(remaining_mask)[0]
+
+        # Handle single genotype case (idx == 0 or threshold met on first genotype)
+        single_geno_mask = (idx == 0) | (cumulative[:, 0] >= threshold)
+        if np.any(single_geno_mask):
+            single_orig_indices = orig_indices[single_geno_mask]
+            calls[single_orig_indices] = sorted_genotypes[single_geno_mask, 0]
+            n_umis[single_orig_indices] = sorted_counts[single_geno_mask, 0]
+            p_umis[single_orig_indices] = cumulative[single_geno_mask, 0]
+
+        # Handle multi-genotype case (idx > 0 and threshold not met on first)
+        multi_geno_mask = ~single_geno_mask
+        if np.any(multi_geno_mask):
+            for i, orig_i in enumerate(orig_indices[multi_geno_mask]):
+                subset_i = np.where(multi_geno_mask)[0][i]
                 calls[orig_i] = "/".join(sorted_genotypes[subset_i, :idx[subset_i] + 1])
                 n_umis[orig_i] = sorted_counts[subset_i, :idx[subset_i] + 1].sum()
                 p_umis[orig_i] = cumulative[subset_i, idx[subset_i]]
@@ -230,9 +269,8 @@ def transfer_genotypes(wta_adata: ad.AnnData, gapfill_adata: ad.AnnData) -> ad.A
     if intersected_cell_ids.shape[0] == cell_ids_wta.shape[0]:
         # All WTA cells are in the gapfill data
         genotype_df = gapfill_adata[cell_ids_wta].obsm["genotype"].copy()
-        # Ensure nullable string categorical dtype is preserved
-        for col in genotype_df.columns:
-            genotype_df[col] = genotype_df[col].astype("string").astype('category')
+        # Optimize: convert all columns at once instead of one by one
+        genotype_df = genotype_df.astype("string").astype('category')
 
         wta_adata.obsm["genotype"] = genotype_df
         wta_adata.obsm["genotype_proportion"] = gapfill_adata[cell_ids_wta].obsm["genotype_proportion"]
@@ -262,6 +300,40 @@ def transfer_genotypes(wta_adata: ad.AnnData, gapfill_adata: ad.AnnData) -> ad.A
         raise ValueError("This should never happen.")
 
     return wta_adata
+
+
+def genotype_connectivity(adata: ad.AnnData,
+                          key_added: str = 'genotype_connectivity',
+                          distance_func = scipy.spatial.distance.euclidean
+                          ) -> ad.AnnData:
+    """
+    Compute a connectivity matrix based on genotype similarity. The method attempts to control for missing genotypes
+    by using a nan-aware distance metric.
+    :param adata: The AnnData object containing the genotypes. This object should have a "genotype" obsm.
+    :param key_added: The key in adata.obsp to store the connectivity matrix.
+    :param distance_func: The distance function to use. Defaults to scipy.spatial.distance.euclidean.
+    :return: The AnnData object with the connectivity matrix added to adata.obsp.
+
+    For use when performing analysis like umap:
+        gw.tl.genotype_connectivity(adata)
+        sc.pp.neighbors(adata, use_rep='genotype_connectivity')
+        sc.tl.umap(adata)
+        sc.pl.umap(adata)
+    """
+    assert "genotype" in adata.obsm, "Gapfill data does not contain genotypes. Please run call_genotypes first."
+    # Compute pairwise distance matrix from genotypes
+    all_genotype_vectors, _, _ = _encoded_genotype_matrix(adata)
+    distance_matrix = _compute_nan_aware_dist_matrix(all_genotype_vectors, distance_func)
+    # Convert distance matrix to connectivity matrix
+    max_distance = np.nanmax(distance_matrix) * 1.1
+    connectivity_matrix = max_distance - distance_matrix
+    np.fill_diagonal(connectivity_matrix, 0.0)  # Set self-connections to 0
+    adata.obsp[key_added] = connectivity_matrix
+    adata.uns['genotype_connectivity'] = {
+        "distance_func": distance_func.__name__,
+        "connectivities_key": key_added
+    }
+    return adata
 
 
 def impute_genotypes(adata: ad.AnnData,
@@ -330,9 +402,8 @@ def impute_genotypes(adata: ad.AnnData,
         adata.uns['imputation_accuracy'] = accuracy
         print(f"Imputation accuracy: {accuracy:.2f} ({mask.sum():,} out of {mask.size:,} cell/allele pairs held out)")
 
-    # Convert imputed genotypes to nullable string categorical dtype
-    for col in imputed_genotypes.columns:
-        imputed_genotypes[col] = imputed_genotypes[col].astype("string").astype('category')
+    # Convert imputed genotypes to nullable string categorical dtype - optimize by doing all at once
+    imputed_genotypes = imputed_genotypes.astype("string").astype('category')
 
     # Add to AnnData object
     adata.obsm['genotype_imputed'] = imputed_genotypes.loc[adata.obs_names]
@@ -350,13 +421,151 @@ def _nan_aware_distance(x: np.array, y: np.array, distance_func = scipy.spatial.
     :return: The distance normalized to the number of features that are not present.
         (i.e. the expected number of mismatches in unobserved genotypes).
     """
-    nan_features1 = np.isnan(x)
-    nan_features2 = np.isnan(y)
-    nan_features = nan_features1 | nan_features2
-    if np.all(nan_features):
-        return np.nan  # Undefined if non-complementary
+    # Find non-NaN features
+    valid_mask = ~(np.isnan(x) | np.isnan(y))
+    if not valid_mask.any():
+        return np.nan  # Undefined
+
+    # Compute distance only on valid features
+    valid_x = x[valid_mask]
+    valid_y = y[valid_mask]
+    dist = distance_func(valid_x, valid_y)
+
+    # Normalize and penalize for NaN features
+    n_valid = valid_mask.sum()
+    n_nan = (~valid_mask).sum()
+    normalized_dist = (dist / n_valid) * n_nan if n_valid > 0 else np.nan
+
+    return normalized_dist
+
+
+def _compute_nan_aware_dist_matrix(all_genotype_vectors, distance_func = scipy.spatial.distance.euclidean) -> np.ndarray:
+    """
+    Vectorized computation of NaN-aware pairwise distance matrix with chunked processing
+    to avoid memory overflow on large datasets.
+    """
+    n_cells, n_features = all_genotype_vectors.shape
+
+    # For euclidean distance, we can use chunked computation
+    if distance_func == scipy.spatial.distance.euclidean:
+        # Determine chunk size based on available memory (aim for ~1GB chunks)
+        # Each chunk processes chunk_size x n_cells x n_features booleans (1 byte each)
+        # We need 2 copies (for X_i and X_j masks) plus computation space
+        target_memory_gb = 1.0
+        bytes_per_element = 8  # float64
+        # Estimate: chunk_size * n_cells * n_features * bytes_per_element * 4 (for intermediate arrays) < target_memory
+        chunk_size = max(1, int((target_memory_gb * 1e9) / (n_cells * n_features * bytes_per_element * 4)))
+        chunk_size = min(chunk_size, n_cells)  # Don't exceed total cells
+
+        print(f"Computing distance matrix in chunks of {chunk_size} cells to avoid memory overflow...")
+
+        # Pre-allocate the distance matrix
+        distance_matrix = np.zeros((n_cells, n_cells), dtype=np.float32)
+
+        # Process in chunks
+        for i in tqdm(range(0, n_cells, chunk_size), desc="Computing distances"):
+            end_i = min(i + chunk_size, n_cells)
+            chunk_i = all_genotype_vectors[i:end_i]  # (chunk_size, n_features)
+
+            # Expand for broadcasting: (chunk_size, 1, n_features)
+            X_i = chunk_i[:, np.newaxis, :]
+
+            # Process inner loop in chunks too
+            for j in range(0, n_cells, chunk_size):
+                end_j = min(j + chunk_size, n_cells)
+                chunk_j = all_genotype_vectors[j:end_j]  # (chunk_size, n_features)
+
+                # Expand for broadcasting: (1, chunk_size, n_features)
+                X_j = chunk_j[np.newaxis, :, :]
+
+                # Compute valid mask for this block
+                valid_mask = ~(np.isnan(X_i) | np.isnan(X_j))  # (chunk_i_size, chunk_j_size, n_features)
+
+                # Replace NaNs with 0
+                X_i_clean = np.where(np.isnan(X_i), 0.0, X_i)
+                X_j_clean = np.where(np.isnan(X_j), 0.0, X_j)
+
+                # Compute squared differences
+                diff_sq = (X_i_clean - X_j_clean) ** 2
+                diff_sq_masked = diff_sq * valid_mask
+
+                # Count valid and NaN features per pair
+                n_valid = valid_mask.sum(axis=2)  # (chunk_i_size, chunk_j_size)
+                n_nan = n_features - n_valid
+
+                # Sum and take square root for euclidean distance
+                dist_sum = diff_sq_masked.sum(axis=2)
+
+                # Compute distance with normalization and NaN penalty
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    distance = np.sqrt(dist_sum)
+                    normalized_dist = np.where(n_valid > 0, (distance / n_valid) * n_nan, np.nan)
+
+                # Store in the full matrix
+                distance_matrix[i:end_i, j:end_j] = normalized_dist
+
+        # Set diagonal to 0
+        np.fill_diagonal(distance_matrix, 0.0)
+
+        return distance_matrix
     else:
-        return (distance_func(x[~nan_features], y[~nan_features]) / (~nan_features).sum()) * nan_features.sum()  # Normalize by the number of features that are not NaN then penalize by nan features
+        # Fall back to loop-based approach for custom distance functions
+        # Use sklearn's pairwise_distances for parallelization
+        from sklearn.metrics import pairwise_distances
+
+        def nan_aware_metric(x, y):
+            return _nan_aware_distance(x, y, distance_func)
+
+        return pairwise_distances(all_genotype_vectors, metric=nan_aware_metric, n_jobs=-1)
+
+
+def _encoded_genotype_matrix(adata: ad.AnnData):
+    genotypes_matrix = []
+    genotype_allele = []
+    genotype_labels = []
+
+    genotype_data = adata.obsm['genotype']
+    for geno in genotype_data.columns.values:
+        # Use vectorized operations for splitting genotypes
+        split_series = genotype_data[geno].str.split("/")
+
+        # Get all unique alleles more efficiently
+        all_alleles = set()
+        for cell_alleles in split_series.dropna():
+            if isinstance(cell_alleles, list):
+                all_alleles.update(cell_alleles)
+            else:
+                all_alleles.add(cell_alleles)
+
+        # Remove nan strings
+        all_alleles.discard("nan")
+        all_alleles = [a for a in all_alleles if pd.notna(a)]
+
+        if len(all_alleles) == 0:
+            genotypes_matrix.append(np.full((0, adata.shape[0]), np.nan))
+            genotype_allele.append(np.full((0,), np.nan))
+        else:
+            # Vectorized indicator computation
+            indicators = np.zeros((len(all_alleles), adata.shape[0]))
+            for i, allele in enumerate(all_alleles):
+                # Vectorized check for allele presence
+                has_allele = split_series.apply(
+                    lambda x: allele in x if isinstance(x, list) else (
+                        np.nan if pd.isna(x) else x == allele
+                    )
+                ).astype(float)
+                indicators[i, :] = has_allele.values
+
+            genotypes_matrix.append(indicators)
+            genotype_allele.append(np.array(all_alleles))
+
+        genotype_labels.append(geno)
+
+    # Concatenate all genotype vectors for efficient distance computation
+    all_genotype_vectors = np.concatenate([g for g in genotypes_matrix], axis=0)
+    all_genotype_vectors = all_genotype_vectors.T  # Shape: (n_cells, n_features)
+
+    return all_genotype_vectors, genotype_labels, genotype_allele
 
 
 def _impute_within_cluster(adata: ad.AnnData,
@@ -399,83 +608,10 @@ def _impute_within_cluster(adata: ad.AnnData,
         return pd.DataFrame(index=adata.obs_names, columns=adata.obsm['genotype'].columns), \
             pd.DataFrame(index=adata.obs_names, columns=adata.obsm['genotype'].columns), 0.0
 
-    # Optimize genotype matrix construction
-    genotypes_matrix = []
-    genotype_allele = []
-    genotype_labels = []
-    
-    # Pre-split all genotypes to avoid repeated string operations
-    genotype_data = to_genotype.obsm['genotype']
-    for geno in genotype_data.columns.values:
-        # Use vectorized operations for splitting genotypes
-        split_series = genotype_data[geno].str.split("/")
-        
-        # Get all unique alleles more efficiently
-        all_alleles = set()
-        for cell_alleles in split_series.dropna():
-            if isinstance(cell_alleles, list):
-                all_alleles.update(cell_alleles)
-            else:
-                all_alleles.add(cell_alleles)
-        
-        # Remove nan strings
-        all_alleles.discard("nan")
-        all_alleles = [a for a in all_alleles if pd.notna(a)]
-
-        if len(all_alleles) == 0:
-            genotypes_matrix.append(np.full((0, to_genotype.shape[0]), np.nan))
-            genotype_allele.append(np.full((0,), np.nan))
-        else:
-            # Vectorized indicator computation
-            indicators = np.zeros((len(all_alleles), to_genotype.shape[0]))
-            for i, allele in enumerate(all_alleles):
-                # Vectorized check for allele presence
-                has_allele = split_series.apply(
-                    lambda x: allele in x if isinstance(x, list) else (
-                        np.nan if pd.isna(x) else x == allele
-                    )
-                ).astype(float)
-                indicators[i, :] = has_allele.values
-            
-            genotypes_matrix.append(indicators)
-            genotype_allele.append(np.array(all_alleles))
-        
-        genotype_labels.append(geno)
-
-    # Vectorized distance matrix computation
-    n_cells = to_genotype.shape[0]
-    
-    # Concatenate all genotype vectors for efficient distance computation
-    all_genotype_vectors = np.concatenate([g for g in genotypes_matrix], axis=0)
-    all_genotype_vectors = all_genotype_vectors.T  # Shape: (n_cells, n_features)
+    all_genotype_vectors, genotype_labels, genotype_allele = _encoded_genotype_matrix(to_genotype)
     
     # Compute pairwise distances using vectorized operations
-    distance_matrix = np.full((n_cells, n_cells), np.nan)
-    np.fill_diagonal(distance_matrix, 0.0)
-    
-    # Use broadcasting for efficient distance computation
-    for i in range(n_cells):
-        for j in range(i + 1, n_cells):
-            vec_i = all_genotype_vectors[i]
-            vec_j = all_genotype_vectors[j]
-            
-            # Find non-NaN features
-            valid_mask = ~(np.isnan(vec_i) | np.isnan(vec_j))
-            if not valid_mask.any():
-                continue
-            
-            # Compute distance only on valid features
-            valid_i = vec_i[valid_mask]
-            valid_j = vec_j[valid_mask]
-            dist = scipy.spatial.distance.euclidean(valid_i, valid_j)
-            
-            # Normalize and penalize for NaN features
-            n_valid = valid_mask.sum()
-            n_nan = (~valid_mask).sum()
-            normalized_dist = (dist / n_valid) * n_nan if n_valid > 0 else np.nan
-            
-            distance_matrix[i, j] = normalized_dist
-            distance_matrix[j, i] = normalized_dist
+    distance_matrix = _compute_nan_aware_dist_matrix(all_genotype_vectors)
 
     # Finally, for each cell compute the nearest neighbors to impute missing genotypes
     # Get all indices with any NA (so that we can ignore cells with no missing genotypes
@@ -492,7 +628,7 @@ def _impute_within_cluster(adata: ad.AnnData,
         neighbor_indices = neighbor_indices_all[cell_idx]
         
         for genotype_idx in np.where(genotypes_to_fill)[0]:
-            genotype_vector = genotypes_matrix[genotype_idx][:, neighbor_indices]
+            genotype_vector = all_genotype_vectors[neighbor_indices, :][:, genotype_idx]
             
             if np.all(np.isnan(genotype_vector)):
                 # If all neighbors have NaN genotype, skip this genotype
@@ -730,7 +866,7 @@ def _correct_off_by_one_job(adata: ad.AnnData, probes: list[str]) -> ad.AnnData:
                     continue
 
                 # Finally, we can try to correct the gapfills
-                # If there is exactly one shorter and one longer gapfill, we can directly correct it
+                # If there is exactly one shorter and one longer gapfill, we can directly correct
                 if len(aligned_longer) == 1 and len(aligned_shorter) == 1:
                     aligned_longer_gapfill = next(iter(aligned_longer.keys()))
                     aligned_shorter_gapfill = next(iter(aligned_shorter.keys()))

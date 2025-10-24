@@ -1861,37 +1861,41 @@ def read_h5_file(filename: str) -> ad.AnnData:
             # We must read the pcr thresholds save the counts matrices for each threshold to the layers
             dup_grp = f['pcr_thresholded_counts']
             for threshold in range(1, f.attrs['max_pcr_duplicates']):
-                adata.layers[f'X_pcr_threshold_{threshold+1}'] = read_sparse_matrix(dup_grp, f'pcr{threshold+1}')
+                adata.layers[f'X_pcr_threshold_{threshold}'] = read_sparse_matrix(dup_grp, f'pcr{threshold}')
 
     # Check if array_col and array_row exist in obs
     # If present, verify that all are integers
     if 'array_col' in adata.obs.columns and 'array_row' in adata.obs.columns:
-        # Check if any values are not integers
-        any_not_int = not np.issubdtype(adata.obs['array_col'].dtype, np.integer) or not np.issubdtype(adata.obs['array_row'].dtype, np.integer)
-        # Check if null or nan values exist
-        any_nulls = adata.obs['array_col'].isnull().any() or adata.obs['array_row'].isnull().any()
-        if any_not_int or any_nulls:
-            # We will need to regenerate the array_col and array_row values and coerce to ints
-            print("Warning: 'array_col' and 'array_row' in obs contain non-integer or null values. Regenerating these values.")
-            # We can parse the barcode names to regenerate these values
-            array_cols = []
-            array_rows = []
-            for barcode in adata.obs.index.values:
-                try:
-                    parts = barcode.split('-')[0].split("_")
-                    if len(parts) >= 3:
-                        array_col = int(parts[-1])
-                        array_row = int(parts[-2])
-                    else:
-                        array_col = -1
-                        array_row = -1
-                except:
-                    array_col = -1
-                    array_row = -1
-                array_cols.append(array_col)
-                array_rows.append(array_row)
-            adata.obs['array_col'] = np.array(array_cols, dtype=int)
-            adata.obs['array_row'] = np.array(array_rows, dtype=int)
+        col_mask = adata.obs['array_col'].isnull() | (~np.issubdtype(adata.obs['array_col'].dtype, np.integer))
+        row_mask = adata.obs['array_row'].isnull() | (~np.issubdtype(adata.obs['array_row'].dtype, np.integer))
+        if col_mask.any() or row_mask.any():
+            # We will need to regenerate only the problematic array_col and array_row values
+            print("Warning: 'array_col' and 'array_row' in obs contain non-integer or null values. Regenerating problematic values.")
+            # Create masks for problematic values
+            problematic_mask = col_mask | row_mask
+
+            if problematic_mask.any():
+                # Vectorized parse from index -> base part before '-'
+                idx_series = pd.Series(adata.obs.index.astype(str), index=adata.obs.index)
+                base = idx_series.str.split('-', n=1).str[0]
+                # Extract last two underscore-delimited tokens
+                parts = base.str.rsplit('_', n=2, expand=True)
+                if parts.shape[1] < 3:
+                    parts = parts.reindex(columns=range(3))
+
+                array_row_parsed = pd.to_numeric(parts.iloc[:, -2], errors='coerce').fillna(-1).astype(int)
+                array_col_parsed = pd.to_numeric(parts.iloc[:, -1], errors='coerce').fillna(-1).astype(int)
+
+                need_col = problematic_mask & col_mask
+                need_row = problematic_mask & row_mask
+
+                if need_col.any():
+                    adata.obs.loc[need_col, 'array_col'] = array_col_parsed.loc[need_col].to_numpy()
+                if need_row.any():
+                    adata.obs.loc[need_row, 'array_row'] = array_row_parsed.loc[need_row].to_numpy()
+            # Ensure columns are integer type
+            adata.obs['array_col'] = adata.obs['array_col'].astype(int)
+            adata.obs['array_row'] = adata.obs['array_row'].astype(int)
 
     return adata
 
