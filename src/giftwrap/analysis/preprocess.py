@@ -127,3 +127,26 @@ def filter_genotypes(adata: ad.AnnData,
     adata.obsm["genotype_counts"] = genotype_counts_df
 
     return adata
+
+
+def filter_by_min_pcr_duplicates(adata: ad.AnnData, min_pcr_duplicates: int = 5) -> ad.AnnData:
+    """
+    Filter gapfills by minimum PCR duplicates.
+    This can be used to remove low-quality/uncertain gapfills.
+
+    :param adata: The AnnData object containing the gapfills.
+    :param min_pcr_duplicates: The minimum number of PCR duplicates that a gapfill must have to be considered real.
+    :return: Returns the same AnnData object with the filtered gapfills removed.
+
+    Note that this function assumes that the anndata contains the appropriate filtered pcr duplicate layer.
+    """
+
+    max_pcr_duplicates = int(adata.uns['max_pcr_duplicates'])
+    if min_pcr_duplicates > max_pcr_duplicates:
+        raise ValueError(f"min_pcr_duplicates ({min_pcr_duplicates}) cannot be greater than max_pcr_duplicates ({max_pcr_duplicates}).")
+
+    # Replace X with the filtered pcr duplicate layer
+    adata.X = adata.layers[f'X_pcr_threshold_{min_pcr_duplicates}']
+
+    return adata
+
