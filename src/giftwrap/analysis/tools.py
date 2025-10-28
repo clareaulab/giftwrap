@@ -2,7 +2,7 @@
 This module provides various tools for analyzing and manipulating a GIFT-seq dataset. Most true analysis tools live
 here.
 """
-
+import functools
 import os
 import itertools
 from collections import defaultdict
@@ -15,6 +15,41 @@ import scipy
 
 from giftwrap.utils import maybe_multiprocess
 from tqdm.auto import tqdm
+
+# Numba-compiled metric for genotype connectivity (must be at module level)
+try:
+    import numba
+
+    @numba.njit()
+    def _nan_aware_metric_encoded(x, y):
+        """Numba-compiled metric that decodes NaN mask from concatenated representation"""
+        # The array is [genotype_values, validity_mask] concatenated
+        # Split point is at half the array length
+        total_len = len(x)
+        split = total_len // 2
+
+        # Split into genotype values and mask
+        x_values = x[:split]
+        x_mask = x[split:] > 0.5  # Convert float to bool
+        y_values = y[:split]
+        y_mask = y[split:] > 0.5
+
+        # Compute NaN-aware Euclidean distance
+        sum_sq = 0.0
+        count = 0
+        for i in range(split):
+            if x_mask[i] and y_mask[i]:
+                diff = x_values[i] - y_values[i]
+                sum_sq += diff * diff
+                count += 1
+
+        if count == 0:
+            return np.nan
+        return np.sqrt(sum_sq)
+
+except ImportError:
+    # Numba not available, will use fallback version
+    _nan_aware_metric_encoded = None
 
 
 def collapse_gapfills(adata: ad.AnnData) -> ad.AnnData:
@@ -304,35 +339,76 @@ def transfer_genotypes(wta_adata: ad.AnnData, gapfill_adata: ad.AnnData) -> ad.A
 
 def genotype_connectivity(adata: ad.AnnData,
                           key_added: str = 'genotype_connectivity',
-                          distance_func = scipy.spatial.distance.euclidean
+                          distance_func = scipy.spatial.distance.euclidean,
+                          n_neighbors: int = 15
                           ) -> ad.AnnData:
     """
-    Compute a connectivity matrix based on genotype similarity. The method attempts to control for missing genotypes
-    by using a nan-aware distance metric.
-    :param adata: The AnnData object containing the genotypes. This object should have a "genotype" obsm.
-    :param key_added: The key in adata.obsp to store the connectivity matrix.
-    :param distance_func: The distance function to use. Defaults to scipy.spatial.distance.euclidean.
-    :return: The AnnData object with the connectivity matrix added to adata.obsp.
+    Compute a connectivity matrix based on genotype similarity using a NaN-aware distance metric.
 
-    For use when performing analysis like umap:
+    :param adata: AnnData containing genotype calls in `adata.obsm['genotype']`.
+    :param key_added: Key in `adata.obsp` where the connectivity will be stored.
+    :param distance_func: Callable to compute distance between two vectors (default: `scipy.spatial.distance.euclidean`).
+    :param n_neighbors: Number of neighbors to use for the graph (default: 15).
+    :return: The same AnnData object with the connectivity matrix stored at `adata.obsp[key_added]`.
+
+    Example:
         gw.tl.genotype_connectivity(adata)
-        sc.pp.neighbors(adata, use_rep='genotype_connectivity')
-        sc.tl.umap(adata)
+        sc.tl.umap(adata, neighbors_key='genotype_connectivity')
         sc.pl.umap(adata)
     """
+    try:
+        import scanpy as sc
+    except ImportError:
+        raise ImportError("scanpy is required for genotype_connectivity. Please install scanpy to use this function.")
     assert "genotype" in adata.obsm, "Gapfill data does not contain genotypes. Please run call_genotypes first."
-    # Compute pairwise distance matrix from genotypes
+
+    # Compute genotype matrix
     all_genotype_vectors, _, _ = _encoded_genotype_matrix(adata)
-    distance_matrix = _compute_nan_aware_dist_matrix(all_genotype_vectors, distance_func)
-    # Convert distance matrix to connectivity matrix
-    max_distance = np.nanmax(distance_matrix) * 1.1
-    connectivity_matrix = max_distance - distance_matrix
-    np.fill_diagonal(connectivity_matrix, 0.0)  # Set self-connections to 0
-    adata.obsp[key_added] = connectivity_matrix
-    adata.uns['genotype_connectivity'] = {
-        "distance_func": distance_func.__name__,
-        "connectivities_key": key_added
-    }
+
+    # Encode NaN mask into the representation by concatenating data + mask
+    # First half: genotype values (NaNs replaced with 0)
+    # Second half: binary mask (1 = valid, 0 = NaN)
+    n_features = all_genotype_vectors.shape[1]
+    nan_mask = ~np.isnan(all_genotype_vectors)  # True where valid
+    genotype_filled = np.where(np.isnan(all_genotype_vectors), 0.0, all_genotype_vectors)
+
+    # Concatenate: [genotype_values, validity_mask]
+    encoded_with_mask = np.concatenate([genotype_filled, nan_mask.astype(float)], axis=1)
+
+    # Store encoded representation
+    adata.obsm['_genotype_encoded'] = encoded_with_mask
+
+    # Choose metric function (prefer numba-compiled if available)
+    if _nan_aware_metric_encoded is not None:
+        metric_func = _nan_aware_metric_encoded
+    else:
+        # Fallback to non-compiled version if Numba not available
+        def metric_func(x, y):
+            """Metric that decodes NaN mask from concatenated representation"""
+            total_len = len(x)
+            split = total_len // 2
+
+            x_values = x[:split]
+            x_mask = x[split:] > 0.5
+            y_values = y[:split]
+            y_mask = y[split:] > 0.5
+
+            # Compute NaN-aware Euclidean distance
+            valid = x_mask & y_mask
+            if not np.any(valid):
+                return np.nan
+            diff = x_values[valid] - y_values[valid]
+            return np.sqrt(np.sum(diff * diff))
+
+    # Use scanpy's neighbor computation with custom metric
+    sc.pp.neighbors(adata, use_rep='_genotype_encoded',
+                   metric=metric_func,
+                   n_neighbors=n_neighbors,
+                   key_added=key_added)
+
+    # Note: We keep _genotype_encoded in obsm because scanpy's downstream tools
+    # (like sc.tl.umap) may need to access it via the neighbors_key parameter
+
     return adata
 
 

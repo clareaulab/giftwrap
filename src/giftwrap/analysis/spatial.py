@@ -115,7 +115,7 @@ def bin(adata: ad.AnnData, resolution: int = 8) -> ad.AnnData:
     new_layers = {}
     if adata.layers:
         for layer_key, layer_val in adata.layers.items():
-            if layer_key.startswith("X_"):
+            if layer_key.startswith("X_") or layer_key == 'total_counts':
                 new_layers[layer_key] = _aggregate_matrix(layer_val)
 
     # Vectorized obs_names generation

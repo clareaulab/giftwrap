@@ -115,7 +115,7 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
     counts_vals = []
     umi_vals = []
     percent_vals = []
-    max_dups = max(total_umi_data.values())
+    max_dups = min(max_pcr_thresholds, max(total_umi_data.values()))
     for (cell_idx, probe_key), count in counts_data.items():
         probe_idx = probe2h5_idx[probe_key]
         rows.append(cell_idx)
@@ -137,7 +137,7 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
     if max_pcr_thresholds > 1:
         filtered_counts = dict()
         curr_counts_matrix = counts_matrix.copy().tolil()  # Start with full counts
-        for i in range(0, min(max_pcr_thresholds, max_dups)):  # Duplicate number to remove
+        for i in range(0, max_dups):  # Duplicate number to remove
             if i in dup_count_mapping:
                 for (cell_idx, probe_key), dup_count in dup_count_mapping[i].items():
                     probe_idx = probe2h5_idx[probe_key]

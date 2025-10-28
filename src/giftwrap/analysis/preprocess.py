@@ -11,8 +11,8 @@ from scipy.sparse import issparse
 
 def filter_gapfills(adata: ad.AnnData,
                     min_cells: int = 10,
-                    min_supporting_umis: int = 1,
-                    min_supporting_reads: int = 1,
+                    min_supporting_umis: int = 0,
+                    min_supporting_reads: int = 0,
                     min_supporting_percent: float = 0.0) -> ad.AnnData:
     """
     Filter gapfills (and remove the filtered features).
@@ -27,45 +27,48 @@ def filter_gapfills(adata: ad.AnnData,
     :return: Returns the same AnnData object with the filtered gapfills removed.
     """
     # 1) Mask by total reads
-    if issparse(adata.layers["total_reads"]):
-        # Create a copy of the sparse matrix and replace data with booleans
-        mask = adata.layers["total_reads"].copy()
-        mask.data = (mask.data >= min_supporting_reads)
-        adata.X = adata.X.multiply(mask)
-    else:
-        # If it's dense, safe to do a direct comparison
-        adata.X[adata.layers["total_reads"] < min_supporting_reads] = 0
+    if min_supporting_reads > 0:
+        if issparse(adata.layers["total_reads"]):
+            # Create a copy of the sparse matrix and replace data with booleans
+            mask = adata.layers["total_reads"].copy()
+            mask.data = (mask.data >= min_supporting_reads)
+            adata.X = adata.X.multiply(mask)
+        else:
+            # If it's dense, safe to do a direct comparison
+            adata.X[adata.layers["total_reads"] < min_supporting_reads] = 0
 
     # 2) Mask by supporting percent
-    if issparse(adata.layers["percent_supporting"]):
-        mask = adata.layers["percent_supporting"].copy()
-        mask.data = (mask.data >= min_supporting_percent)
-        adata.X = adata.X.multiply(mask)
-    else:
-        adata.X[adata.layers["percent_supporting"] < min_supporting_percent] = 0
+    if min_supporting_percent > 0.0:
+        if issparse(adata.layers["percent_supporting"]):
+            mask = adata.layers["percent_supporting"].copy()
+            mask.data = (mask.data >= min_supporting_percent)
+            adata.X = adata.X.multiply(mask)
+        else:
+            adata.X[adata.layers["percent_supporting"] < min_supporting_percent] = 0
 
     # 3) Mask by supporting UMIs (this time the comparison is on adata.X itself)
-    if issparse(adata.X):
-        mask = adata.X.copy()
-        mask.data = (mask.data >= min_supporting_umis)
-        adata.X = adata.X.multiply(mask)
-    else:
-        adata.X[adata.X < min_supporting_umis] = 0
+    if min_supporting_umis > 0:
+        if issparse(adata.X):
+            mask = adata.X.copy()
+            mask.data = (mask.data >= min_supporting_umis)
+            adata.X = adata.X.multiply(mask)
+        else:
+            adata.X[adata.X < min_supporting_umis] = 0
 
     # Finally, filter by the minimum number of cells
-    if issparse(adata.X):
-        # Compute the number of non-zero entries in dim 1 (columns)
-        counts = adata.X.getnnz(axis=0).flatten()
-    else:
-        # Count the number of non-zero entries in each column
-        counts = np.count_nonzero(adata.X, axis=0)
-    # Create a mask for columns (features) that meet the minimum cell count
-    keep_mask = counts >= min_cells
-    # Apply the mask to the data
-    adata = adata[:, keep_mask]
+    if min_cells > 0:
+        if issparse(adata.X):
+            # Compute the number of non-zero entries in dim 1 (columns)
+            counts = adata.X.getnnz(axis=0).flatten()
+        else:
+            # Count the number of non-zero entries in each column
+            counts = np.count_nonzero(adata.X, axis=0)
+        # Create a mask for columns (features) that meet the minimum cell count
+        keep_mask = counts >= min_cells
+        # Apply the mask to the data
+        adata = adata[:, keep_mask]
 
     return adata
-
 
 
 def filter_genotypes(adata: ad.AnnData,
