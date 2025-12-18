@@ -18,7 +18,7 @@ from rich_argparse import RichHelpFormatter
 
 from .utils import maybe_multiprocess, batched, read_manifest, sort_tsv_file, FlexFormatInfo, VisiumHDFormatInfo, \
     VisiumFormatInfo, TechnologyFormatInfo, compute_max_distance, read_probes_input, read_fastqs, \
-    ReadProcessState, ProbeParser
+    ReadProcessState, ProbeParser, FlexV2FormatInfo
 
 ReadData = namedtuple("ReadData", ["probe_id", "probe_barcode", "gapfill", "gapfill_quality", "cell_barcode", "umi", "umi_quality", "coordinate_x", "coordinate_y"])
 
@@ -498,6 +498,13 @@ def run(probes,
             r2_len,
             cellranger_output,
         )
+    elif technology == 'Flex-v2':
+        tech_info = FlexV2FormatInfo(
+            barcode_dir,
+            r1_len,
+            r2_len,
+            cellranger_output,
+        )
     elif technology == "VisiumHD":
         tech_info = VisiumHDFormatInfo(
             None,
@@ -613,7 +620,7 @@ def main():
         required=False,
         type=str,
         default="Flex",
-        choices=["Flex", 'VisiumHD', "Visium-v1", "Visium-v2", 'Visium-v3', 'Visium-v4', 'Visium-v5', "Custom"],
+        choices=["Flex", 'Flex-v2', 'VisiumHD', "Visium-v1", "Visium-v2", 'Visium-v3', 'Visium-v4', 'Visium-v5', "Custom"],
         help="The technology used to generate the gap-filling probes. Default is Flex. If 'Custom', you must provide the --tech_def argument."
     )
     parser.add_argument(

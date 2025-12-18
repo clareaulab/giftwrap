@@ -119,6 +119,187 @@ def intersect_wta(wta_adata: ad.AnnData, gapfill_adata: ad.AnnData) -> (ad.AnnDa
     return wta_adata[intersected_cells, :], gapfill_adata[intersected_cells, :]
 
 
+def annotate_alleles(adata: ad.AnnData, probe_df: pd.DataFrame = None, annotate_unrecognized_as_alt: bool = True, call_het: bool = True) -> ad.AnnData:
+    """
+    Adds "genotype_allele" to adata.obsm. This will contain the annotations: "REF", "ALT", "HET" (or "REF/ALT"), or "UNKNOWN".
+    The adata object provided must have a "genotype" obsm containing the genotype calls. Use gw.tl.call_genotypes first.
+
+    If a probe_df is provided, it should contain columns "probe", "reference_gapfill", and "expected_gapfill" to use for annotation.
+
+    :param adata: The AnnData object containing the genotypes.
+    :param probe_df: A DataFrame containing the probe annotations. If not provided, will attempt to be inferred.
+    :param annotate_unrecognized_as_alt: If True, any unrecognized alleles will be annotated as "ALT". If False, they will be "UNKNOWN".
+        Regardless, missing genotypes will be annotated as "UNKNOWN".
+    :param call_het: If True, heterozygous genotypes (mixed REF/ALT) will be annotated as "HET". If False, they will be "REF/ALT".
+    :return: The same AnnData object with the genotype alleles added.
+    """
+    assert "genotype" in adata.obsm, "AnnData object does not contain genotypes. Please run call_genotypes first."
+
+    # Extract probe metadata
+    if probe_df is None:
+        # Infer from adata
+        if "probe_metadata" in adata.uns:
+            probe_df = adata.uns["probe_metadata"].copy()
+        else:
+            # Fall back to extracting from var
+            probe_df = adata.var.groupby("probe").first().reset_index()[["probe", "reference_gapfill", "expected_gapfill"]]
+
+    # Validate probe_df has required columns
+    required_cols = ["probe", "reference_gapfill", "expected_gapfill"]
+    missing_cols = [col for col in required_cols if col not in probe_df.columns]
+    if missing_cols:
+        raise ValueError(f"probe_df is missing required columns: {missing_cols}")
+
+    # Create a mapping from probe to reference and expected gapfills
+    probe_ref_map = probe_df.set_index("probe")["reference_gapfill"].to_dict()
+    probe_exp_map = probe_df.set_index("probe")["expected_gapfill"].to_dict()
+
+    # Get the genotype DataFrame
+    genotype_df = adata.obsm["genotype"]
+
+    # Initialize allele annotation DataFrame with same shape as genotype_df
+    allele_df = pd.DataFrame(index=genotype_df.index, columns=genotype_df.columns, dtype="string")
+
+    # Iterate over each probe (column in genotype_df)
+    for probe in genotype_df.columns:
+        if probe not in probe_ref_map or probe not in probe_exp_map:
+            # Probe not in mapping, annotate all as UNKNOWN
+            allele_df[probe] = "UNKNOWN"
+            continue
+
+        ref_gapfill = probe_ref_map[probe]
+        exp_gapfill = probe_exp_map[probe]
+
+        # Get genotype calls for this probe
+        genotypes = genotype_df[probe]
+
+        # Annotate each cell's genotype for this probe
+        annotations = []
+        for genotype in genotypes:
+            if pd.isna(genotype) or genotype == "" or genotype is np.nan:
+                # Missing genotype
+                annotations.append("UNKNOWN")
+            else:
+                # Split multi-allelic genotypes (e.g., "ALT1/ALT2")
+                alleles = str(genotype).split("/")
+                allele_types = set()
+
+                for allele in alleles:
+                    if allele == ref_gapfill:
+                        allele_types.add("REF")
+                    elif allele == exp_gapfill:
+                        allele_types.add("ALT")
+                    else:
+                        # Unrecognized allele
+                        if annotate_unrecognized_as_alt:
+                            allele_types.add("ALT")
+                        else:
+                            allele_types.add("UNKNOWN")
+
+                # Combine allele types
+                if "UNKNOWN" in allele_types:
+                    annotations.append("UNKNOWN")
+                elif len(allele_types) == 0:
+                    annotations.append("UNKNOWN")
+                elif len(allele_types) == 1:
+                    annotations.append(list(allele_types)[0])
+                else:
+                    # Mixed REF/ALT -> heterozygous
+                    if call_het:
+                        annotations.append("HET")
+                    else:
+                        sorted_types = sorted(list(allele_types))
+                        annotations.append("/".join(sorted_types))
+
+        allele_df[probe] = annotations
+
+    # Convert all columns to category for memory efficiency
+    allele_df = allele_df.astype('category')
+
+    # Add to obsm
+    adata.obsm["genotype_allele"] = allele_df
+    return adata
+
+
+def calculate_mutational_burden(adata: ad.AnnData, normalize: bool = True) -> ad.AnnData:
+    """
+    Calculates the mutational burden for each cell based on allele annotations. The mutational burden is defined as
+    the ratio of mutated sites to total valid sites, where:
+    - REF = 0 (no mutation)
+    - HET or REF/ALT = 0.5 (heterozygous, one mutated allele)
+    - ALT = 1.0 (homozygous mutation)
+    - UNKNOWN sites are excluded from calculation
+
+    The adata object must have a "genotype_allele" obsm containing allele annotations. Use gw.tl.annotate_alleles first.
+
+    The function adds "mutational_burden" to adata.obs with the calculated burden for each cell.
+
+    :param adata: The AnnData object containing the allele annotations.
+    :param normalize: If True, normalize the burden values to range from 0-1 across the dataset. If False, return raw burden scores.
+    :return: The same AnnData object with mutational burden added to obs.
+    """
+    assert "genotype_allele" in adata.obsm, "AnnData object does not contain allele annotations. Please run annotate_alleles first."
+
+    # Get the allele annotation DataFrame
+    allele_df = adata.obsm["genotype_allele"]
+
+    # Initialize arrays for burden score and total counts
+    n_cells = adata.shape[0]
+    burden_scores = np.zeros(n_cells, dtype=float)
+    total_counts = np.zeros(n_cells, dtype=float)
+
+    # Iterate over each cell
+    for cell_idx in range(n_cells):
+        cell_alleles = allele_df.iloc[cell_idx]
+
+        for allele in cell_alleles:
+            # Skip UNKNOWN genotypes - these are not valid sites
+            if pd.isna(allele) or allele == "UNKNOWN":
+                continue
+
+            # Count as valid site
+            total_counts[cell_idx] += 1
+
+            # Add mutation score based on allele type
+            allele_str = str(allele)
+            if allele_str == "REF":
+                # Reference allele: no mutation
+                burden_scores[cell_idx] += 0.0
+            elif allele_str == "HET" or allele_str == "REF/ALT" or allele_str == "ALT/REF":
+                # Heterozygous: half mutated
+                burden_scores[cell_idx] += 0.5
+            elif allele_str == "ALT":
+                # Homozygous alternate: fully mutated
+                burden_scores[cell_idx] += 1.0
+            elif "ALT" in allele_str and "REF" in allele_str:
+                # Any other REF/ALT combination
+                burden_scores[cell_idx] += 0.5
+            elif "ALT" in allele_str:
+                # Pure ALT without REF (e.g., "ALT/ALT" or just contains ALT)
+                burden_scores[cell_idx] += 1.0
+
+    # Calculate burden as average mutation score across valid sites
+    # Avoid division by zero
+    burden = np.zeros(n_cells, dtype=float)
+    valid_mask = total_counts > 0
+    burden[valid_mask] = burden_scores[valid_mask] / total_counts[valid_mask]
+
+    # Normalize if requested
+    if normalize:
+        # Normalize to 0-1 range across the dataset
+        min_burden = burden.min()
+        max_burden = burden.max()
+
+        if max_burden > min_burden:
+            burden = (burden - min_burden) / (max_burden - min_burden)
+        # If all values are the same, burden remains unchanged (all zeros or all same value)
+
+    # Add to obs
+    adata.obs["mutational_burden"] = burden
+
+    return adata
+
+
 def call_genotypes(adata: ad.AnnData,
                    flavor: str = "basic",
                    threshold: float = 0.5,

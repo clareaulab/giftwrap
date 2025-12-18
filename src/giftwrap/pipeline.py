@@ -116,7 +116,7 @@ def main():
         required=False,
         type=str,
         default="Flex",
-        choices=["Flex", 'VisiumHD', "Visium-v1", "Visium-v2", 'Visium-v3', 'Visium-v4', 'Visium-v5', "Custom"],
+        choices=["Flex", 'Flex-v2', 'VisiumHD', "Visium-v1", "Visium-v2", 'Visium-v3', 'Visium-v4', 'Visium-v5', "Custom"],
         help="The technology used to generate the gap-filling probes. Default is Flex."
     )
     parser.add_argument(

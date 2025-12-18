@@ -494,6 +494,143 @@ class FlexFormatInfo(TechnologyFormatInfo):
         return self._barcodes
 
 
+class FlexV2FormatInfo(TechnologyFormatInfo):
+    """
+    Describes the format of a 10X Flex-v2 run.
+    """
+
+    def __init__(self,
+                 barcode_dir: Optional[str] = None,
+                 read1_length: Optional[int] = 28,
+                 read2_length: Optional[int] = 90,
+                 barcode_list: Optional[list[Path]] = None):
+        if barcode_dir is None and barcode_list is None:
+            raise ValueError("Either barcode_dir or barcode_list must be provided.")
+
+        super().__init__(barcode_dir, read1_length, read2_length)
+        if barcode_list:
+            barcodes = _parse_possible_barcodes(barcode_list)
+            if barcodes is not None:
+                barcodes = barcodes.str[:16]  # Strip potential probe barcodes that are appended when multiplexed
+        else:
+            barcodes = None
+        if barcodes is None:
+            # Load the barcodes
+            barcodes = pd.read_table(self._barcode_dir / "737K-flex-v2.txt.gz", header=None, names=["barcode"], compression="gzip")["barcode"]
+
+        # Strip the -Number from the barcode
+        barcodes = barcodes.str.split("-").str[0]
+        # Collect the universe of barcodes
+        # self._barcodes = PrefixTrie(list(barcodes.unique()))
+        # Shared memory prefix trie
+        self._barcodes, self._trie_name = create_shared_trie(list(barcodes.unique()))
+
+        # Read probe barcodes
+        if (self._barcode_dir / "flex-v2-384.txt").exists():
+            prob_bc_path = self._barcode_dir / "flex-v2-384.txt"
+        else:
+            prob_bc_path = self._barcode_dir / "translation" / "flex-v2-384.txt"
+
+        probe_bcs = pd.read_table(prob_bc_path, header=None, names=["sequence", "corrected", 'well_id'])
+
+        # Make a dict of probe barcode to well index
+        self._probe_barcodes = {row['sequence']: row['corrected'] for _, row in probe_bcs.iterrows()}
+
+        # Reverse the dict
+        self._index_to_probe_barcodes = {v: k for k, v in self._probe_barcodes.items()}
+
+    # Custom pickling for multiprocessing
+    def __getstate__(self):
+        state = dict()
+        # Remove the barcode tree from the state
+        state['_trie_name'] = self._trie_name
+        state['_barcodes'] = None
+        state['_read1_length'] = self._read1_length
+        state['_read2_length'] = self._read2_length
+        state['_barcode_dir'] = self._barcode_dir
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        # Recreate the barcode tree from shared memory
+        self._barcodes = load_shared_trie(self._trie_name)
+
+    # Clean up shared memory on deletion
+    def __del__(self):
+        try:
+            self._barcodes.cleanup_shared_memory()
+        except: pass
+        self._barcodes = None
+
+    @property
+    def umi_start(self) -> int:
+        return 16
+
+    @property
+    def umi_length(self) -> int:
+        return 12
+
+    @property
+    def cell_barcodes(self) -> list[str]:
+        return self._barcodes.values()
+
+    @property
+    def cell_barcode_start(self) -> int:
+        return 0
+
+    @property
+    def is_spatial(self) -> bool:
+        return False
+
+    @property
+    def constant_sequence(self) -> str:
+        return "CCCATATAAGAAAACCTGAATACGCGGTT"
+
+    def pCS1(self) -> str:
+        return "CGGTCCTAGCAA"
+
+    @property
+    def constant_sequence_start(self) -> int:
+        return 0
+
+    @property
+    def has_constant_sequence(self) -> bool:
+        return True
+
+    @property
+    @functools.lru_cache(1)
+    def probe_barcodes(self) -> list[str]:
+        return list(self._probe_barcodes.keys())
+
+    @property
+    def probe_barcode_start(self) -> int:
+        return 0
+
+    @property
+    def probe_barcode_length(self) -> int:
+        return 10
+
+    @property
+    def has_probe_barcode(self) -> bool:
+        return True
+
+    def probe_barcode_index(self, bc: str):
+        return self._probe_barcodes[bc]
+
+    def make_barcode_string(self, cell_barcode: str, plex: int = 1, x_coord: Optional[int] = None, y_coord: Optional[int] = None, is_multiplexed: bool = False) -> str:
+        if is_multiplexed:
+            cell_barcode += self._index_to_probe_barcodes[plex]
+        return f"{cell_barcode}-1"
+
+    @property
+    def barcode_coordinates(self) -> dict[str, tuple[int, int]]:
+        raise NotImplementedError()
+
+    @property
+    def barcode_tree(self) -> PrefixTrie:
+        return self._barcodes
+
+
 class VisiumFormatInfo(TechnologyFormatInfo):
 
     def __init__(self,
