@@ -1,4 +1,5 @@
-import warnings, os
+import warnings
+import os
 warnings.filterwarnings("ignore", category=FutureWarning)
 os.environ.setdefault("PYTHONWARNINGS", "ignore::FutureWarning")  # inherit to subprocesses
 
@@ -192,7 +193,7 @@ def collect_unmapped_fastq(unmapped_reads_prefix):
 
 def search_files(read1s, read2s, output_dir, tech_info,
                  cores=1, n_reads_per_batch=1_000_000, max_distance=2,
-                 multiplex=1, barcode=1, allow_indels=False,
+                 multiplex=1, barcodes: Optional[list[int | str]] = None, allow_indels=False,
                  skip_constant_seq=False, unmapped_reads_prefix=None,
                  flexible_start=False):
     probes = read_manifest(output_dir)
@@ -201,9 +202,11 @@ def search_files(read1s, read2s, output_dir, tech_info,
     rhs_seqs = probes['rhs_probe'].tolist()
     names = probes['name'].tolist()
     if multiplex > 1:
-        probe_bcs = list(range(1, multiplex+1))
-    elif barcode > 0:
-        probe_bcs = [barcode]
+        # probe_bcs = list(range(1, multiplex+1))
+        # Switch to using all probe_bcs
+        probe_bcs = list(range(1, len(tech_info.probe_barcodes) + 1))
+    elif barcodes:
+        probe_bcs = barcodes
     else:
         probe_bcs = None
     probe_parser = ProbeParser(
@@ -230,8 +233,8 @@ def search_files(read1s, read2s, output_dir, tech_info,
     probe_ids_encountered = set()
     with mp as pool:
         with gzip.open(output_dir / "probe_reads.tsv.gz", 'wt') as f, gzip.open(output_dir / "barcodes.tsv.gz", 'wt') as f2:
-            f.write(f"cell_idx\tprobe_idx\tprobe_barcode\tgapfill\tgapfill_quality\tumi\tumi_quality\n")
-            f2.write("barcode\tplex")
+            f.write("cell_idx\tprobe_idx\tprobe_barcode\tgapfill\tgapfill_quality\tumi\tumi_quality\n")
+            f2.write("barcode\tplex_id\tplex_seq")
             if tech_info.is_spatial:
                 f2.write("\tin_tissue\tarray_col\tarray_row")
             f2.write("\n")
@@ -251,20 +254,31 @@ def search_files(read1s, read2s, output_dir, tech_info,
 
                         probe_ids_encountered.add(data.probe_id)
                         if tech_info.has_probe_barcode:
-                            probe_bc = tech_info.probe_barcode_index(data.probe_barcode)
+                            probe_bc_id = tech_info.probe_barcode_index(data.probe_barcode)
+                            probe_bc_label = probe_bc_id
+                            if hasattr(tech_info, "probe_barcode_name"):
+                                try:
+                                    probe_bc_label = tech_info.probe_barcode_name(probe_bc_id)
+                                except Exception:
+                                    probe_bc_label = probe_bc_id
+                            probe_bc_seq = data.probe_barcode or ""
                         else:
-                            probe_bc = 1
-                        complete_cell_barcode = tech_info.make_barcode_string(data.cell_barcode, probe_bc, data.coordinate_x, data.coordinate_y, tech_info.has_probe_barcode and (multiplex > 1 or barcode > 0))
+                            probe_bc_id = "1"
+                            probe_bc_label = "1"
+                            probe_bc_seq = ""
+                        complete_cell_barcode = tech_info.make_barcode_string(
+                            data.cell_barcode, str(probe_bc_label), data.coordinate_x, data.coordinate_y,
+                            tech_info.has_probe_barcode and (multiplex > 1 or (barcodes and len(barcodes) > 0))
+                        )
                         if complete_cell_barcode not in barcodes_encountered:
                             barcode_id = len(barcodes_encountered)
                             barcodes_encountered[complete_cell_barcode] = barcode_id
-                            f2.write(f"{complete_cell_barcode}\t{probe_bc}")  # Record the barcode
+                            f2.write(f"{complete_cell_barcode}\t{probe_bc_label}\t{probe_bc_seq}")
                             if tech_info.is_spatial:
                                 f2.write(f"\t1\t{data.coordinate_x}\t{data.coordinate_y}")
                             f2.write("\n")
                         cell_id = barcodes_encountered[complete_cell_barcode]
-                        # Record the read
-                        f.write(f"{cell_id}\t{data.probe_id}\t{probe_bc}\t{data.gapfill}\t{data.gapfill_quality}\t{data.umi}\t{data.umi_quality}\n")
+                        f.write(f"{cell_id}\t{data.probe_id}\t{probe_bc_label}\t{data.gapfill}\t{data.gapfill_quality}\t{data.umi}\t{data.umi_quality}\n")
 
             # Note we parallelize the processing of reads
             # We first process a batch of reads while the next batch is being read
@@ -401,7 +415,7 @@ def run(probes,
         tech_df,
         overwrite,
         multiplex,
-        barcode,
+        barcodes,
         r1_len,
         r2_len,
         allow_indels,
@@ -410,10 +424,11 @@ def run(probes,
         unmapped_reads_prefix,
         cellranger_output,
         flexible_start):
+    barcodes = barcodes or []
     if (read1 == read2 == project) and project is None:
         raise AssertionError("At least one of the read1, read2, or project arguments must be provided.")
-    assert not (multiplex > 1 and barcode > 0), "Multiplex and barcode arguments are mutually exclusive."
-    assert (not skip_constant_seq) or (multiplex < 2 and barcode < 2), "Skipping the constant sequence is only valid for singleplex sequencing."
+    assert not (multiplex > 1 and barcodes), "Multiplex and barcode arguments are mutually exclusive."
+    assert (not skip_constant_seq) or (multiplex < 2 and (len(barcodes) <= 1)), "Skipping the constant sequence is only valid for singleplex sequencing."
 
     if isinstance(cellranger_output, str):
         cellranger_output = [cellranger_output]
@@ -528,7 +543,7 @@ def run(probes,
 
     search_files(read1s, read2s, output, tech_info,
                  cores=cores, n_reads_per_batch=n_reads_per_batch, max_distance=max_distance,
-                 multiplex=multiplex, barcode=barcode, allow_indels=allow_indels,
+                 multiplex=multiplex, barcodes=barcodes, allow_indels=allow_indels,
                  skip_constant_seq=skip_constant_seq, unmapped_reads_prefix=unmapped_reads_prefix,
                  flexible_start=flexible_start)
     exit(0)
@@ -581,7 +596,7 @@ def main():
         required=False,
         default=False,
         action="store_true",
-        help="If set with, we no longer assume that the R2 read starts with the LHS probe and that there may be an insertion that would need to be trimmed."
+        help="If set, we no longer assume that the R2 read starts with the LHS probe and that there may be an insertion that would need to be trimmed."
     )
     parser.add_argument(
         '--project',
@@ -643,14 +658,15 @@ def main():
         required=False,
         type=int,
         default=1,
-        help="The number of probes to multiplexed in the Flex run. Defaults to single plex."
+        help="The number of probes to be multiplexed in the Flex run. Defaults to single plex."
     )
     parser.add_argument(
         '--barcode', '-b',
         required=False,
-        type=int,
-        default=0,
-        help="The barcode number to use for the Flex run. Defaults to no barcode."
+        action="append",
+        type=str,
+        default=None,
+        help="Barcode(s) to demultiplex. Can be provided multiple times. Mutually exclusive with --multiplex. Defaults to single-plex when omitted."
     )
     # Sequencing info
     parser.add_argument(

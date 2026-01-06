@@ -1,4 +1,5 @@
-import warnings, os
+import warnings
+import os
 warnings.filterwarnings("ignore", category=FutureWarning)
 os.environ.setdefault("PYTHONWARNINGS", "ignore::FutureWarning")  # inherit to subprocesses
 
@@ -11,14 +12,13 @@ import h5py
 import numpy as np
 import pandas as pd
 import scipy
-from tqdm import tqdm
 from rich_argparse import RichHelpFormatter
 
 from .utils import read_manifest, read_barcodes, maybe_multiprocess, maybe_gzip, write_sparse_matrix, \
-    _tx_barcode_to_oligo, compile_flatfile
+    compile_flatfile
 
 
-def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_df: pd.DataFrame, overwrite: bool, plex: int = 1, multiplex: bool = False, flatten: bool = False, max_pcr_thresholds: int = 10):
+def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_df: pd.DataFrame, overwrite: bool, plex: str = "1", multiplex: bool = False, flatten: bool = False, max_pcr_thresholds: int = 10):
     """
     Generate an h5 file with counts for each barcode.
     :param input: The input file.
@@ -37,9 +37,9 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
     elif final_output.exists():
         final_output.unlink()
 
-    # Replace the barcode -plex with {probe bc}-1 to match cellranger output
-    if multiplex:
-        barcodes_df.barcode = barcodes_df.barcode.str.replace(f"-{plex}", f"{_tx_barcode_to_oligo.get(plex, '')}-1")
+    # # Replace the barcode -plex with {probe bc}-1 to match cellranger output
+    # if multiplex:
+    #     barcodes_df.barcode = barcodes_df.barcode.str.replace(f"-{plex}", f"{plex}-1")
 
     # Pre-compute mappings to avoid extremely slow pandas lookups inside the main loop.
     # 1. Map original cell index (from file) to the new, dense HDF5 index (0, 1, 2...)
@@ -62,7 +62,6 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
     percent_supporting_data = defaultdict(float)
     possible_probes = set()
     n_lines = 0
-    plex_int = int(plex)
 
     with maybe_gzip(input, 'r') as input_file:
         # Skip the header
@@ -71,7 +70,7 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
             cell_idx_str, probe_idx_str, probe_bc_idx_str, _, gapfill, umi_dup_count_str, percent_supporting_str = line.strip().split("\t")
 
             # Fast filtering on probe barcode index
-            if int(probe_bc_idx_str) != plex_int:
+            if plex != probe_bc_idx_str:
                 continue
 
             # Fast filtering on original cell index
@@ -215,9 +214,9 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
 
 def run(output: str, cores: int, overwrite: bool, was_multiplexed: bool, flatten: bool, max_pcr_thresholds: int):
     if cores < 1:
-        cores = os.cpu_count()
+        cores = os.cpu_count() or 1
 
-    output = Path(output)
+    output: Path = Path(output)
     assert output.exists(), f"Output directory does not exist: {output}"
     input_gz = output / "probe_reads.tsv.gz"
     input_tsv = output / "probe_reads.tsv"
@@ -229,7 +228,7 @@ def run(output: str, cores: int, overwrite: bool, was_multiplexed: bool, flatten
     barcodes_df = read_barcodes(output)
     print("Done.")
 
-    plexes = barcodes_df.plex.unique().tolist()
+    plexes = barcodes_df.plex_id.unique().tolist()
     multiplex = len(plexes) > 1
 
     if multiplex:
@@ -239,15 +238,15 @@ def run(output: str, cores: int, overwrite: bool, was_multiplexed: bool, flatten
             pool.starmap(
                 collect_counts,
                 [
-                    (input, output, manifest, barcodes_df[barcodes_df.plex == plex].copy(), overwrite, plex, multiplex,
+                    (input, output, manifest, barcodes_df[barcodes_df.plex_id == plex].copy(), overwrite, plex, multiplex,
                      flatten, max_pcr_thresholds)
                     for plex in plexes
                 ]
             )
         print(f"Counts data saved as counts.[{','.join(map(str, sorted(plexes)))}].h5")
     else:
-        plex = int(plexes[0])
-        if was_multiplexed or plex > 1:
+        plex = plexes[0]
+        if was_multiplexed or plex != "1":
             print(f"Detected single-plex run using BC{plex}.")
         else:
             print("Detected single-plex run.")

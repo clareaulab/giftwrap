@@ -1,4 +1,7 @@
-import warnings, os
+import warnings
+import os
+from typing import Any, Generator
+
 warnings.filterwarnings("ignore", category=FutureWarning)
 os.environ.setdefault("PYTHONWARNINGS", "ignore::FutureWarning")  # inherit to subprocesses
 
@@ -8,7 +11,6 @@ import shutil
 import sys
 from pathlib import Path
 
-import numpy as np
 from tqdm import tqdm
 from rich_argparse import RichHelpFormatter
 
@@ -114,7 +116,7 @@ def process_lines(lines: list[str]) -> tuple[str, bool]:
     return f"{cell_barcode_idx}\t{probe_idx}\t{probe_bc_idx}\t{umi}\t{most_likely_seq}\t{count}\t{gapfill_seqs.count(most_likely_seq)/count}\n", True
 
 
-def barcode_umi_name_lines_generator(input_file_handle) -> tuple[list[str]]:
+def barcode_umi_name_lines_generator(input_file_handle) -> Generator[tuple[list[Any]], Any, None]:
     """
     We assume the lines are sorted by probe_barcode, cell_barcode, umi. Which should have happened in the previous steps.
     :param input_file_handle: The input file handle.
@@ -154,10 +156,10 @@ def barcode_umi_name_lines_generator(input_file_handle) -> tuple[list[str]]:
 
 def run(output: str, cores: int, n_groups_per_batch: int):
     if cores < 1:
-        cores = os.cpu_count()
+        cores = os.cpu_count() or 1
 
-    output = Path(output)
-    assert output.exists(), f"Output directory does not exist."
+    output: Path = Path(output)
+    assert output.exists(), "Output directory does not exist."
     input = output / "probe_reads.tsv.gz"
     if not input.exists():
         input = output / "probe_reads.tsv"

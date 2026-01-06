@@ -1,6 +1,6 @@
 [project]
 name = "giftwrap-sc"
-version = "0.2.0-dev"
+version = "0.3.0"
 description = "Tools to quantify GIFT-seq datasets."
 readme = "README.md"
 authors = [

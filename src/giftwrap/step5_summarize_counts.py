@@ -1,4 +1,6 @@
-import warnings, os
+import os
+import warnings
+
 warnings.filterwarnings("ignore", category=FutureWarning)
 os.environ.setdefault("PYTHONWARNINGS", "ignore::FutureWarning")  # inherit to subprocesses
 
@@ -9,13 +11,20 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
-from scipy.stats import spearmanr, gaussian_kde
-from sankeyflow import Sankey
 from rich_argparse import RichHelpFormatter
+from sankeyflow import Sankey
+from scipy.stats import gaussian_kde, spearmanr
 
-from .utils import filter_h5_file_by_barcodes, read_h5_file, read_wta, sequencing_saturation, sequence_saturation_curve, \
-    maybe_gzip, filter_h5_file_by_pcr_dups
 from .analysis.tools import collapse_gapfills
+from .utils import (
+    filter_h5_file_by_barcodes,
+    filter_h5_file_by_pcr_dups,
+    maybe_gzip,
+    read_h5_file,
+    read_wta,
+    sequence_saturation_curve,
+    sequencing_saturation,
+)
 
 
 def density(x, y):
@@ -449,7 +458,7 @@ def run(output, overwrite, cellranger_output, flatten, reads_per_gapfill):
         print("WTA CellRanger output provided.")
 
     output = Path(output)
-    assert output.exists(), f"Output directory does not exist."
+    assert output.exists(), "Output directory does not exist."
     # Search for counts.*.h5 files in the output dir
     print("Searching for counts files...", end="")
     counts_files = []

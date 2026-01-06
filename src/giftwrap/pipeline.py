@@ -22,6 +22,7 @@ def streaming_subprocess_run(args: list, **kwargs):
     process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True, bufsize=1, **kwargs)
     while stream:
         stream = process.poll() is None
+        assert process.stdout is not None
         for line in process.stdout:
             print(line.rstrip("\n"), flush=True)
     return process.returncode
@@ -80,14 +81,15 @@ def main():
         required=False,
         type=int,
         default=0,
-        help="The number of probes to multiplexed in the Flex run with the same probe set. Mutually exclusive with --barcode. Defaults to single plex."
+        help="The number of probes to be multiplexed in the Flex run with the same probe set. Mutually exclusive with --barcode. Defaults to single plex."
     )
     parser.add_argument(
         '--barcode', '-b',
         required=False,
-        type=int,
-        default=0,
-        help="The barcode number to use for the Flex run. Mutually exclusive with --multiplex. Defaults BC01"
+        action="append",
+        type=str,
+        default=None,
+        help="The barcode(s) to use for the Flex run. Can be provided multiple times. Mutually exclusive with --multiplex. Defaults to BC01 in FlexV1 or A01 in Flex-v2 when omitted."
     )
     parser.add_argument(
         "--unmapped_reads",
@@ -182,7 +184,7 @@ def main():
         required=False,
         default=False,
         action="store_true",
-        help="If set with, we no longer assume that the R2 read starts with the LHS probe and that there may be an insertion that would need to be trimmed."
+        help="If set, we no longer assume that the R2 read starts with the LHS probe and that there may be an insertion that would need to be trimmed."
     )
     parser.add_argument(
         "--reads_per_gapfill",
@@ -205,7 +207,7 @@ def main():
     read2 = args.read2
     project = args.project
     multiplex = args.multiplex
-    barcode = args.barcode
+    barcode = args.barcode or []
     output = args.output
     cores = args.cores
     technology = args.technology
@@ -215,6 +217,8 @@ def main():
     skip_constant_seq = args.skip_constant_seq
     max_pcr_thresholds = int(args.max_pcr_thresholds)
 
+    if multiplex > 0 and barcode:
+        parser.error("Arguments --multiplex and --barcode are mutually exclusive.")
 
     print("Gapfill counts pipeline started.")
     print("================================", flush=True)
@@ -252,7 +256,7 @@ def main():
             + (['--r1_length', str(args.r1_length)] if args.r1_length is not None else [])
             + (['--r2_length', str(args.r2_length)] if args.r2_length is not None else [])
             + (['-m', str(multiplex)] if multiplex > 0 else [])
-            + (['-b', str(barcode)] if barcode > 0 else [])
+            + sum([['-b', b] for b in barcode], [])
             + (['--skip_constant_seq'] if skip_constant_seq else [])
             + (['--allow_any_combination'] if args.allow_any_combination else [])
             + (['--unmapped_reads', args.unmapped_reads] if args.unmapped_reads is not None else [])

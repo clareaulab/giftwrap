@@ -1,4 +1,7 @@
-import warnings, os
+import warnings
+import os
+from typing import Any, Generator
+
 warnings.filterwarnings("ignore", category=FutureWarning)
 os.environ.setdefault("PYTHONWARNINGS", "ignore::FutureWarning")  # inherit to subprocesses
 
@@ -9,13 +12,11 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-import numpy as np
 from tqdm import tqdm
 from rich_argparse import RichHelpFormatter
 from prefixtrie import PrefixTrie
 
-from .utils import maybe_multiprocess, batched, maybe_gzip, GzipNamedTemporaryFile, phred_string_to_probs, \
-    permute_bases, generate_permuted_seqs, compute_max_distance
+from .utils import maybe_multiprocess, batched, maybe_gzip, GzipNamedTemporaryFile, compute_max_distance
 
 
 def process_lines(lines: list[str], threshold: int, allow_chimeras: bool) -> tuple[list[str], int, int]:
@@ -85,7 +86,7 @@ def process_lines(lines: list[str], threshold: int, allow_chimeras: bool) -> tup
     return ["\t".join(line) for line in final_lines], corrected, dropped
 
 
-def barcode_lines_generator(input_file_handle) -> tuple[list[str]]:
+def barcode_lines_generator(input_file_handle) -> Generator[tuple[list[Any]], Any, None]:
     # By assuming the lines are sorted by probe_bc/cell barcode/probe id, we can naively group them by just iterating through the file
     curr_barcode = None
     lines = []
@@ -105,10 +106,10 @@ def barcode_lines_generator(input_file_handle) -> tuple[list[str]]:
 
 def run(output: str, threshold: int, cores: int, n_cells_per_batch: int, allow_chimeras: bool):
     if cores < 1:
-        cores = os.cpu_count()
+        cores = os.cpu_count() or 1
 
-    output = Path(output)
-    assert output.exists(), f"Output directory does not exist."
+    output: Path = Path(output)
+    assert output.exists(), "Output directory does not exist."
     input = output / "probe_reads.tsv.gz"
     if not input.exists():
         input = output / "probe_reads.tsv"

@@ -2394,6 +2394,8 @@ def identify_distinct_allele_probes(
         - probe: Full probe name
         - probe_norm: Normalized probe name
         - total_umis: Total UMI count across all cell lines
+        - total_WT_umis: Total UMI count for WT alleles
+        - total_ALT_umis: Total UMI count for ALT alleles
         - {cell_line}_genotype: Genotype for each cell line (WT/ALT/HET)
         - genotype_pattern: String showing pattern like "WT|ALT|HET"
     """
@@ -2464,11 +2466,66 @@ def identify_distinct_allele_probes(
         if total_umis < min_umis:
             continue
 
+        # Get probe-specific data to detect dual vs gapfill probe
+        probe_table = table[:, probe_mask]
+
+        # Detect if this is dual probe or gapfill probe data
+        available_gapfills = probe_table.var.gapfill.unique().tolist()
+        is_dual_probe = all(len(gf) == 1 for gf in available_gapfills if gf)  # Single nucleotide gapfills
+
+        # Initialize variables for WT/ALT UMI counts
+        total_WT_umis = 0
+        total_ALT_umis = 0
+
+        # Get WT and ALT alleles for this probe
+        if is_dual_probe:
+            # For dual probes, extract from probe name (e.g., "AKAP9 c.1389G>T" -> WT='G', ALT='T')
+            if ">" in probe_norm:
+                variant_part = probe_norm.split()[-1]  # Get "c.1389G>T"
+                if ">" in variant_part:
+                    bases = variant_part.split(">")
+                    wt_allele = bases[0][-1]  # Last character before '>'
+                    alt_allele = bases[1]     # Everything after '>'
+                else:
+                    # Cannot parse, skip this probe for WT/ALT calculation
+                    total_WT_umis = 0
+                    total_ALT_umis = 0
+                    wt_allele = None
+                    alt_allele = None
+            else:
+                # Cannot parse, skip this probe for WT/ALT calculation
+                total_WT_umis = 0
+                total_ALT_umis = 0
+                wt_allele = None
+                alt_allele = None
+        else:
+            # For gapfill probes, use the provided dictionaries
+            wt_allele = wt_alleles[probe_norm]
+            alt_allele = alt_alleles[probe_norm]
+
+        # Calculate UMI counts for WT and ALT alleles if we have the alleles
+        if wt_allele is not None and alt_allele is not None:
+            # Get WT allele UMI counts
+            wt_gf_mask = (table.var.probe == probe) & (table.var.gapfill == wt_allele)
+            if wt_gf_mask.any():
+                total_WT_umis = table[:, wt_gf_mask].X.sum()
+            else:
+                total_WT_umis = 0
+
+            # Get ALT allele UMI counts
+            alt_gf_mask = (table.var.probe == probe) & (table.var.gapfill == alt_allele)
+            if alt_gf_mask.any():
+                total_ALT_umis = table[:, alt_gf_mask].X.sum()
+            else:
+                total_ALT_umis = 0
+
         # Store result
         result = {
             'probe': probe,
             'probe_norm': probe_norm,
-            'total_umis': int(total_umis)
+            'total_umis': int(total_umis),
+            'total_WT_umis': int(total_WT_umis),
+            'total_ALT_umis': int(total_ALT_umis)
         }
 
         # Add genotype for each cell line
