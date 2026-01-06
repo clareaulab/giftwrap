@@ -1,3 +1,4 @@
+from numpy.typing import ArrayLike
 import tempfile
 import warnings, os
 from collections import defaultdict
@@ -122,7 +123,7 @@ class TechnologyFormatInfo(ABC):
     """
 
     def __init__(self,
-                 barcode_dir: Optional[str] = None,
+                 barcode_dir: Optional[str | Path] = None,
                  read1_length: Optional[int] = None,
                  read2_length: Optional[int] = None):
         self._read1_length = read1_length
@@ -246,7 +247,7 @@ class TechnologyFormatInfo(ABC):
 
     @property
     @abstractmethod
-    def probe_barcodes(self) -> list[str]:
+    def probe_barcodes(self) -> dict[str, str]:
         """
         The list of potential probe barcodes.
         """
@@ -284,7 +285,7 @@ class TechnologyFormatInfo(ABC):
         """
         raise NotImplementedError()
 
-    def make_barcode_string(self, cell_barcode: str, plex: int = 1, x_coord: Optional[int] = None, y_coord: Optional[int] = None, is_multiplexed: bool = False) -> str:
+    def make_barcode_string(self, cell_barcode: str, plex: str = "1", x_coord: Optional[int] = None, y_coord: Optional[int] = None, is_multiplexed: bool = False) -> str:
         """
         Format a cell barcode into a string.
         :param cell_barcode: The barcode.
@@ -317,7 +318,7 @@ class TechnologyFormatInfo(ABC):
         return self.barcode_tree.search(read[start_idx:end_idx], max_mismatches)
 
 
-_tx_barcode_oligos = {s: (i+1) for i, s in enumerate([
+_tx_barcode_oligos = {s: str(i+1) for i, s in enumerate([
     "ACTTTAGG",
     "AACGGGAA",
     "AGTAGGCT",
@@ -377,7 +378,7 @@ class FlexFormatInfo(TechnologyFormatInfo):
     """
 
     def __init__(self,
-                 barcode_dir: Optional[str] = None,
+                 barcode_dir: Optional[str | Path] = None,
                  read1_length: Optional[int] = 28,
                  read2_length: Optional[int] = 90,
                  barcode_list: Optional[list[Path]] = None):
@@ -438,7 +439,7 @@ class FlexFormatInfo(TechnologyFormatInfo):
 
     @property
     def cell_barcodes(self) -> list[str]:
-        return self._barcodes.values()
+        return list(self._barcodes)
 
     @property
     def cell_barcode_start(self) -> int:
@@ -462,8 +463,8 @@ class FlexFormatInfo(TechnologyFormatInfo):
 
     @property
     @functools.lru_cache(1)
-    def probe_barcodes(self) -> list[str]:
-        return list(self._probe_barcodes.keys())
+    def probe_barcodes(self) -> dict[str, str]:
+        return self._probe_barcodes
 
     @property
     def probe_barcode_start(self) -> int:
@@ -480,9 +481,9 @@ class FlexFormatInfo(TechnologyFormatInfo):
     def probe_barcode_index(self, bc: str):
         return self._probe_barcodes[bc]
 
-    def make_barcode_string(self, cell_barcode: str, plex: int = 1, x_coord: Optional[int] = None, y_coord: Optional[int] = None, is_multiplexed: bool = False) -> str:
+    def make_barcode_string(self, cell_barcode: str, plex: str = "1", x_coord: Optional[int] = None, y_coord: Optional[int] = None, is_multiplexed: bool = False) -> str:
         if is_multiplexed:
-            cell_barcode += self._index_to_probe_barcodes[plex]
+            cell_barcode += f"-{plex}"
         return f"{cell_barcode}-1"
 
     @property
@@ -500,7 +501,7 @@ class FlexV2FormatInfo(TechnologyFormatInfo):
     """
 
     def __init__(self,
-                 barcode_dir: Optional[str] = None,
+                 barcode_dir: Optional[str | Path] = None,
                  read1_length: Optional[int] = 28,
                  read2_length: Optional[int] = 90,
                  barcode_list: Optional[list[Path]] = None):
@@ -534,7 +535,7 @@ class FlexV2FormatInfo(TechnologyFormatInfo):
         probe_bcs = pd.read_table(prob_bc_path, header=None, names=["sequence", "corrected", 'well_id'])
 
         # Make a dict of probe barcode to well index
-        self._probe_barcodes = {row['sequence']: row['corrected'] for _, row in probe_bcs.iterrows()}
+        self._probe_barcodes = {row['corrected']: row['well_id'] for _, row in probe_bcs.iterrows()}
 
         # Reverse the dict
         self._index_to_probe_barcodes = {v: k for k, v in self._probe_barcodes.items()}
@@ -572,7 +573,7 @@ class FlexV2FormatInfo(TechnologyFormatInfo):
 
     @property
     def cell_barcodes(self) -> list[str]:
-        return self._barcodes.values()
+        return list(self._barcodes)
 
     @property
     def cell_barcode_start(self) -> int:
@@ -599,8 +600,8 @@ class FlexV2FormatInfo(TechnologyFormatInfo):
 
     @property
     @functools.lru_cache(1)
-    def probe_barcodes(self) -> list[str]:
-        return list(self._probe_barcodes.keys())
+    def probe_barcodes(self) -> dict[str, str]:
+        return self._probe_barcodes
 
     @property
     def probe_barcode_start(self) -> int:
@@ -617,9 +618,9 @@ class FlexV2FormatInfo(TechnologyFormatInfo):
     def probe_barcode_index(self, bc: str):
         return self._probe_barcodes[bc]
 
-    def make_barcode_string(self, cell_barcode: str, plex: int = 1, x_coord: Optional[int] = None, y_coord: Optional[int] = None, is_multiplexed: bool = False) -> str:
+    def make_barcode_string(self, cell_barcode: str, plex: str = "1", x_coord: Optional[int] = None, y_coord: Optional[int] = None, is_multiplexed: bool = False) -> str:
         if is_multiplexed:
-            cell_barcode += self._index_to_probe_barcodes[plex]
+            cell_barcode += f"-{plex}"
         return f"{cell_barcode}-1"
 
     @property
@@ -635,7 +636,7 @@ class VisiumFormatInfo(TechnologyFormatInfo):
 
     def __init__(self,
                  version: int = 5,
-                 barcode_dir: Optional[str] = None,
+                 barcode_dir: Optional[str | Path] = None,
                  read1_length: Optional[int] = 28,
                  read2_length: Optional[int] = 90,
                  barcode_list: Optional[list[Path]] = None
@@ -692,7 +693,7 @@ class VisiumFormatInfo(TechnologyFormatInfo):
 
     @property
     def cell_barcodes(self) -> list[str]:
-        return self._barcodes.values()
+        return list(self._barcodes)
 
     @property
     def cell_barcode_start(self) -> int:
@@ -723,7 +724,7 @@ class VisiumFormatInfo(TechnologyFormatInfo):
         raise NotImplementedError()
 
     @property
-    def probe_barcodes(self) -> list[str]:
+    def probe_barcodes(self) -> dict[str, str]:
         raise NotImplementedError()
 
     @property
@@ -745,8 +746,8 @@ class VisiumFormatInfo(TechnologyFormatInfo):
 class VisiumHDFormatInfo(TechnologyFormatInfo):
 
     def __init__(self,
-                 space_ranger_path: Optional[str] = None,
-                 barcode_dir: Optional[str] = None,
+                 space_ranger_path: Optional[str | Path] = None,
+                 barcode_dir: Optional[str | Path] = None,
                  read1_length: Optional[int] = 43,
                  read2_length: Optional[int] = 50,
                  barcode_list: Optional[list[Path]] = None):
@@ -907,7 +908,7 @@ class VisiumHDFormatInfo(TechnologyFormatInfo):
         return False
 
     # Cell barcodes will be the 2um "binned" output
-    def make_barcode_string(self, cell_barcode: str, plex: int = 1, x_coord: Optional[int] = None, y_coord: Optional[int] = None, is_multiplexed: bool = False) -> str:
+    def make_barcode_string(self, cell_barcode: str, plex: str = "1", x_coord: Optional[int] = None, y_coord: Optional[int] = None, is_multiplexed: bool = False) -> str:
         return f"s_002um_{y_coord:05d}_{x_coord:05d}-{plex}"
 
     @property
@@ -919,7 +920,7 @@ class VisiumHDFormatInfo(TechnologyFormatInfo):
         raise NotImplementedError()
 
     @property
-    def probe_barcodes(self) -> list[str]:
+    def probe_barcodes(self) -> dict[str, str]:
         raise NotImplementedError()
 
     @property
@@ -1152,7 +1153,7 @@ class ProbeParser:
                  rhs_seqs: list[str],
                  names: list[str],
                  tech: TechnologyFormatInfo,
-                 probe_bcs: Optional[list[int]] = None,  # Indices of the probe barcodes corresponding to the sequences (1-indexed)
+                 probe_bcs: Optional[list[int | str]] = None,  # Indices of the probe barcodes corresponding to the sequences (1-indexed)
                  allow_indels: bool = False):
         self.lhs_seqs = lhs_seqs
         self.rhs_seqs = rhs_seqs
@@ -1196,7 +1197,8 @@ class ProbeParser:
             self.probe_bc_start = tech.probe_barcode_start
             self.probe_bc_length = tech.probe_barcode_length
             # self.probe_bc_trie = PrefixTrie([tech.probe_barcodes[i-1] for i in probe_bcs], allow_indels=allow_indels)
-            self.probe_bc_trie, self._probe_bc_trie_name = create_shared_trie([tech.probe_barcodes[i-1] for i in probe_bcs], allow_indels=allow_indels)
+            # Convert probe barcode indices/well IDs to sequences using the reverse mapping
+            self.probe_bc_trie, self._probe_bc_trie_name = create_shared_trie([tech._index_to_probe_barcodes[str(i)] for i in probe_bcs], allow_indels=allow_indels)
         else:
             self.probe_bc_start = None
             self.probe_bc_length = None
@@ -1433,7 +1435,7 @@ def maybe_gzip(file: Path | None, mode: Literal["r"] | Literal["w"] = "r"):
             return open(file, mode)
 
 
-def compile_flatfile(manifest_df: pd.DataFrame, probe_reads_file: str, barcode_list: list[str], plex: int, output: str):
+def compile_flatfile(manifest_df: pd.DataFrame, probe_reads_file: str, barcode_list: list[str], plex: str, output: str):
     """
     Flatten giftwrap data to a human readable tsv-based format.
     :param manifest_df: The manifest dataframe.
@@ -1636,7 +1638,7 @@ def sort_tsv_file(file: Path, columns: list[int], cores: int):
     df.to_csv(file, sep="\t", index=False, compression="gzip" if "gz" in file.suffix else None)
 
 
-def filter_h5_file_by_barcodes(input_file: Path, output_file: Path, barcodes_list: np.ndarray[str], pad_matrix: bool = True):
+def filter_h5_file_by_barcodes(input_file: Path, output_file: Path, barcodes_list: ArrayLike, pad_matrix: bool = True):
     """
     Given a counts h5 file and a list of barcodes, filter the barcodes to only include the ones in the list.
     :param input_file: The input h5 file.
@@ -1910,7 +1912,7 @@ def read_sparse_matrix(grp: h5py.Group, name: str) -> scipy.sparse.csr_matrix:
     return scipy.sparse.csr_matrix((matrix_grp['data'], matrix_grp['indices'], matrix_grp['indptr']), shape=shape)
 
 
-def read_h5_file(filename: str) -> ad.AnnData:
+def read_h5_file(filename: str | Path) -> ad.AnnData:
     """
     Read a generated h5 file and return an AnnData object.
     :param filename: The filename.
