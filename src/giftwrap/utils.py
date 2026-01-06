@@ -620,7 +620,8 @@ class FlexV2FormatInfo(TechnologyFormatInfo):
 
     def make_barcode_string(self, cell_barcode: str, plex: str = "1", x_coord: Optional[int] = None, y_coord: Optional[int] = None, is_multiplexed: bool = False) -> str:
         if is_multiplexed:
-            cell_barcode += f"-{plex}"
+            plex_seq = self._index_to_probe_barcodes[plex]
+            cell_barcode = f"{cell_barcode}{plex_seq}-1"  # v2 concats plex sequence directly to cell barcode
         return f"{cell_barcode}-1"
 
     @property
