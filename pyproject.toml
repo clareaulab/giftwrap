@@ -110,6 +110,7 @@ exclude = [
     "test_out",
     "*fastq*",
     "venv",
+    "*h5"
 ]
 
 [tool.hatch.build.targets.wheel]

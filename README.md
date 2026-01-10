@@ -196,7 +196,9 @@ gf = gw.read_h5_file("counts.1.filtered.h5")  # Load the gapfill data
 wta = gw.sp.join_with_wta(wta, gf)
 
 # Plot the data
-wta.pl.
+gw.sp.plot_genotypes(
+  wta, "probe name"
+)
 ```
 
 # Building
