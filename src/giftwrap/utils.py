@@ -1,3 +1,4 @@
+from Bio.Seq import reverse_complement
 from numpy.typing import ArrayLike
 import tempfile
 import warnings, os
@@ -278,6 +279,13 @@ class TechnologyFormatInfo(ABC):
         """
         raise NotImplementedError()
 
+    @property
+    def probe_barcode_R1(self) -> bool:
+        """
+        If true, the probe sample barcode is on R1 instead of R2.
+        """
+        return False
+
     @abstractmethod
     def probe_barcode_index(self, bc: str) -> int:
         """
@@ -502,6 +510,7 @@ class FlexV2FormatInfo(TechnologyFormatInfo):
     """
 
     def __init__(self,
+                 r1_demultiplex: bool = False,
                  barcode_dir: Optional[str | Path] = None,
                  read1_length: Optional[int] = 28,
                  read2_length: Optional[int] = 90,
@@ -513,7 +522,7 @@ class FlexV2FormatInfo(TechnologyFormatInfo):
         if barcode_list:
             barcodes = _parse_possible_barcodes(barcode_list)
             if barcodes is not None:
-                barcodes = barcodes.str[:16]  # Strip potential probe barcodes that are appended when multiplexed
+                barcodes = barcodes.str[:self.umi_start]  # Strip potential probe barcodes that are appended when multiplexed
         else:
             barcodes = None
         if barcodes is None:
@@ -541,6 +550,9 @@ class FlexV2FormatInfo(TechnologyFormatInfo):
         # Reverse the dict
         self._index_to_probe_barcodes = {v: k for k, v in self._probe_barcodes.items()}
 
+        # Store a flag for whether R1 should be demultiplexed for sample barcodes
+        self._r1_demultiplex = r1_demultiplex
+
     # Custom pickling for multiprocessing
     def __getstate__(self):
         state = dict()
@@ -550,6 +562,9 @@ class FlexV2FormatInfo(TechnologyFormatInfo):
         state['_read1_length'] = self._read1_length
         state['_read2_length'] = self._read2_length
         state['_barcode_dir'] = self._barcode_dir
+        state['_probe_barcodes'] = self._probe_barcodes
+        state['_index_to_probe_barcodes'] = self._index_to_probe_barcodes
+        state['_r1_demultiplex'] = self._r1_demultiplex
         return state
 
     def __setstate__(self, state):
@@ -606,7 +621,7 @@ class FlexV2FormatInfo(TechnologyFormatInfo):
 
     @property
     def probe_barcode_start(self) -> int:
-        return 0
+        return -1 if self._r1_demultiplex else 0
 
     @property
     def probe_barcode_length(self) -> int:
@@ -615,6 +630,10 @@ class FlexV2FormatInfo(TechnologyFormatInfo):
     @property
     def has_probe_barcode(self) -> bool:
         return True
+
+    @property
+    def probe_barcode_R1(self) -> bool:
+        return self._r1_demultiplex
 
     def probe_barcode_index(self, bc: str):
         return self._probe_barcodes[bc]
@@ -1156,7 +1175,8 @@ class ProbeParser:
                  names: list[str],
                  tech: TechnologyFormatInfo,
                  probe_bcs: Optional[list[int | str]] = None,  # Indices of the probe barcodes corresponding to the sequences (1-indexed)
-                 allow_indels: bool = False):
+                 allow_indels: bool = False,
+                 r1_demultiplex: bool = False):
         self.lhs_seqs = lhs_seqs
         self.rhs_seqs = rhs_seqs
         self.names = names
@@ -1196,12 +1216,14 @@ class ProbeParser:
         self.probe_bcs = probe_bcs
         self.has_probe_bc = tech.has_probe_barcode and probe_bcs is not None and len(probe_bcs) > 0
         if self.has_probe_bc:
+            self.r1_demultiplex = r1_demultiplex
             self.probe_bc_start = tech.probe_barcode_start
             self.probe_bc_length = tech.probe_barcode_length
             # self.probe_bc_trie = PrefixTrie([tech.probe_barcodes[i-1] for i in probe_bcs], allow_indels=allow_indels)
             # Convert probe barcode indices/well IDs to sequences using the reverse mapping
             self.probe_bc_trie, self._probe_bc_trie_name = create_shared_trie([tech._index_to_probe_barcodes[str(i)] for i in probe_bcs], allow_indels=allow_indels)
         else:
+            self.r1_demultiplex = False
             self.probe_bc_start = None
             self.probe_bc_length = None
 
@@ -1227,6 +1249,7 @@ class ProbeParser:
         state['probe_bc_start'] = self.probe_bc_start
         state['probe_bc_length'] = self.probe_bc_length
         state['has_probe_bc'] = self.has_probe_bc
+        state['r1_demultiplex'] = self.r1_demultiplex
         return state
 
     def __setstate__(self, state):
@@ -1319,7 +1342,7 @@ class ProbeParser:
                 constant_seq_end_pos += len(read2) - len(search_space)
                 rhs_end = constant_seq_start_pos - self.constant_seq_start
 
-                if self.has_probe_bc:
+                if self.has_probe_bc and not self.r1_demultiplex:
                     possible_probe_bc = read2[constant_seq_end_pos + self.probe_bc_start:constant_seq_end_pos + self.probe_bc_start + self.probe_bc_length]
                     if len(possible_probe_bc) == 0:
                         state.append(ReadProcessState.FILTERED_NO_PROBE_BARCODE)
@@ -1368,6 +1391,23 @@ class ProbeParser:
         probe_idx = possible_indices.pop()
 
         return probe_idx, gapfill, len(lhs), len(lhs) + rhs_start, probe_bc, state
+
+    @functools.lru_cache(maxsize=100)
+    def parse_probe_bc_R1(self, read1: str, max_mismatches: int) -> tuple[Optional[str], list[ReadProcessState]]:
+        possible_probe_bc = read1[self.probe_bc_start:self.probe_bc_start-self.probe_bc_length]
+        state = []
+        if len(possible_probe_bc) == 0:
+            state.append(ReadProcessState.FILTERED_NO_PROBE_BARCODE)
+            return None, state
+        possible_probe_bc = reverse_complement(possible_probe_bc)
+        probe_bc, probe_bc_corrections = self.probe_bc_trie.search(possible_probe_bc, self._compute_max_distance(len(possible_probe_bc), max_mismatches=max_mismatches))
+        if probe_bc is None:
+            if len(possible_probe_bc) < self.probe_bc_length:  # Try prefix search
+                probe_bc, probe_bc_start, match_len = self.probe_bc_trie.longest_prefix_match(possible_probe_bc, min_match_length=self.probe_bc_length//2, correction_budget=self._compute_max_distance(len(possible_probe_bc), max_mismatches=max_mismatches))
+            if probe_bc is None:
+                state.append(ReadProcessState.FILTERED_NO_PROBE_BARCODE)
+                return None, state
+        return probe_bc, state
 
 
 def read_barcodes(output_dir: Path) -> pd.DataFrame:
