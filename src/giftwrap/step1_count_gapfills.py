@@ -56,6 +56,15 @@ def process_reads(reads: list[tuple[tuple[str, str, str], tuple[str, str, str]]]
 
         states = states.copy()
 
+        if tech_info.has_probe_barcode and tech_info.probe_barcode_R1:
+            probe_bc, probe_bc_states = probe_parser.parse_probe_bc_R1(r1_seq, max_distance)
+            states.extend(probe_bc_states)
+            if probe_bc is None and not skip_constant_seq:
+                probe_idx = None  # Failed to parse probe barcode, so we consider this a failed read even if the probe sequence was correct
+                gap_seq = None
+                gap_start = None
+                gap_end = None
+
         if probe_idx is None:  # Failed to parse R2
             results.append(
                 (states, None)
@@ -210,7 +219,7 @@ def search_files(read1s, read2s, output_dir, tech_info,
     else:
         probe_bcs = None
     probe_parser = ProbeParser(
-        lhs_seqs, rhs_seqs, names, tech_info, probe_bcs, allow_indels
+        lhs_seqs, rhs_seqs, names, tech_info, probe_bcs, allow_indels, r1_demultiplex=tech_info.probe_barcode_R1
     )
 
     if unmapped_reads_prefix:
@@ -478,16 +487,20 @@ def run(probes,
 
     print("Searching for cell barcodes...", end="")
 
+    barcode_dir = None
     cellranger = shutil.which("cellranger")
     if cellranger is None:
         cellranger = shutil.which("spaceranger")
-    if cellranger is None:
-        barcode_dir = None
-    else:
+    if cellranger is not None:
         barcode_dir = Path(cellranger).parent / "lib" / "python" / "cellranger" / "barcodes"
+
+    if barcode_dir is None or not barcode_dir.exists():
+        # Try our internal barcodes directory
+        barcode_dir = Path(__file__).parent / "resources"
+        print(f"Warning: Cellranger barcodes directory not found: {barcode_dir}")
+        print("Falling back to default barcodes.")
         if not barcode_dir.exists():
-            print(f"Warning: Cellranger barcodes directory not found: {barcode_dir}")
-            print("Falling back to default barcodes.")
+            print("Error: Default barcodes directory still not found:", barcode_dir)
             barcode_dir = None
     print("Done!")
 
@@ -515,6 +528,15 @@ def run(probes,
         )
     elif technology == 'Flex-v2':
         tech_info = FlexV2FormatInfo(
+            False,
+            barcode_dir,
+            r1_len,
+            r2_len,
+            cellranger_output,
+        )
+    elif technology == 'Flex-v2-R1':
+        tech_info = FlexV2FormatInfo(
+            True,
             barcode_dir,
             r1_len,
             r2_len,
@@ -635,7 +657,7 @@ def main():
         required=False,
         type=str,
         default="Flex",
-        choices=["Flex", 'Flex-v2', 'VisiumHD', "Visium-v1", "Visium-v2", 'Visium-v3', 'Visium-v4', 'Visium-v5', "Custom"],
+        choices=["Flex", 'Flex-v2', 'Flex-v2-R1', 'VisiumHD', "Visium-v1", "Visium-v2", 'Visium-v3', 'Visium-v4', 'Visium-v5', "Custom"],
         help="The technology used to generate the gap-filling probes. Default is Flex. If 'Custom', you must provide the --tech_def argument."
     )
     parser.add_argument(
