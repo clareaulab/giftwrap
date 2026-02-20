@@ -13,8 +13,8 @@ GIFTwrap uses specific file formats and structures for its inputs and outputs. B
 | Column Name | Description | Required? |
 |-------------|-------------|-----------|
 | `name` | The name of the probe. By convention this should follow the format of: `gene_name HGSVc`. For example: `TP53 c.215G>A`. | Yes |
-| `lhs_sequence` | The left-hand side sequence of the probe, this is the reverse complement of the right side of your gene sequence of interest. | Yes |
-| `rhs_sequence` | The right-hand side sequence of the probe, this is the reverse complement of the left side of your gene sequence of interest. | Yes |
+| `lhs_probe` | The left-hand side sequence of the probe, this is the reverse complement of the right side of your gene sequence of interest. | Yes |
+| `rhs_probe` | The right-hand side sequence of the probe, this is the reverse complement of the left side of your gene sequence of interest. | Yes |
 | `gap_probe_sequence` | The expected "mutant" sequence of the gapfill sequenced (i.e. the reverse complement of the region of interest). This is only used to annotate outputs and is not involved in default analysis. | No |
 | `original_gap_probe_sequence` | The "wild-type" sequence of the gapfill probe (i.e. the reverse complement of the region of interest), this is only used to annotate outputs and is not involved in default analysis. | No |
 | `gene` | The gene name that is associated with the probe. If not provided, GIFTwrap will attempt to infer this from the `name` column. | No |
@@ -74,7 +74,7 @@ The final collected output is a counts file which is a custom HDF5 file format i
     - `FILTERED_NO_RHS`: The number of reads that were filtered out due to no valid right-hand side probe.
     - `FILTERED_NO_CONSTANT`: The number of reads that were filtered out due to no valid constant sequence region. Only applicable for Flex.
 
-* **counts.N.summary.csv**: Summary statistics about the final (filtered if available) output of the pipeline.
+* **counts.N.summary.tsv**: Summary statistics about the final (filtered if available) output of the pipeline.
     - `TOTAL_CELLS`: The total number of cells in the output.
     - `GAPFILL_CONTAINING_CELLS`: The number of cells that contained at least one gapfill read.
     - `UMIS_PER_CELL_MEAN`: The mean number of UMIs per cell.

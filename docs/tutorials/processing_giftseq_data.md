@@ -59,13 +59,13 @@ The probeset file is either comma-separated, tab-separated, or an excel file des
 | Column Name | Description | Required? |
 |-------------|-------------|-----------|
 | `name` | The name of the probe. By convention this should follow the format of: `gene_name HGSVc`. For example: `TP53 c.215G>A`. | Yes |
-| `lhs_sequence` | The left-hand side sequence of the probe, this is the reverse complement of the right side of your gene sequence of interest. | Yes |
-| `rhs_sequence` | The right-hand side sequence of the probe, this is the reverse complement of the left side of your gene sequence of interest. | Yes |
+| `lhs_probe` | The left-hand side sequence of the probe, this is the reverse complement of the right side of your gene sequence of interest. | Yes |
+| `rhs_probe` | The right-hand side sequence of the probe, this is the reverse complement of the left side of your gene sequence of interest. | Yes |
 | `gap_probe_sequence` | The expected "mutant" sequence of the gapfill sequenced (i.e. the reverse complement of the region of interest). This is only used to annotate outputs and is not involved in default analysis. | No |
 | `original_gap_probe_sequence` | The "wild-type" sequence of the gapfill probe (i.e. the reverse complement of the region of interest), this is only used to annotate outputs and is not involved in default analysis. | No |
 | `gene` | The gene name that is associated with the probe. If not provided, GIFTwrap will attempt to infer this from the `name` column. | No |
 
-Note that the name, lhs_sequence, and rhs_sequence columns are required and the additional columns are optional but can aid in downstream analysis. The probeset file is specified using the `--probes` option, for example:
+Note that the name, lhs_probe, and rhs_probe columns are required and the additional columns are optional but can aid in downstream analysis. The probeset file is specified using the `--probes` option, for example:
 
 <!-- termynal -->
 ```console
@@ -103,11 +103,11 @@ As is common to Flex-based experiments, GIFTwrap supports multiplexed data by sp
 $ giftwrap --multiplex 16 ...
 ```
 
-2. **Specifying the probe barcode**: Instead of processing all multiplexed data at once, by specifying `--barcode` to a specific 1-indexed id for the probe barcode, GIFTwrap will automatically ignore reads that do not match the given probe barcode. Note that you will notice that many reads do not map, this is expected due to the skipping of reads that do not match the given probe barcode. An example of this option is:
+2. **Specifying the probe barcode**: Instead of processing all multiplexed data at once, by specifying `--barcode` to a named barcode value (e.g. `BC01` for Flex v1, `A01` for Flex-v2), GIFTwrap will automatically ignore reads that do not match the given probe barcode. This flag can be passed multiple times to include several barcodes. When omitted, it defaults to `BC01` for Flex v1 or `A01` for Flex-v2. Note that you will notice that many reads do not map, this is expected due to the skipping of reads that do not match the given probe barcode. An example of this option is:
 
 <!-- termynal -->
 ```console
-$ giftwrap --barcode 1 ...
+$ giftwrap --barcode BC01 ...
 ```
 
 ### Running GIFTwrap on VisiumHD
@@ -121,6 +121,19 @@ To perform VisiumHD processing, you must specify the `--technology` option as `V
 <!-- termynal -->
 ```console
 $ giftwrap --technology VisiumHD --cores 0 ...
+```
+
+### Running GIFTwrap on 10x Chromium Flex v2
+GIFTwrap supports 10x Chromium Flex v2 kits via two technology options:
+
+- **`Flex-v2`**: Use this for standard 10x Chromium Flex v2 experiments where the sample barcode is read on R2.
+- **`Flex-v2-R1`**: Use this variant when the sample barcode is read on R1 (e.g. certain library configurations).
+
+The default barcode for Flex-v2 is `A01` (rather than `BC01` used by Flex v1). To specify it explicitly:
+
+<!-- termynal -->
+```console
+$ giftwrap --technology Flex-v2 --barcode A01 --cores 0 ...
 ```
 
 ### Dealing with Experimental Design Complexities
@@ -183,7 +196,7 @@ If you are using a non-supported single-cell protocol, follow the [Extending GIF
 ### Additional Options
 Here are the remaining options that can be used with the `giftwrap` command:
 
-* `---flexible_start_mapping <N>`: If specified, GIFTwrap will allow for some insertion/deletions related to technical artifacts in sequencing at the start of R2.
+* `--flexible_start_mapping <N>`: If specified, GIFTwrap will allow for some insertion/deletions related to technical artifacts in sequencing at the start of R2.
 
 * `--overwrite`: If specified, GIFTwrap will overwrite any existing output files in the output directory. This is useful if you want to re-run the pipeline without having to delete the output directory first.
 
