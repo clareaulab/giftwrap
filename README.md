@@ -15,15 +15,15 @@ you can replace `pip` with `pipx` or `uvx` in the following commands.
 
 Recommended installation:
 ```bash
-pip install giftwrap[all]
+pip install giftwrap-sc[all]
 ```
 This installs the requirements for spatial data processing and basic summary analyses of paired WTA data.
 
 Alternatively, you can install with fewer dependencies as follows:
 ```bash
-pip install giftwrap[analysis]  # For additional basic summary analysis
-pip install giftwrap[spatial]  # For spatial counts processing
-pip install giftwrap  # Minimal installation
+pip install giftwrap-sc[analysis]  # For additional basic summary analysis
+pip install giftwrap-sc[spatial]  # For spatial counts processing
+pip install giftwrap-sc  # Minimal installation
 ```
 
 # Command Line Usage
@@ -47,11 +47,11 @@ The pipeline can also be run with the following arguments:
 - `--cores`: The number of cores to use for processing. Note: VisiumHD has a high complexity cell barcoding scheme, making its counts more memory-bottlenecked than CPU bottlenecked.
 - `-wta`: The path to either the filtered_feature_bc_matrix.h5 or the sample_filtered_feature_bc_matrix folder from CellRanger for the WTA panel.
 - `-f`: If passed, overwrite files instead of exiting if they already exist.
-- `--technology`: The technology. I.e. Flex/VisiumHD. Default is Flex.
+- `--technology`: The sequencing technology. Choices: `Flex` (10x Chromium Flex v1, default), `Flex-v2` (10x Chromium Flex v2), `Flex-v2-R1` (Flex v2 with sample barcode on R1), `VisiumHD`, `Visium-v1`, `Visium-v2`, `Visium-v3`, `Visium-v4`, `Visium-v5`, `Custom` (see Technology Definition below).
 - `--tech_def`: Custom technology definition path. See below for more details.
 - `-r1` / `-r2`: Instead of specifying a fastq prefix to search with `--project`, provide the specific R1 and R2 files.
 - `--multiplex`: If the fastq files are multiplexed, this flag should be set with the number of expected samples.
-- `--barcode`: Similar to `--multiplex`, but only the provided barcode is processed (remaining ignored).
+- `--barcode`: The barcode(s) to use for the Flex run. Can be provided multiple times. Mutually exclusive with `--multiplex`. Defaults to `BC01` for Flex v1 or `A01` for Flex-v2 when omitted.
 
 Additionally each step can be run individually with the following commands:
 - `giftwrap-count`
@@ -70,7 +70,7 @@ giftwrap-generate-tech > tech_def.py
 
 You can then modify the python file as needed. To use the custom technology definition you must pass the following 
 arguments to the `giftwrap` or `giftwrap-count` commands:
-- `--technology Custom`: Specifies a custom technology defintiion
+- `--technology Custom`: Specifies a custom technology definition
 - `--tech_def path/to/tech_def.py`: The path to your custom technology definition file.
 
 # Analyzing processed GIFT-seq data
@@ -100,7 +100,7 @@ quality control:
     - `FILTERED_NO_RHS`: The number of reads that were filtered out due to no valid right-hand side probe.
     - `FILTERED_NO_CONSTANT`: The number of reads that were filtered out due to no valid constant sequence region. Only applicable for Flex.
 
-* `counts.N.summary.csv`: Summary statistics about the final (filtered if available) output of the pipeline.
+* `counts.N.summary.tsv`: Summary statistics about the final (filtered if available) output of the pipeline.
     - `TOTAL_CELLS`: The total number of cells in the output.
     - `GAPFILL_CONTAINING_CELLS`: The number of cells that contained at least one gapfill read.
     - `UMIS_PER_CELL_MEAN`: The mean number of UMIs per cell.
