@@ -1322,7 +1322,7 @@ class ProbeParser:
         probe_bc = ""
         rhs_end = None
         if self.has_constant_seq:
-            search_space = read2[max(self.rhs_lens) + self.constant_seq_start:]
+            search_space = read2[min(self.rhs_lens) + self.constant_seq_start:]
             # Attempt to find the constant sequence
             found_string, corrections, constant_seq_start_pos, constant_seq_end_pos = self.constant_seq_trie.search_substring(search_space, self._compute_max_distance(len(self.constant_seq), max_mismatches))
 
