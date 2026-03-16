@@ -37,6 +37,9 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
     elif final_output.exists():
         final_output.unlink()
 
+    # Ensure plex is a string for consistent processing
+    plex = str(plex)
+
     # # Replace the barcode -plex with {probe bc}-1 to match cellranger output
     # if multiplex:
     #     barcodes_df.barcode = barcodes_df.barcode.str.replace(f"-{plex}", f"{plex}-1")
