@@ -210,14 +210,16 @@ def search_files(read1s, read2s, output_dir, tech_info,
     lhs_seqs = probes['lhs_probe'].tolist()
     rhs_seqs = probes['rhs_probe'].tolist()
     names = probes['name'].tolist()
+    probe_bc_provided = True
     if multiplex > 1:
         # probe_bcs = list(range(1, multiplex+1))
         # Switch to using all probe_bcs
         probe_bcs = list(range(1, len(tech_info.probe_barcodes) + 1))
-    elif barcodes:
+    elif barcodes is not None and len(barcodes) > 0:
         probe_bcs = barcodes
     else:
         probe_bcs = None
+        probe_bc_provided = False
     probe_parser = ProbeParser(
         lhs_seqs, rhs_seqs, names, tech_info, probe_bcs, allow_indels, r1_demultiplex=tech_info.probe_barcode_R1
     )
@@ -262,7 +264,8 @@ def search_files(read1s, read2s, output_dir, tech_info,
                         total += 1
 
                         probe_ids_encountered.add(data.probe_id)
-                        if tech_info.has_probe_barcode:
+
+                        if probe_bc_provided and tech_info.has_probe_barcode:
                             probe_bc_id = tech_info.probe_barcode_index(data.probe_barcode)
                             probe_bc_label = probe_bc_id
                             if hasattr(tech_info, "probe_barcode_name"):
