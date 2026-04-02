@@ -345,7 +345,7 @@ def make_pdf_report(output_file, gapfill_adata, adata, probe_reads, filter_cutof
             plt.close(fig)
 
 
-def summarize_counts(input: Path, summary_output: Path, summary_pdf_output: Path, counts_output: Path, flattened_counts_output: Path, cellranger_output: Optional[Path], flatten: bool, reads_per_gapfill: int, probe_bc: int):
+def summarize_counts(input: Path, summary_output: Path, summary_pdf_output: Path, counts_output: Path, flattened_counts_output: Path, cellranger_output: Optional[Path], flatten: bool, reads_per_gapfill: int, probe_bc: str):
     print("Summarizing counts file ", input, " to ", summary_output, ", ", summary_pdf_output, ", and ", counts_output, " (This will take awhile)...")
 
     # Read cellranger to an anndata file if provided
@@ -466,7 +466,10 @@ def run(output, overwrite, cellranger_output, flatten, reads_per_gapfill):
         if file.is_file() and file.name.startswith("counts.") and file.name.endswith(".h5") and not file.name.endswith(".filtered.h5"):
             counts_files.append(file)
     # Sort by the number in the filename
-    counts_files.sort(key=lambda x: int(x.name.split(".")[1]))
+    try:
+        counts_files.sort(key=lambda x: int(x.name.split(".")[1]))
+    except ValueError:
+        pass  # non-integer plex names, no meaningful sort order
     print(f"Found {len(counts_files)} files.")
 
     if has_cellranger and len(counts_files) != len(cellranger_output):
@@ -483,7 +486,7 @@ def run(output, overwrite, cellranger_output, flatten, reads_per_gapfill):
         summary_pdf_output_file = output / counts_file.name.replace(".h5", ".summary.pdf")
         h5_output_file = output / counts_file.name.replace(".h5", ".filtered.h5")
         flattened_output_file = output / counts_file.name.replace(".h5", ".filtered.tsv.gz").replace('counts.', 'flat_counts.')
-        probe_bc = int(counts_file.name.split(".")[1])
+        probe_bc = counts_file.name.split(".")[1]
 
         if summary_output_file.exists() or h5_output_file.exists():
             if overwrite:
