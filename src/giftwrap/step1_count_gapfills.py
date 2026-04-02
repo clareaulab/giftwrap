@@ -151,9 +151,8 @@ def save_unmapped_data(prefix, unmapped: list[tuple[
     prefix = Path(prefix+"_temp")
     r1_dir = prefix / "R1"
     r2_dir = prefix / "R2"
-    if not prefix.exists():
-        r1_dir.mkdir(parents=True, exist_ok=True)
-        r2_dir.mkdir(parents=True, exist_ok=True)
+    r1_dir.mkdir(parents=True, exist_ok=True)
+    r2_dir.mkdir(parents=True, exist_ok=True)
 
     # Get arbitrary random name
     r1_file = None
@@ -180,7 +179,8 @@ def collect_unmapped_fastq(unmapped_reads_prefix):
         return
     print("Collecting unmapped reads...", end="")
     temp_dir = Path(unmapped_reads_prefix+"_temp")
-    assert temp_dir.exists()
+    if not temp_dir.exists():
+        return
     r1_dir = temp_dir / "R1"
     r2_dir = temp_dir / "R2"
     assert r1_dir.exists() and r2_dir.exists()

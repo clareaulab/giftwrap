@@ -1840,7 +1840,7 @@ def filter_h5_file_by_barcodes(input_file: Path, output_file: Path, barcodes_lis
 
 def filter_h5_file_by_pcr_dups(probe_reads_file: Path, counts_input: Path,
                                counts_output: Path, reads_per_gapfill: int,
-                               probe_bc: int):
+                               probe_bc: str):
     """
     Filter an h5 file by removing UMIs with low PCR duplicate counts. This function rebuilds the count matrices
     using only the UMIs that meet the specified threshold.
@@ -1872,7 +1872,7 @@ def filter_h5_file_by_pcr_dups(probe_reads_file: Path, counts_input: Path,
                     continue
 
                 cell_idx, probe_idx, probe_barcode, _, _, umi_count = parts[:6]
-                if int(probe_barcode) != probe_bc:
+                if probe_barcode != probe_bc:
                     continue
                 cell_idx = int(cell_idx)
                 probe_idx = int(probe_idx)
