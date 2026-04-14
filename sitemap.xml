@@ -2,154 +2,154 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://clareaulab.github.io/giftwrap/</loc>
-         <lastmod>2025-10-22</lastmod>
+         <lastmod>2026-04-14</lastmod>
     </url>
     <url>
          <loc>https://clareaulab.github.io/giftwrap/contributing/</loc>
-         <lastmod>2025-10-22</lastmod>
+         <lastmod>2026-04-14</lastmod>
     </url>
     <url>
          <loc>https://clareaulab.github.io/giftwrap/file_formats/</loc>
-         <lastmod>2025-10-22</lastmod>
+         <lastmod>2026-04-14</lastmod>
     </url>
     <url>
          <loc>https://clareaulab.github.io/giftwrap/installation/</loc>
-         <lastmod>2025-10-22</lastmod>
+         <lastmod>2026-04-14</lastmod>
     </url>
     <url>
          <loc>https://clareaulab.github.io/giftwrap/api/</loc>
-         <lastmod>2025-10-22</lastmod>
+         <lastmod>2026-04-14</lastmod>
     </url>
     <url>
          <loc>https://clareaulab.github.io/giftwrap/cli/</loc>
-         <lastmod>2025-10-22</lastmod>
+         <lastmod>2026-04-14</lastmod>
     </url>
     <url>
          <loc>https://clareaulab.github.io/giftwrap/cli/giftwrap/</loc>
-         <lastmod>2025-10-22</lastmod>
+         <lastmod>2026-04-14</lastmod>
     </url>
     <url>
          <loc>https://clareaulab.github.io/giftwrap/cli/giftwrap_collect/</loc>
-         <lastmod>2025-10-22</lastmod>
+         <lastmod>2026-04-14</lastmod>
     </url>
     <url>
          <loc>https://clareaulab.github.io/giftwrap/cli/giftwrap_convert_probes/</loc>
-         <lastmod>2025-10-22</lastmod>
+         <lastmod>2026-04-14</lastmod>
     </url>
     <url>
          <loc>https://clareaulab.github.io/giftwrap/cli/giftwrap_correct_gapfill/</loc>
-         <lastmod>2025-10-22</lastmod>
+         <lastmod>2026-04-14</lastmod>
     </url>
     <url>
          <loc>https://clareaulab.github.io/giftwrap/cli/giftwrap_correct_umis/</loc>
-         <lastmod>2025-10-22</lastmod>
+         <lastmod>2026-04-14</lastmod>
     </url>
     <url>
          <loc>https://clareaulab.github.io/giftwrap/cli/giftwrap_count/</loc>
-         <lastmod>2025-10-22</lastmod>
+         <lastmod>2026-04-14</lastmod>
     </url>
     <url>
          <loc>https://clareaulab.github.io/giftwrap/cli/giftwrap_generate_r/</loc>
-         <lastmod>2025-10-22</lastmod>
+         <lastmod>2026-04-14</lastmod>
     </url>
     <url>
          <loc>https://clareaulab.github.io/giftwrap/cli/giftwrap_generate_tech/</loc>
-         <lastmod>2025-10-22</lastmod>
+         <lastmod>2026-04-14</lastmod>
     </url>
     <url>
          <loc>https://clareaulab.github.io/giftwrap/cli/giftwrap_revert_probes/</loc>
-         <lastmod>2025-10-22</lastmod>
+         <lastmod>2026-04-14</lastmod>
     </url>
     <url>
          <loc>https://clareaulab.github.io/giftwrap/cli/giftwrap_summarize/</loc>
-         <lastmod>2025-10-22</lastmod>
+         <lastmod>2026-04-14</lastmod>
     </url>
     <url>
          <loc>https://clareaulab.github.io/giftwrap/tutorials/</loc>
-         <lastmod>2025-10-22</lastmod>
+         <lastmod>2026-04-14</lastmod>
     </url>
     <url>
          <loc>https://clareaulab.github.io/giftwrap/tutorials/analyzing_giftseq_data/</loc>
-         <lastmod>2025-10-22</lastmod>
+         <lastmod>2026-04-14</lastmod>
     </url>
     <url>
          <loc>https://clareaulab.github.io/giftwrap/tutorials/extending_giftwrap/</loc>
-         <lastmod>2025-10-22</lastmod>
+         <lastmod>2026-04-14</lastmod>
     </url>
     <url>
          <loc>https://clareaulab.github.io/giftwrap/tutorials/getting_started/</loc>
-         <lastmod>2025-10-22</lastmod>
+         <lastmod>2026-04-14</lastmod>
     </url>
     <url>
          <loc>https://clareaulab.github.io/giftwrap/tutorials/imputation/</loc>
-         <lastmod>2025-10-22</lastmod>
+         <lastmod>2026-04-14</lastmod>
     </url>
     <url>
          <loc>https://clareaulab.github.io/giftwrap/tutorials/processing_giftseq_data/</loc>
-         <lastmod>2025-10-22</lastmod>
+         <lastmod>2026-04-14</lastmod>
     </url>
     <url>
          <loc>https://clareaulab.github.io/giftwrap/tutorials/seurat_integration/</loc>
-         <lastmod>2025-10-22</lastmod>
+         <lastmod>2026-04-14</lastmod>
     </url>
     <url>
          <loc>https://clareaulab.github.io/giftwrap/tutorials/spatial_giftseq/</loc>
-         <lastmod>2025-10-22</lastmod>
+         <lastmod>2026-04-14</lastmod>
     </url>
     <url>
          <loc>https://clareaulab.github.io/giftwrap/reference/giftwrap/</loc>
-         <lastmod>2025-10-22</lastmod>
+         <lastmod>2026-04-14</lastmod>
     </url>
     <url>
          <loc>https://clareaulab.github.io/giftwrap/reference/giftwrap/analysis/</loc>
-         <lastmod>2025-10-22</lastmod>
+         <lastmod>2026-04-14</lastmod>
     </url>
     <url>
          <loc>https://clareaulab.github.io/giftwrap/reference/giftwrap/analysis/plots/</loc>
-         <lastmod>2025-10-22</lastmod>
+         <lastmod>2026-04-14</lastmod>
     </url>
     <url>
          <loc>https://clareaulab.github.io/giftwrap/reference/giftwrap/analysis/preprocess/</loc>
-         <lastmod>2025-10-22</lastmod>
+         <lastmod>2026-04-14</lastmod>
     </url>
     <url>
          <loc>https://clareaulab.github.io/giftwrap/reference/giftwrap/analysis/spatial/</loc>
-         <lastmod>2025-10-22</lastmod>
+         <lastmod>2026-04-14</lastmod>
     </url>
     <url>
          <loc>https://clareaulab.github.io/giftwrap/reference/giftwrap/analysis/tools/</loc>
-         <lastmod>2025-10-22</lastmod>
+         <lastmod>2026-04-14</lastmod>
     </url>
     <url>
          <loc>https://clareaulab.github.io/giftwrap/reference/giftwrap/misc_scripts/</loc>
-         <lastmod>2025-10-22</lastmod>
+         <lastmod>2026-04-14</lastmod>
     </url>
     <url>
          <loc>https://clareaulab.github.io/giftwrap/reference/giftwrap/pipeline/</loc>
-         <lastmod>2025-10-22</lastmod>
+         <lastmod>2026-04-14</lastmod>
     </url>
     <url>
          <loc>https://clareaulab.github.io/giftwrap/reference/giftwrap/step1_count_gapfills/</loc>
-         <lastmod>2025-10-22</lastmod>
+         <lastmod>2026-04-14</lastmod>
     </url>
     <url>
          <loc>https://clareaulab.github.io/giftwrap/reference/giftwrap/step2_correct_umis/</loc>
-         <lastmod>2025-10-22</lastmod>
+         <lastmod>2026-04-14</lastmod>
     </url>
     <url>
          <loc>https://clareaulab.github.io/giftwrap/reference/giftwrap/step3_correct_gapfill/</loc>
-         <lastmod>2025-10-22</lastmod>
+         <lastmod>2026-04-14</lastmod>
     </url>
     <url>
          <loc>https://clareaulab.github.io/giftwrap/reference/giftwrap/step4_collect_counts/</loc>
-         <lastmod>2025-10-22</lastmod>
+         <lastmod>2026-04-14</lastmod>
     </url>
     <url>
          <loc>https://clareaulab.github.io/giftwrap/reference/giftwrap/step5_summarize_counts/</loc>
-         <lastmod>2025-10-22</lastmod>
+         <lastmod>2026-04-14</lastmod>
     </url>
     <url>
          <loc>https://clareaulab.github.io/giftwrap/reference/giftwrap/utils/</loc>
-         <lastmod>2025-10-22</lastmod>
+         <lastmod>2026-04-14</lastmod>
     </url>
 </urlset>
