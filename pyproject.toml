@@ -18,7 +18,7 @@ classifiers = [
 ]
 keywords = ["GIFT-seq", "gapfill"]
 
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"
 dependencies = [
     "biopython>=1.85",
     "scipy>=1.15",
