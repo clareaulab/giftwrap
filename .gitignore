@@ -325,4 +325,4 @@ agents/*
 CLAUDE.md
 work/*
 .nextflow*
-giftwrap-sc_0.4.1.sif
+*.sif
