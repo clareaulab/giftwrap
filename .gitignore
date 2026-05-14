@@ -326,3 +326,4 @@ CLAUDE.md
 work/*
 .nextflow*
 *.sif
+results/*
