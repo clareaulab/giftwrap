@@ -30,7 +30,8 @@ def process_reads(reads: list[tuple[tuple[str, str, str], tuple[str, str, str]]]
                   max_distance: int,
                   skip_constant_seq: bool,
                   unmapped_reads_prefix: Optional[str],
-                  flexible_start: bool) -> list[tuple[list[ReadProcessState], Optional[ReadData]]]:
+                  flexible_start: bool,
+                  max_expected_gap: int) -> list[tuple[list[ReadProcessState], Optional[ReadData]]]:
     unmapped = []
     results = []
     for (r1, r2) in reads:
@@ -51,7 +52,7 @@ def process_reads(reads: list[tuple[tuple[str, str, str], tuple[str, str, str]]]
         r2_quality = r2_quality[:r2_len]
 
         probe_idx, gap_seq, gap_start, gap_end, probe_bc, states = probe_parser.parse_probe(
-            r2_seq, max_distance, skip_constant_seq, flexible_start
+            r2_seq, max_distance, skip_constant_seq, flexible_start, max_expected_gap
         )
 
         states = states.copy()
@@ -204,7 +205,7 @@ def search_files(read1s, read2s, output_dir, tech_info,
                  cores=1, n_reads_per_batch=1_000_000, max_distance=2,
                  multiplex=1, barcodes: Optional[list[int | str]] = None, allow_indels=False,
                  skip_constant_seq=False, unmapped_reads_prefix=None,
-                 flexible_start=False):
+                 flexible_start=False, max_expected_gap=0):
     probes = read_manifest(output_dir)
 
     lhs_seqs = probes['lhs_probe'].tolist()
@@ -304,7 +305,8 @@ def search_files(read1s, read2s, output_dir, tech_info,
                                       max_distance=max_distance,
                                       skip_constant_seq=skip_constant_seq,
                                       unmapped_reads_prefix=unmapped_reads_prefix,
-                                      flexible_start=flexible_start),
+                                      flexible_start=flexible_start,
+                                      max_expected_gap=max_expected_gap),
                     batch
                 )
                 if last_job is not None:  # Output the previous run, then continue reading the file while the next batch is being processed
@@ -337,7 +339,7 @@ def search_files(read1s, read2s, output_dir, tech_info,
     print(f"{total} reads extracted.")
 
 
-def build_manifest(probes, output: Path, overwrite, allow_any_combination, trim_probes):
+def build_manifest(probes, output: Path, overwrite, allow_any_combination, trim_probes) -> int:
     print("Indexing probes...", end="")
     if output.exists():
         if overwrite:
@@ -380,6 +382,7 @@ def build_manifest(probes, output: Path, overwrite, allow_any_combination, trim_
 
         print(f"{(~df['was_defined']).sum()} decoy pairings added.")
 
+    max_expected_gap = 0
     if trim_probes > 0:
         print("Trimming probes to an expected length of", trim_probes)
         for i, row in list(df.iterrows()):
@@ -395,6 +398,8 @@ def build_manifest(probes, output: Path, overwrite, allow_any_combination, trim_
                 gap_length = len(gap_probe_sequence)
             else:
                 gap_length = max(len(original_gap_probe_sequence), len(gap_probe_sequence))
+
+            max_expected_gap = gap_length
 
             to_trim_from_rhs = trim_probes - gap_length - len(row['lhs_probe'])
             if to_trim_from_rhs < 0:
@@ -412,6 +417,8 @@ def build_manifest(probes, output: Path, overwrite, allow_any_combination, trim_
 
     # Write the manifest to the output directory
     df.to_csv(output / "manifest.tsv", index=False, sep="\t")
+
+    return max_expected_gap
 
 
 def run(probes,
@@ -435,7 +442,8 @@ def run(probes,
         allow_any_combination,
         unmapped_reads_prefix,
         cellranger_output,
-        flexible_start):
+        flexible_start,
+        max_expected_gap):
     barcodes = barcodes or []
     if (read1 == read2 == project) and project is None:
         raise AssertionError("At least one of the read1, read2, or project arguments must be provided.")
@@ -564,13 +572,16 @@ def run(probes,
         )
     print(f"{tech_info.n_barcodes} cell barcodes found.")
 
-    build_manifest(probes, output, overwrite, allow_any_combination, trim_probes)
+    computed_max_expected_gap = build_manifest(probes, output, overwrite, allow_any_combination, trim_probes)
+
+    if max_expected_gap < 0:
+        max_expected_gap = computed_max_expected_gap
 
     search_files(read1s, read2s, output, tech_info,
                  cores=cores, n_reads_per_batch=n_reads_per_batch, max_distance=max_distance,
                  multiplex=multiplex, barcodes=barcodes, allow_indels=allow_indels,
                  skip_constant_seq=skip_constant_seq, unmapped_reads_prefix=unmapped_reads_prefix,
-                 flexible_start=flexible_start)
+                 flexible_start=flexible_start, max_expected_gap=max_expected_gap)
     exit(0)
 
 
@@ -729,6 +740,15 @@ def main():
         help="Path to either the filtered_feature_bc_matrix.h5 or the sample_filtered_feature_bc_matrix folder from CellRanger. "
              "Can be specified multiple times to merge multiple samples if multiplex (in order of provided barcodes)."
     )
+    parser.add_argument(
+        "--expected_gap_length",
+        type=int,
+        required=False,
+        default=-1,
+        help="Override the computed expected gap length. If not provided, the gap length will attempt to be inferred from the "
+             "expected gap sequence in the probe inputs file. This value is used to allow for more lenient parsing when the R2 "
+             "length is not enough to fully sequence the RHS of all probes."
+    )
 
     args = parser.parse_args()
 
@@ -754,7 +774,8 @@ def main():
         args.allow_any_combination,
         args.unmapped_reads,
         args.cellranger_output,
-        args.flexible_start_mapping
+        args.flexible_start_mapping,
+        args.expected_gap_length
     )
 
 

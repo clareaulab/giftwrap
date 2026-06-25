@@ -1269,13 +1269,16 @@ class ProbeParser:
     def parse_probe(self, read2: str,
                     max_mismatches: int,
                     skip_constant_seq: bool = False,
-                    flexible_start: bool = False) -> tuple[Optional[int], Optional[int], Optional[int], Optional[str], Optional[str], list[ReadProcessState]]:
+                    flexible_start: bool = False,
+                    max_expected_gap: int = 0) -> tuple[Optional[int], Optional[int], Optional[int], Optional[str], Optional[str], list[ReadProcessState]]:
         """
         From the given read2 sequence, parse the probe, gapfill, probe bc, and process states.
         :param read2: The R2 sequence to parse.
         :param max_mismatches: The maximum number of mismatches to allow per 10bp.
         :param skip_constant_seq: If True, do not filter out reads that do not have the constant sequence.
         :param flexible_start: If True, allow for flexible start positions for the LHS sequence (i.e. not anchored to the start of the read).
+        :param max_expected_gap: The maximum expected gap between LHS and RHS, used to handle cases where the R2 length
+            is too short to fully capture the RHS sequence.
         :return: The probe index, gapfill sequence, gapfill_start, gapfill_end, probe barcode, and process states.
         """
         state = [ReadProcessState.TOTAL_READS]
@@ -1361,7 +1364,7 @@ class ProbeParser:
         read2 = read2[:rhs_end]
 
         # Short circuit cases:
-        if len(read2) < min(self.rhs_lens):  # Impossible to have the full RHS
+        if len(read2) < (min(self.rhs_lens) + max_expected_gap):  # Unlikely to have the full RHS
             # Search for the RHS with a prefix match
             rhs, rhs_start, match_len = self.rhs_trie.longest_prefix_match(read2, min_match_length=min(self.rhs_lens)//2, correction_budget=self._compute_max_distance(max(self.rhs_lens), max_mismatches))
             if rhs is None:

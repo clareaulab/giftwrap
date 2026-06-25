@@ -187,6 +187,15 @@ def main():
         help="If set, we no longer assume that the R2 read starts with the LHS probe and that there may be an insertion that would need to be trimmed."
     )
     parser.add_argument(
+        "--expected_gap_length",
+        type=int,
+        required=False,
+        default=-1,
+        help="Override the computed expected gap length. If not provided, the gap length will attempt to be inferred from the "
+             "expected gap sequence in the probe inputs file. This value is used to allow for more lenient parsing when the R2 "
+             "length is not enough to fully sequence the RHS of all probes."
+    )
+    parser.add_argument(
         "--reads_per_gapfill",
         required=False,
         type=int,
@@ -260,6 +269,7 @@ def main():
             + (['--skip_constant_seq'] if skip_constant_seq else [])
             + (['--allow_any_combination'] if args.allow_any_combination else [])
             + (['--unmapped_reads', args.unmapped_reads] if args.unmapped_reads is not None else [])
+            + (['--expected_gap_length', str(args.expected_gap_length)] if args.expected_gap_length >= 0 else [])
             + wta_args
         )
         if returncode != 0:
