@@ -2,6 +2,8 @@ GIFT-wrap
 =========
 [![python](https://img.shields.io/badge/Python-3.11-3776AB.svg?style=flat&logo=python&logoColor=white)](https://www.python.org) [![PyPI](https://img.shields.io/pypi/v/giftwrap-sc.svg)](https://pypi.org/project/giftwrap-sc/) 
 
+![Giftwrap Pipeline](docs/assets/Giftwrap.svg)
+
 This package provides tools for dealing with GIFT-seq data. The typical workflow is to use the all-in-one command 
 `giftwrap`. Ideally, the WTA panel should be generated beforehand to allow for basic analysis and QC. Additionally, 
 this package provides programmatic utilities for dealing with this data.

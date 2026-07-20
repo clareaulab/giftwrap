@@ -6,6 +6,8 @@ GIFTwrap
 ========
 [![python](https://img.shields.io/badge/Python-3.11-3776AB.svg?style=flat&logo=python&logoColor=white)](https://www.python.org) [![PyPI](https://img.shields.io/pypi/v/giftwrap-sc.svg)](https://pypi.org/project/giftwrap-sc/) 
 
+![Giftwrap Pipeline](assets/Giftwrap.svg)
+
 This package provides tools for dealing with GIFT-seq data. The `giftwrap` package is designed for both processing of GIFT-seq raw data and provides tools for downstream analysis of GIFT-seq data.
 
 ## Main Features
