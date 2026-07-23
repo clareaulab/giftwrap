@@ -14,6 +14,23 @@ import numpy as np
 import pandas as pd
 from scipy.stats import spearmanr
 
+# Third-party web assets are vendored under giftwrap/assets/ and inlined into the
+# report so it renders with no network access — these reports are routinely opened
+# on offline laptops and cluster nodes where a CDN fetch would silently yield a
+# page with no figures at all.
+_ASSETS_DIR = Path(__file__).parent / "assets"
+
+# Kept in sync with the vendored plotly.min.js; used only if that file is missing.
+_PLOTLY_VERSION = "2.32.0"
+
+
+def _read_asset(name: str) -> Optional[str]:
+    """Return the text of a vendored asset, or None if it isn't available."""
+    try:
+        return (_ASSETS_DIR / name).read_text(encoding="utf-8")
+    except OSError:
+        return None
+
 
 def _to_list(arr) -> list:
     return np.asarray(arr).flatten().tolist()
@@ -477,9 +494,8 @@ _HTML_TEMPLATE = """\
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>GIFTwrap QC Report — {plex}</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Figtree:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+{fonts_tag}
+{plotly_tag}
 <style>
 :root {{
   --bg:         #F8FAFC;
@@ -1191,8 +1207,30 @@ def make_html_report(
     except Exception as e:
         print(f"  Warning: could not build metrics.csv: {e}")
 
+    # Inline the vendored assets. If they're missing (e.g. a source tree without
+    # the assets dir), fall back to the CDN so the report still works online.
+    plotly_js = _read_asset("plotly.min.js")
+    if plotly_js is not None:
+        plotly_tag = f"<script>{plotly_js}</script>"
+    else:
+        print("  Warning: vendored plotly.min.js not found; falling back to CDN "
+              "(report will require internet access to render figures).")
+        plotly_tag = f'<script src="https://cdn.plot.ly/plotly-{_PLOTLY_VERSION}.min.js"></script>'
+
+    fonts_css = _read_asset("fonts.css")
+    if fonts_css is not None:
+        fonts_tag = f"<style>{fonts_css}</style>"
+    else:
+        fonts_tag = (
+            '<link rel="preconnect" href="https://fonts.googleapis.com">\n'
+            '<link href="https://fonts.googleapis.com/css2?family=Figtree:wght@300;400;500;600;700'
+            '&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">'
+        )
+
     html = _HTML_TEMPLATE.format(
         plex=plex_id,
+        fonts_tag=fonts_tag,
+        plotly_tag=plotly_tag,
         plex_display=plex_display,
         sample_meta_span=sample_meta_span,
         ilab_meta_span=ilab_meta_span,
