@@ -16,6 +16,7 @@ from sankeyflow import Sankey
 from scipy.stats import gaussian_kde, spearmanr
 
 from .analysis.tools import collapse_gapfills
+from .html_report import make_html_report
 from .utils import (
     filter_h5_file_by_barcodes,
     filter_h5_file_by_pcr_dups,
@@ -345,7 +346,7 @@ def make_pdf_report(output_file, gapfill_adata, adata, probe_reads, filter_cutof
             plt.close(fig)
 
 
-def summarize_counts(input: Path, summary_output: Path, summary_pdf_output: Path, counts_output: Path, flattened_counts_output: Path, cellranger_output: Optional[Path], flatten: bool, reads_per_gapfill: int, probe_bc: str):
+def summarize_counts(input: Path, summary_output: Path, summary_pdf_output: Path, summary_html_output: Path, counts_output: Path, flattened_counts_output: Path, cellranger_output: Optional[Path], flatten: bool, reads_per_gapfill: int, probe_bc: str):
     print("Summarizing counts file ", input, " to ", summary_output, ", ", summary_pdf_output, ", and ", counts_output, " (This will take awhile)...")
 
     # Read cellranger to an anndata file if provided
@@ -448,6 +449,18 @@ def summarize_counts(input: Path, summary_output: Path, summary_pdf_output: Path
     # Generate a PDF report
     make_pdf_report(summary_pdf_output, gapfill_adata, adata, input.parent / "probe_reads.tsv.gz", reads_per_gapfill)
 
+    # Generate an HTML report
+    make_html_report(
+        output_file=summary_html_output,
+        gapfill_adata=gapfill_adata,
+        adata=adata,
+        fastq_metrics_path=input.parent / "fastq_metrics.tsv",
+        counts_metrics_path=summary_output,
+        probe_reads_path=input.parent / "probe_reads.tsv.gz",
+        filter_cutoff=reads_per_gapfill,
+        plex_id=probe_bc,
+    )
+
 
 def run(output, overwrite, cellranger_output, flatten, reads_per_gapfill):
     if isinstance(cellranger_output, str):
@@ -484,6 +497,7 @@ def run(output, overwrite, cellranger_output, flatten, reads_per_gapfill):
 
         summary_output_file = output / counts_file.name.replace(".h5", ".summary.tsv")
         summary_pdf_output_file = output / counts_file.name.replace(".h5", ".summary.pdf")
+        summary_html_output_file = output / counts_file.name.replace(".h5", ".summary.html")
         h5_output_file = output / counts_file.name.replace(".h5", ".filtered.h5")
         flattened_output_file = output / counts_file.name.replace(".h5", ".filtered.tsv.gz").replace('counts.', 'flat_counts.')
         probe_bc = counts_file.name.split(".")[1]
@@ -495,7 +509,7 @@ def run(output, overwrite, cellranger_output, flatten, reads_per_gapfill):
                 print("Skipping existing files. Use --overwrite to overwrite.")
                 continue
 
-        summarize_counts(counts_file, summary_output_file, summary_pdf_output_file, h5_output_file, flattened_output_file, counts_cellranger, flatten, reads_per_gapfill, probe_bc)
+        summarize_counts(counts_file, summary_output_file, summary_pdf_output_file, summary_html_output_file, h5_output_file, flattened_output_file, counts_cellranger, flatten, reads_per_gapfill, probe_bc)
 
 
 def main():
