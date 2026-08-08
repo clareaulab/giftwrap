@@ -1849,7 +1849,7 @@ def filter_h5_file_by_barcodes(input_file: Path, output_file: Path, barcodes_lis
             cell_metadata_grp.create_dataset('columns', data=np.array(filtered_meta.columns, dtype='S'), compression='gzip')
 
             for col in filtered_meta.columns:
-                values = filtered_meta[col].values
+                values = filtered_meta[col].to_numpy()
                 # Convert to appropriate type
                 if not np.issubdtype(values.dtype, np.number):
                     values = np.array(values, dtype='S')
@@ -2072,8 +2072,8 @@ def read_h5_file(filename: str | Path) -> ad.AnnData:
     # Check if array_col and array_row exist in obs
     # If present, verify that all are integers
     if 'array_col' in adata.obs.columns and 'array_row' in adata.obs.columns:
-        col_mask = adata.obs['array_col'].isnull() | (~np.issubdtype(adata.obs['array_col'].dtype, np.integer))
-        row_mask = adata.obs['array_row'].isnull() | (~np.issubdtype(adata.obs['array_row'].dtype, np.integer))
+        col_mask = adata.obs['array_col'].isnull() | (~pd.api.types.is_integer_dtype(adata.obs['array_col'].dtype))
+        row_mask = adata.obs['array_row'].isnull() | (~pd.api.types.is_integer_dtype(adata.obs['array_row'].dtype))
         if col_mask.any() or row_mask.any():
             # We will need to regenerate only the problematic array_col and array_row values
             print("Warning: 'array_col' and 'array_row' in obs contain non-integer or null values. Regenerating problematic values.")

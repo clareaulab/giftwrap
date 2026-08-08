@@ -170,7 +170,7 @@ def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_d
         cell_metadata_grp.create_dataset("columns", data=np.array(barcodes_df.columns.values.tolist(), dtype='S'),
                                          compression='gzip')
         for col in barcodes_df.columns:
-            values = barcodes_df[col].values
+            values = barcodes_df[col].to_numpy()
             if not np.issubdtype(values.dtype, np.number):
                 values = values.astype('S')
             cell_metadata_grp.create_dataset(col, data=values, compression='gzip')
