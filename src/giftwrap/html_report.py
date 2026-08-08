@@ -14,6 +14,8 @@ import numpy as np
 import pandas as pd
 from scipy.stats import spearmanr
 
+from .utils import real_gapfill_mask
+
 # Third-party web assets are vendored under giftwrap/assets/ and inlined into the
 # report so it renders with no network access — these reports are routinely opened
 # on offline laptops and cluster nodes where a CDN fetch would silently yield a
@@ -252,6 +254,7 @@ def _fig_umis_per_cell(gapfill_adata) -> dict:
 
 
 def _fig_cells_per_gapfill(gapfill_adata) -> dict:
+    gapfill_adata = gapfill_adata[:, real_gapfill_mask(gapfill_adata)]
     cpg = _to_list((gapfill_adata.X > 0).sum(axis=0))
     counts, edges = np.histogram(cpg, bins=min(50, len(cpg)))
     mid = ((edges[:-1] + edges[1:]) / 2).tolist()
@@ -278,6 +281,7 @@ def _fig_probe_boxplot(gapfill_adata, top_n: int = 15) -> dict:
     """
     if "probe" not in gapfill_adata.var.columns:
         return {}
+    gapfill_adata = gapfill_adata[:, real_gapfill_mask(gapfill_adata)]
     probe_arr = gapfill_adata.var["probe"].values
     seq_col = "gapfill" if "gapfill" in gapfill_adata.var.columns else None
     seq_arr = (gapfill_adata.var[seq_col].values if seq_col
@@ -325,6 +329,7 @@ def _fig_probe_boxplot(gapfill_adata, top_n: int = 15) -> dict:
 def _fig_reads_per_gapfill(gapfill_adata) -> dict:
     if "total_reads" not in gapfill_adata.layers:
         return {}
+    gapfill_adata = gapfill_adata[:, real_gapfill_mask(gapfill_adata)]
     layer = gapfill_adata.layers["total_reads"]
     reads = _to_list(
         layer.todense().__array__().sum(0) if hasattr(layer, "todense") else np.asarray(layer).sum(0)

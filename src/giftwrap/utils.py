@@ -2106,6 +2106,23 @@ def read_h5_file(filename: str | Path) -> ad.AnnData:
     return adata
 
 
+def real_gapfill_mask(adata: ad.AnnData) -> np.ndarray:
+    """
+    Boolean mask over ``adata.var`` selecting real gapfill probes, excluding 0bp ligation-only
+    control probes (named with "0bp" in the probe name, e.g. "TP53 0bp").
+
+    0bp probes require no gap-fill polymerization step, so they are detected at near-100%
+    efficiency regardless of the variant being probed. Mixed into QC that ranks or aggregates
+    gapfill *performance* (e.g. detection breadth, supporting reads, cell prevalence), they
+    dominate every ranking and make it impossible to read the QC for the actual gapfill probes.
+    :param adata: The gapfill AnnData object.
+    :return: A boolean array of length ``adata.shape[1]``, True for non-0bp gapfill variants.
+    """
+    if "probe" not in adata.var.columns:
+        return np.ones(adata.shape[1], dtype=bool)
+    return ~adata.var["probe"].astype(str).str.contains("0bp").to_numpy()
+
+
 # def merge_anndatas(adata_expression: ad.AnnData, adata_gapfill: ad.AnnData) -> ad.AnnData:
 #     """
 #     Merge two AnnData objects. The adata_gapfill should have the same barcodes as the adata_expression.

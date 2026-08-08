@@ -23,6 +23,7 @@ from .utils import (
     maybe_gzip,
     read_h5_file,
     read_wta,
+    real_gapfill_mask,
     sequence_saturation_curve,
     sequencing_saturation,
 )
@@ -159,7 +160,6 @@ def make_pdf_report(output_file, gapfill_adata, adata, probe_reads, filter_cutof
         fig.suptitle("Barcode rank plot")
         umis_per_cell = np.asarray(gapfill_adata.X.sum(axis=1)).flatten()
         gapfill_adata.obs['umis_per_cell'] = umis_per_cell
-        cells_per_gapfill = np.asarray((gapfill_adata.X > 0).sum(axis=0)).flatten()
         cell_rank = np.argsort(umis_per_cell)[::-1]
         ax.scatter(
             x=np.arange(1, gapfill_adata.shape[0] + 1),
@@ -218,7 +218,10 @@ def make_pdf_report(output_file, gapfill_adata, adata, probe_reads, filter_cutof
         axs[0].set_ylabel("Frequency")
         axs[0].set_title("UMIs per cell distribution")
 
-        axs[1].hist(cells_per_gapfill, bins=100)
+        cells_per_gapfill_real = np.asarray(
+            (gapfill_adata[:, real_gapfill_mask(gapfill_adata)].X > 0).sum(axis=0)
+        ).flatten()
+        axs[1].hist(cells_per_gapfill_real, bins=100)
         axs[1].set_xlabel("Cells per gapfill")
         axs[1].set_ylabel("Frequency")
         axs[1].set_title("Cells per gapfill distribution")
@@ -226,7 +229,8 @@ def make_pdf_report(output_file, gapfill_adata, adata, probe_reads, filter_cutof
         fig.text(0.5, 0.005,
                     "The top plot shows the distribution of UMIs per cell, including a line depicting the number of probes. "
                     "Good quality data should have # UMIs > # probes per cell. "
-                    "The bottom plot shows the distribution of cells per containing each possible probe/gapfill combination.",
+                    "The bottom plot shows the distribution of cells per containing each possible probe/gapfill combination "
+                    "(0bp control probes excluded).",
                  ha='center', wrap=True)
         pdf.savefig(fig)
         plt.close(fig)
@@ -235,10 +239,11 @@ def make_pdf_report(output_file, gapfill_adata, adata, probe_reads, filter_cutof
         fig, axs = plt.subplots(2, 1, figsize=(8, 12))
         fig.set_dpi(300)
         fig.suptitle("Unique gapfills per gene")
-        unique_genes = gapfill_adata.var['probe'].unique().tolist()
-        gapfills_per_gene = np.zeros((gapfill_adata.shape[0],len(unique_genes)), dtype=float)
+        gapfill_adata_real = gapfill_adata[:, real_gapfill_mask(gapfill_adata)]
+        unique_genes = gapfill_adata_real.var['probe'].unique().tolist()
+        gapfills_per_gene = np.zeros((gapfill_adata_real.shape[0],len(unique_genes)), dtype=float)
         for i, gene in enumerate(unique_genes):
-            gapfills_per_gene[:,i] = gapfill_adata[:, gapfill_adata.var['probe'] == gene].X.sum(axis=1).flatten()
+            gapfills_per_gene[:,i] = gapfill_adata_real[:, gapfill_adata_real.var['probe'] == gene].X.sum(axis=1).flatten()
         axs[0].boxplot(gapfills_per_gene, tick_labels=unique_genes, sym='+')
         # Rotate the x-axis labels
         for tick in axs[0].get_xticklabels():
@@ -252,7 +257,7 @@ def make_pdf_report(output_file, gapfill_adata, adata, probe_reads, filter_cutof
         axs[1].set_title("Genes containing gapfill distribution")
 
         fig.text(0.5, 0.005,
-                 "The top plot shows the distribution of the number of UMIs for each probe to evaluate the variance of the gapfill across cells. "
+                 "The top plot shows the distribution of the number of UMIs for each probe to evaluate the variance of the gapfill across cells (0bp control probes excluded). "
                  "The bottom plot shows the distribution of the number of probes each cell contains to evaluate probe coverage.",
                  ha='center', wrap=True)
         pdf.savefig(fig)
@@ -262,19 +267,20 @@ def make_pdf_report(output_file, gapfill_adata, adata, probe_reads, filter_cutof
         fig, ax = plt.subplots(1, 1, figsize=(8, 8))
         fig.set_dpi(300)
         fig.suptitle("Supporting reads per gapfill")
-        total_reads_per_probe = gapfill_adata.layers['total_reads'].todense().__array__().sum(0).flatten()
+        gapfill_adata_real = gapfill_adata[:, real_gapfill_mask(gapfill_adata)]
+        total_reads_per_probe = gapfill_adata_real.layers['total_reads'].todense().__array__().sum(0).flatten()
         # Sort
         sorted_probes = np.argsort(total_reads_per_probe)[::-1]
         ax.bar(np.arange(len(sorted_probes)), total_reads_per_probe[sorted_probes])
         # Get the sum and divide by the number of possible probe/gapfills to get the expected uniform distribution
-        ax.axhline(y=gapfill_adata.layers['total_reads'].sum() / gapfill_adata.shape[1], color='r', linestyle='--')
+        ax.axhline(y=gapfill_adata_real.layers['total_reads'].sum() / gapfill_adata_real.shape[1], color='r', linestyle='--')
         ax.set_yscale("log")
         ax.set_ylabel("Reads")
         # Remove xticks
         ax.set_xticks([])
         ax.set_xlabel("Probe/Gapfill Pair")
         fig.text(0.5, 0.005,
-                 "This figure shows the distributions of reads supporting each unique gapfill. "
+                 "This figure shows the distributions of reads supporting each unique gapfill (0bp control probes excluded). "
                  "The red dashed line shows the expected number of reads per gapfill if they were uniformly captured in PCR. "
                  "Note that these are not UMIs. "
                  "The plot can be used to evaluate the quality of gapfill calls as more reads per gapfill can reduce the likelihood of technical error.",
