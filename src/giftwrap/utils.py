@@ -59,6 +59,35 @@ def batched(iterator, n):
         yield chunk
 
 
+class lru_cached_method:
+    """
+    An implementation of lru_cache that ensure the cache is bound to its own instance, preventing memory leaks.
+    """
+
+    def __init__(self, maxsize: int, typed=False) -> None:
+        self.maxsize = maxsize
+        self.typed = typed
+        self.func = None
+
+    def __call__(self, func):
+        self.func = func
+        functools.update_wrapper(self, func)
+        return self
+
+    def __get__(self, instance, owner):
+        if instance is None:
+            return self
+
+        # Bind the method to the instance
+        bound = self.func.__get__(instance, owner)
+        # Apply the cache to the bound method
+        bound = functools.lru_cache(maxsize=self.maxsize, typed=self.typed)(bound)
+
+        # Make the instance return the cached method
+        setattr(instance, self.func.__name__, bound)
+
+        return bound
+
 class DummyResult:
 
     def __init__(self, res):
@@ -189,15 +218,14 @@ class TechnologyFormatInfo(ABC):
         """
         raise NotImplementedError()
 
-    @property
-    @functools.lru_cache(1)
+    @functools.cached_property
     def max_cell_barcode_length(self) -> int:
         """
         Returns the maximum length of a cell barcode.
         """
         return max(map(len, self.cell_barcodes))
 
-    @functools.lru_cache(maxsize=1000)
+    @lru_cached_method(maxsize=1000)
     def barcode2coordinates(self, barcode: str) -> tuple[int, int]:
         """
         Returns the X and Y coordinates of a barcode.
@@ -304,8 +332,7 @@ class TechnologyFormatInfo(ABC):
         """
         return f"{cell_barcode}-{plex}"  # Naive multiplexed barcode
 
-    @property
-    @functools.lru_cache(maxsize=1)
+    @functools.cached_property
     def barcode_tree(self) -> PrefixTrie:
         """
         Return a prefix tree (trie) of the cell barcodes for fast mismatch searches.
@@ -313,7 +340,7 @@ class TechnologyFormatInfo(ABC):
         """
         return PrefixTrie(self.cell_barcodes)
 
-    @functools.lru_cache(1024)
+    @lru_cached_method(maxsize=1000)
     def correct_barcode(self, read: str, max_mismatches: int, start_idx: int, end_idx: int) -> tuple[Optional[str], int]:
         """
         Given a probable barcode string, attempt to correct the sequence.
@@ -469,8 +496,7 @@ class FlexFormatInfo(TechnologyFormatInfo):
     def has_constant_sequence(self) -> bool:
         return True
 
-    @property
-    @functools.lru_cache(1)
+    @functools.cached_property
     def probe_barcodes(self) -> dict[str, str]:
         return self._probe_barcodes
 
@@ -614,8 +640,7 @@ class FlexV2FormatInfo(TechnologyFormatInfo):
     def has_constant_sequence(self) -> bool:
         return True
 
-    @property
-    @functools.lru_cache(1)
+    @functools.cached_property
     def probe_barcodes(self) -> dict[str, str]:
         return self._probe_barcodes
 
@@ -959,13 +984,11 @@ class VisiumHDFormatInfo(TechnologyFormatInfo):
     def n_barcodes(self) -> int:
         return len(self._barcode_coordinates)
 
-    @property
-    @functools.lru_cache(1)
+    @functools.cached_property
     def max_cell_barcode_length(self) -> int:
         return max(self._bc_lengths) + 4  # Max number of insertions allowed
 
-    @property
-    @functools.lru_cache(1)
+    @functools.cached_property
     def min_cell_barcode_length(self) -> int:
         return min(self._bc_lengths)
 
@@ -979,7 +1002,7 @@ class VisiumHDFormatInfo(TechnologyFormatInfo):
         # return SequentialPrefixTree([self._bc1_tree, self._bc2_tree])
         raise NotImplementedError()
 
-    @functools.lru_cache(1)
+    @functools.cached_property
     def get_lengths_to_search(self):
         search_lengths = []
         for length in self._bc_lengths:
@@ -994,13 +1017,12 @@ class VisiumHDFormatInfo(TechnologyFormatInfo):
         search_lengths.sort(reverse=True)
         return search_lengths
 
-    @property
-    @functools.lru_cache(1)
+    @functools.cached_property
     def _default_range(self):
         return ((self._segment1_offset, self._segment1_offset + self._segment1_length),
          (self._segment2_offset, self._segment2_offset + self._segment2_length))
 
-    @functools.lru_cache(2)
+    @lru_cached_method(2)
     def possible_pairing_ranges(self, read_len: int, padding: int = 0) -> list[tuple[tuple[int, int],tuple[int, int]]]:
         possible_pairing_ranges = set()
         for offset in range(self._min_offset, self._max_offset+1):
@@ -1023,7 +1045,7 @@ class VisiumHDFormatInfo(TechnologyFormatInfo):
         return possible_pairing_ranges
 
     # Override the search to search all trees
-    @functools.lru_cache(250_000)
+    @lru_cached_method(250_000)
     def correct_barcode(self, read: str, max_mismatches: int, start_idx: int, end_idx: int) -> tuple[Optional[str], int]:
         barcode, corrections = self._correct_barcode(read, max_mismatches, start_idx, end_idx)
         if barcode is not None:
@@ -1033,12 +1055,12 @@ class VisiumHDFormatInfo(TechnologyFormatInfo):
         return barcode, corrections
 
     ## Cache bc1 searches separately
-    @functools.lru_cache(125_000)
+    @lru_cached_method(125_000)
     def _cached_bc1_search(self, possible_bc1: str, max_mismatches: int) -> tuple[Optional[str], int]:
         return self._bc1_tree.search(possible_bc1, max_mismatches)
 
     ## Cache bc2 searches separately
-    @functools.lru_cache(125_000)
+    @lru_cached_method(125_000)
     def _cached_bc2_search(self, possible_bc2: str, max_mismatches: int) -> tuple[Optional[str], int]:
         return self._bc2_tree.search(possible_bc2, max_mismatches)
 
@@ -1265,7 +1287,7 @@ class ProbeParser:
         # Compute the maximum distance allowed based on the length of the string
         return max(1, (string_length * max_mismatches) // 10)
 
-    @functools.lru_cache(maxsize=250_000)
+    @lru_cached_method(maxsize=250_000)
     def parse_probe(self, read2: str,
                     max_mismatches: int,
                     skip_constant_seq: bool = False,
@@ -1395,7 +1417,7 @@ class ProbeParser:
 
         return probe_idx, gapfill, len(lhs), len(lhs) + rhs_start, probe_bc, state
 
-    @functools.lru_cache(maxsize=100)
+    @lru_cached_method(maxsize=100)
     def parse_probe_bc_R1(self, read1: str, max_mismatches: int) -> tuple[Optional[str], list[ReadProcessState]]:
         possible_probe_bc = read1[self.probe_bc_start:self.probe_bc_start-self.probe_bc_length]
         state = []
@@ -1827,7 +1849,7 @@ def filter_h5_file_by_barcodes(input_file: Path, output_file: Path, barcodes_lis
             cell_metadata_grp.create_dataset('columns', data=np.array(filtered_meta.columns, dtype='S'), compression='gzip')
 
             for col in filtered_meta.columns:
-                values = filtered_meta[col].values
+                values = filtered_meta[col].to_numpy()
                 # Convert to appropriate type
                 if not np.issubdtype(values.dtype, np.number):
                     values = np.array(values, dtype='S')
@@ -2050,8 +2072,8 @@ def read_h5_file(filename: str | Path) -> ad.AnnData:
     # Check if array_col and array_row exist in obs
     # If present, verify that all are integers
     if 'array_col' in adata.obs.columns and 'array_row' in adata.obs.columns:
-        col_mask = adata.obs['array_col'].isnull() | (~np.issubdtype(adata.obs['array_col'].dtype, np.integer))
-        row_mask = adata.obs['array_row'].isnull() | (~np.issubdtype(adata.obs['array_row'].dtype, np.integer))
+        col_mask = adata.obs['array_col'].isnull() | (~pd.api.types.is_integer_dtype(adata.obs['array_col'].dtype))
+        row_mask = adata.obs['array_row'].isnull() | (~pd.api.types.is_integer_dtype(adata.obs['array_row'].dtype))
         if col_mask.any() or row_mask.any():
             # We will need to regenerate only the problematic array_col and array_row values
             print("Warning: 'array_col' and 'array_row' in obs contain non-integer or null values. Regenerating problematic values.")
