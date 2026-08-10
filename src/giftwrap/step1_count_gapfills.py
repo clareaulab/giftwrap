@@ -213,9 +213,9 @@ def search_files(read1s, read2s, output_dir, tech_info,
     names = probes['name'].tolist()
     probe_bc_provided = True
     if multiplex > 1:
-        # probe_bcs = list(range(1, multiplex+1))
+        probe_bcs = list(range(1, multiplex+1))
         # Switch to using all probe_bcs
-        probe_bcs = list(range(1, len(tech_info.probe_barcodes) + 1))
+        # probe_bcs = list(range(1, len(tech_info.probe_barcodes) + 1))
     elif barcodes is not None and len(barcodes) > 0:
         probe_bcs = barcodes
     else:
