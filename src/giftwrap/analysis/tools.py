@@ -2,6 +2,7 @@
 This module provides various tools for analyzing and manipulating a GIFT-seq dataset. Most true analysis tools live
 here.
 """
+from PIL.Image import new
 import functools
 import os
 import itertools
@@ -86,6 +87,8 @@ def collapse_gapfills(adata: ad.AnnData) -> ad.AnnData:
     # Do the same for layers using vectorized operations
     new_layers = dict()
     for layer_name, layer_data in adata.layers.items():
+        if layer_name is None:
+            continue
         new_layer = np.zeros((n_cells, n_probes))
         if scipy.sparse.issparse(layer_data):
             layer_csc = layer_data.tocsc()
@@ -104,7 +107,7 @@ def collapse_gapfills(adata: ad.AnnData) -> ad.AnnData:
                     new_layer[:, i] = layer_data[:, cols].sum(axis=1)
         new_layers[layer_name] = new_layer
 
-    return ad.AnnData(X=new_X, obs=new_obs, var=new_var, layers=new_layers)
+    return ad.AnnData(X=new_X, obs=new_obs, var=new_var, layers=new_layers if len(new_layers) > 0 else None)
 
 
 def intersect_wta(wta_adata: ad.AnnData, gapfill_adata: ad.AnnData) -> (ad.AnnData, ad.AnnData):
