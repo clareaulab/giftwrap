@@ -448,7 +448,7 @@ def summarize_counts(input: Path, summary_output: Path, summary_pdf_output: Path
     stats["statistic"].append("CELLS_PER_GAPFILL_MAX")
     stats["value"].append(cells_per_gapfill.max())
     stats["statistic"].append("SEQUENCING_SATURATION")
-    stats["value"].append(sequencing_saturation(collapse_gapfills(gapfill_adata).layers['total_reads']))
+    stats["value"].append(sequencing_saturation(gapfill_adata.layers['total_reads']))
 
     pd.DataFrame(stats).to_csv(summary_output, index=False, sep="\t")
 
