@@ -205,7 +205,7 @@ def search_files(read1s, read2s, output_dir, tech_info,
                  cores=1, n_reads_per_batch=1_000_000, max_distance=2,
                  multiplex=1, barcodes: Optional[list[int | str]] = None, allow_indels=False,
                  skip_constant_seq=False, unmapped_reads_prefix=None,
-                 flexible_start=False, max_expected_gap=0):
+                 flexible_start=False, max_expected_gap=0, use_pandas=False):
     probes = read_manifest(output_dir)
 
     lhs_seqs = probes['lhs_probe'].tolist()
@@ -334,7 +334,7 @@ def search_files(read1s, read2s, output_dir, tech_info,
     print("Done")
 
     print("Sorting reads by cell...", end="")
-    sort_tsv_file(output_dir / "probe_reads.tsv.gz", [2, 0, 1], cores=cores)  # Sort by probe bc, cell idx, probe idx
+    sort_tsv_file(output_dir / "probe_reads.tsv.gz", [2, 0, 1], cores=cores, use_pandas=use_pandas)  # Sort by probe bc, cell idx, probe idx
     print("Done!")
     print(f"{total} reads extracted.")
 
@@ -443,7 +443,8 @@ def run(probes,
         unmapped_reads_prefix,
         cellranger_output,
         flexible_start,
-        max_expected_gap):
+        max_expected_gap,
+        fallback_sort):
     barcodes = barcodes or []
     if (read1 == read2 == project) and project is None:
         raise AssertionError("At least one of the read1, read2, or project arguments must be provided.")
@@ -581,7 +582,7 @@ def run(probes,
                  cores=cores, n_reads_per_batch=n_reads_per_batch, max_distance=max_distance,
                  multiplex=multiplex, barcodes=barcodes, allow_indels=allow_indels,
                  skip_constant_seq=skip_constant_seq, unmapped_reads_prefix=unmapped_reads_prefix,
-                 flexible_start=flexible_start, max_expected_gap=max_expected_gap)
+                 flexible_start=flexible_start, max_expected_gap=max_expected_gap, use_pandas=fallback_sort)
     exit(0)
 
 
@@ -749,6 +750,12 @@ def main():
              "expected gap sequence in the probe inputs file. This value is used to allow for more lenient parsing when the R2 "
              "length is not enough to fully sequence the RHS of all probes."
     )
+    parser.add_argument(
+        "--fallback_sort",
+        action="store_true",
+        required=False,
+        help="If set, will use pandas to sort the output file instead of the default unix sort. This is slower but more robust on some systems."
+    )
 
     args = parser.parse_args()
 
@@ -775,7 +782,8 @@ def main():
         args.unmapped_reads,
         args.cellranger_output,
         args.flexible_start_mapping,
-        args.expected_gap_length
+        args.expected_gap_length,
+        args.fallback_sort
     )
 
 

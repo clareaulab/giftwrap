@@ -1649,15 +1649,16 @@ def read_wta(
         return adata
 
 
-def sort_tsv_file(file: Path, columns: list[int], cores: int):
+def sort_tsv_file(file: Path, columns: list[int], cores: int, use_pandas: bool = False):
     """
     Sort a written tsv file in-place. Will either use a single core or multiple cores depending on the cores argument.
         Note, this will attempt to defer to the unix sort command if cores is > 1.
     :param file: The file. May be gzipped.
     :param columns: The columns indices to sort by.
     :param cores: The number of cores to use.
+    :param use_pandas: Whether to use pandas.
     """
-    if cores > 1:
+    if cores > 1 and not use_pandas:
         # Check for the sort command
         sort_avail = shutil.which("sort")
         if sort_avail:

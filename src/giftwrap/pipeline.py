@@ -209,6 +209,12 @@ def main():
         default=10,
         help="The maximum number of PCR duplicate thresholds to consider when storing various layers when collecting counts. Default is 10."
     )
+    parser.add_argument(
+        "--fallback_sort",
+        required=False,
+        action="store_true",
+        help="If set, will use pandas to sort the output file instead of the default unix sort. This is slower but more robust on some systems.",
+    )
     args = parser.parse_args()
 
     probes = args.probes
@@ -225,6 +231,7 @@ def main():
     overwrite = args.overwrite
     skip_constant_seq = args.skip_constant_seq
     max_pcr_thresholds = int(args.max_pcr_thresholds)
+    fallback_sort = args.fallback_sort
 
     if multiplex > 0 and barcode:
         parser.error("Arguments --multiplex and --barcode are mutually exclusive.")
@@ -270,6 +277,7 @@ def main():
             + (['--allow_any_combination'] if args.allow_any_combination else [])
             + (['--unmapped_reads', args.unmapped_reads] if args.unmapped_reads is not None else [])
             + (['--expected_gap_length', str(args.expected_gap_length)] if args.expected_gap_length >= 0 else [])
+            + (['--fallback_sort'] if fallback_sort else [])
             + wta_args
         )
         if returncode != 0:
