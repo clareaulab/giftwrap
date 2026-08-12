@@ -359,7 +359,9 @@ def build_manifest(probes, output: Path, overwrite, allow_any_combination, trim_
 
         # Map all possible LHS to all possible RHS if not already defined
         lhs_name_tuples = df[['lhs_probe', 'name']].drop_duplicates('lhs_probe').itertuples(index=False, name=None)
-        rhs_name_tuples = df[['rhs_probe', 'name']].drop_duplicates('rhs_probe').itertuples(index=False, name=None)
+        rhs_name_tuples = list(
+            df[['rhs_probe', 'name']].drop_duplicates('rhs_probe').itertuples(index=False, name=None)
+        )
         to_add = {
             'lhs_probe': [],
             'rhs_probe': [],
