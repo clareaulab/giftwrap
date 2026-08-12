@@ -362,7 +362,11 @@ def summarize_counts(input: Path, summary_output: Path, summary_pdf_output: Path
             fallback_to_barcodes=True
         )
         # If an array was returned, we only have barcodes, else we have an anndata object
-        if isinstance(obj, np.ndarray):
+        if obj is None:
+            adata = None
+            barcodes = None
+            print("Cellranger output provided, but unable to parse. Will not filter counts...")
+        elif isinstance(obj, np.ndarray):
             adata = None
             barcodes = obj
             print("Cellranger output provided, AnnData only partially parsed. Using barcodes only.")

@@ -387,6 +387,8 @@ def _parse_possible_barcodes(barcode_lists: list[Path]) -> np.ndarray[str]:
                 barcode_path,
                 barcodes_only=True
             )
+            if to_add is None:
+                continue
             # Convert the numpy array to a pandas series
             to_add = pd.Series(
                 to_add
@@ -1579,7 +1581,7 @@ def read_wta(
         input_path: Path,
         barcodes_only: bool = False,
         fallback_to_barcodes: bool = False,
-) -> Union[ad.AnnData, np.ndarray[str]]:
+) -> Optional[Union[ad.AnnData, np.ndarray[str]]]:
     """
     Read a WTA file and return the cells processed by cellranger or spaceranger.
     :param input_path: The path to the WTA file.
@@ -1607,8 +1609,12 @@ def read_wta(
                 return _parse_barcodes_tsv(input_path / "binned_outputs" / "square_002um" / "filtered_feature_bc_matrix" / "barcodes.tsv.gz")
             elif (input_path / "square_002um").exists():
                 return _parse_barcodes_tsv(input_path / "square_002um" / "filtered_feature_bc_matrix" / "barcodes.tsv.gz")
-            else: # Assume cell ranger output
+            elif (input_path / "filtered_feature_bc_matrix").exists():
+                return _parse_barcodes_tsv(input_path / "filtered_feature_bc_matrix" / "barcodes.tsv.gz")
+            elif (input_path / "barcodes.tsv.gz").exists():
                 return _parse_barcodes_tsv(input_path / "barcodes.tsv.gz")
+            else: # Assume cell ranger output
+                return None
         else:
             base_filename = input_path.name
             if (base_filename == 'molecule_info.h5' and (input_path.parent / 'spatial').exists()):  # Given a molecule_info.h5 file in a spatial directory
@@ -1626,22 +1632,27 @@ def read_wta(
                     try:
                         return _parse_filtered_feature_bc_matrix_h5(input_path)
                     except:
-                        return _parse_molecule_info_h5(input_path)
-        raise FileNotFoundError("Barcodes file not found.")
+                        try:
+                            return _parse_molecule_info_h5(input_path)
+                        except:
+                            return None
 
     try:
         import scanpy as sc
     except:
         if not barcodes_only and not fallback_to_barcodes:
             print("Scanpy not found. Please install it to use the cellranger output.")
-            return
+            return None
         elif fallback_to_barcodes:
             return read_wta(input_path, barcodes_only=True)
 
-    if input_path.is_dir():
-        adata = sc.read_10x_mtx(input_path)
-    else:
-        adata = sc.read_10x_h5(input_path)
+    try:
+        if input_path.is_dir():
+            adata = sc.read_10x_mtx(input_path)
+        else:
+            adata = sc.read_10x_h5(input_path)
+    except:
+        return None
 
     if barcodes_only:
         return adata.obs_names.values
