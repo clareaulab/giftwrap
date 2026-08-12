@@ -38,6 +38,33 @@ def _to_list(arr) -> list:
     return np.asarray(arr).flatten().tolist()
 
 
+# ── Metrics-table row coloring ──
+# Informational rows are a flat light gray; "good"/"bad" group rows are
+# tinted green/red with alpha scaled to the row's value relative to the max
+# in its own group; ratio rows (e.g. a fraction already in [0, 1]) blend
+# directly from red (0, bad) to green (1, good).
+_GREEN_RGB = (5, 150, 105)   # var(--success)
+_RED_RGB   = (220, 38, 38)   # error red
+_INFO_BG   = "background: #F8FAFC;"
+
+
+def _magnitude_bg(value: float, group_max: float, rgb: tuple,
+                   alpha_min: float = 0.10, alpha_max: float = 0.70) -> str:
+    if group_max <= 0:
+        return _INFO_BG
+    t = max(0.0, min(1.0, value / group_max))
+    alpha = alpha_min + (alpha_max - alpha_min) * t
+    return f"background: rgba({rgb[0]},{rgb[1]},{rgb[2]},{alpha:.3f});"
+
+
+def _ratio_bg(ratio: float, alpha: float = 0.35) -> str:
+    ratio = max(0.0, min(1.0, ratio))
+    mixed = [_RED_RGB[i] + (_GREEN_RGB[i] - _RED_RGB[i]) * ratio for i in range(3)]
+    # Blend toward white so the row stays readable, then emit as an opaque color.
+    r, g, b = (round(255 + (c - 255) * alpha) for c in mixed)
+    return f"background: rgb({r},{g},{b});"
+
+
 def _saturation_curve(total_reads_layer, n_points: int = 100) -> tuple[list, list]:
     mat = np.asarray(
         total_reads_layer.todense() if hasattr(total_reads_layer, "todense") else total_reads_layer
@@ -47,6 +74,8 @@ def _saturation_curve(total_reads_layer, n_points: int = 100) -> tuple[list, lis
     arr = mat.flatten()
     arr = arr[arr > 0].astype(int)
     total = arr.sum()
+    if total <= 0 or n_cells <= 0:
+        return [], []
     probs = arr / total  # loop-invariant — compute once, not per fraction
     fractions = np.linspace(0.05, 1.0, n_points)
     xs, ys = [], []
@@ -373,9 +402,16 @@ def _fig_reads_per_gapfill(gapfill_adata) -> dict:
     }
 
 
-def _fig_wta_correlation(gapfill_adata, adata) -> list[dict]:
+def _fig_wta_correlation(gapfill_adata, adata) -> dict:
+    """Build the WTA correlation scatter plots, plus the rho/zero-fraction
+    stats they're computed from — the caller needs those same stats for QC
+    flagging and would otherwise have to rebuild the whole cell x probe
+    matrix a second time.
+
+    Returns {"figs": list[dict], "stats": dict | None}.
+    """
     if adata is None:
-        return []
+        return {"figs": [], "stats": None}
     # GIFTwrap barcodes embed a plex_seq before the suffix (CELLBC{plex_seq}-1)
     # while CellRanger barcodes are plain 16bp (CELLBC-1). Strip the plex_seq when
     # prefix lengths differ so the two sets line up — mirrors the PDF path in
@@ -398,7 +434,7 @@ def _fig_wta_correlation(gapfill_adata, adata) -> list[dict]:
     adata.var["gene"] = adata.var_names.values
     matched = set(gapfill_adata.var["gene"]) & set(adata.var["gene"])
     if not matched:
-        return []
+        return {"figs": [], "stats": None}
     probes = gapfill_adata.var["probe"].unique().tolist()
     n = len(probes)
     wta_sc  = np.zeros((gapfill_adata.shape[0], n))
@@ -461,7 +497,15 @@ def _fig_wta_correlation(gapfill_adata, adata) -> list[dict]:
                          "Gapfill probe UMIs (summed across cells)",
                          "WTA gene UMIs (summed across cells)",
                          pair_labels))
-    return figs
+    # Fraction of points where WTA sees expression but gapfill reports none —
+    # a high value means probes are missing real signal, not just noisy.
+    sc_zero_frac = float(((wta_sc > 0) & (gap_sc == 0)).sum() / max(int((wta_sc > 0).sum()), 1))
+    pb_zero_frac = float(((pb_wta > 0) & (pb_gap == 0)).sum() / max(int((pb_wta > 0).sum()), 1))
+    stats = {
+        "single_cell": {"rho": float(sc_rho), "zero_frac": sc_zero_frac},
+        "pseudobulk":  {"rho": float(pb_rho), "zero_frac": pb_zero_frac},
+    }
+    return {"figs": figs, "stats": stats}
 
 
 def _build_hero_metrics(fastq: dict, counts: dict, gapfill_adata=None) -> list[dict]:
@@ -514,6 +558,241 @@ def _build_hero_metrics(fastq: dict, counts: dict, gapfill_adata=None) -> list[d
     ]
 
 
+# ── QC flag thresholds — adjust here to retune what gets flagged ──
+_PROBES_ENCOUNTERED_WARN_PCT   = 0.50   # warn below this fraction of panel probes detected
+_READS_MAPPED_WARN_PCT         = 0.50
+_READS_MAPPED_ERROR_PCT        = 0.25
+_SATURATION_WARN_PCT           = 0.50
+_SATURATION_ERROR_PCT          = 0.25
+_CELLS_WITH_PROBES_WARN_PCT    = 0.30
+_CELLS_WITH_PROBES_ERROR_PCT   = 0.10
+_BREADTH_SINGLETON_MAX_CELLS   = 2      # a variant counts as "singleton" at or below this many cells
+_BREADTH_SINGLETON_WARN_PCT    = 0.50   # warn when this fraction of detected variants are singletons
+_BREADTH_SINGLETON_ERROR_PCT   = 0.75
+_CORR_RHO_WARN                 = 0.05   # warn below this Spearman rho
+_CORR_ZERO_FRAC_WARN           = 0.50   # warn when this fraction of WTA>0 points have gapfill==0
+_CORR_ZERO_FRAC_ERROR          = 0.75
+
+
+def _evaluate_flags(fastq: dict, counts: dict, gapfill_adata, wta_stats: Optional[dict]) -> list[dict]:
+    """QC checks that surface as a card at the top of every tab, and — for the
+    four metrics that have a dedicated hero stat box (``hero_label`` set,
+    matching a `_build_hero_metrics` label) — also color that box with a
+    hover tooltip. ``tab``/``plot_id`` (when set) let the card link straight
+    to the plot the flag is about.
+    """
+    flags: list[dict] = []
+
+    def _add(level, hero_label, title, message, tab=None, plot_id=None):
+        flags.append({"level": level, "hero_label": hero_label, "title": title,
+                      "message": message, "tab": tab, "plot_id": plot_id})
+
+    # Encountered / Possible Probes
+    possible = int(fastq.get("POSSIBLE_PROBES", 0))
+    encountered = int(fastq.get("PROBES_ENCOUNTERED", 0))
+    if possible > 0:
+        pct = encountered / possible
+        if encountered == 0:
+            _add("error", "Encountered / Possible Probes", "No probes detected",
+                 f"0 of {possible:,} panel probes were detected in this dataset. "
+                 f"Check that the probe file matches this run's chemistry/panel.")
+        elif pct < _PROBES_ENCOUNTERED_WARN_PCT:
+            _add("warning", "Encountered / Possible Probes", "Low probe detection rate",
+                 f"Only {encountered:,} of {possible:,} panel probes ({pct:.1%}) were detected.")
+
+    # Reads Mapped
+    total_reads = fastq.get("TOTAL_READS", 0)
+    mapped_reads = fastq.get("PROBE_CONTAINING_READS", 0)
+    if total_reads:
+        pct = mapped_reads / total_reads
+        if pct < _READS_MAPPED_ERROR_PCT:
+            _add("error", "Reads Mapped", "Very low read mapping rate",
+                 f"Only {pct:.1%} of reads mapped to a probe.",
+                 tab="overview", plot_id="plot-sankey-overview")
+        elif pct < _READS_MAPPED_WARN_PCT:
+            _add("warning", "Reads Mapped", "Low read mapping rate",
+                 f"Only {pct:.1%} of reads mapped to a probe.",
+                 tab="overview", plot_id="plot-sankey-overview")
+
+    # Sequencing Saturation
+    sat = float(counts.get("SEQUENCING_SATURATION", 0))
+    if sat < _SATURATION_ERROR_PCT:
+        _add("error", "Sequencing Saturation", "Very low sequencing saturation",
+             f"Saturation is {sat:.1%}. Most reads are still yielding new UMIs — "
+             f"consider sequencing deeper before drawing conclusions.",
+             tab="overview", plot_id="plot-saturation")
+    elif sat < _SATURATION_WARN_PCT:
+        _add("warning", "Sequencing Saturation", "Low sequencing saturation",
+             f"Saturation is {sat:.1%}.",
+             tab="overview", plot_id="plot-saturation")
+
+    # Cells with Probes / Total Cells
+    cells_w_probes = int(counts.get("GAPFILL_CONTAINING_CELLS", 0))
+    est_cells = int(counts.get("TOTAL_CELLS", 0))
+    if est_cells > cells_w_probes and est_cells > 0:
+        pct = cells_w_probes / est_cells
+        if pct < _CELLS_WITH_PROBES_ERROR_PCT:
+            _add("error", "Cells with Probes / Total Cells", "Very few cells have any gapfill signal",
+                 f"Only {pct:.1%} of called cells contain a detected gapfill probe.")
+        elif pct < _CELLS_WITH_PROBES_WARN_PCT:
+            _add("warning", "Cells with Probes / Total Cells", "Few cells have gapfill signal",
+                 f"Only {pct:.1%} of called cells contain a detected gapfill probe.")
+
+    # Detection breadth of gapfill variants (real, non-0bp variants only; denominator
+    # is variants detected in >=1 cell — an undetected variant isn't "found in 1-2 cells").
+    if gapfill_adata is not None and gapfill_adata.shape[1] > 0:
+        mask = real_gapfill_mask(gapfill_adata)
+        if mask.any():
+            cpg = np.asarray((gapfill_adata[:, mask].X > 0).sum(axis=0)).flatten()
+            detected = cpg[cpg > 0]
+            if detected.size:
+                frac_singleton = (detected <= _BREADTH_SINGLETON_MAX_CELLS).sum() / detected.size
+                if frac_singleton >= _BREADTH_SINGLETON_ERROR_PCT:
+                    _add("error", None, "Poor detection breadth of gapfill variants",
+                         f"{frac_singleton:.1%} of detected gapfill variants were found in just 1-2 cells. "
+                         f"Singleton variants may be PCR/sequencing artifacts.",
+                         tab="cells", plot_id="plot-cells-per-gapfill")
+                elif frac_singleton >= _BREADTH_SINGLETON_WARN_PCT:
+                    _add("warning", None, "Limited detection breadth of gapfill variants",
+                         f"{frac_singleton:.1%} of detected gapfill variants were found in just 1-2 cells.",
+                         tab="cells", plot_id="plot-cells-per-gapfill")
+
+        # Undetected 0bp control probe(s) — single consolidated error card.
+        zerobp_mask = ~mask
+        if zerobp_mask.any():
+            sub = gapfill_adata[:, zerobp_mask]
+            col_sums = np.asarray(sub.X.sum(axis=0)).flatten()
+            undetected = sorted({str(p) for p, s in zip(sub.var["probe"].values, col_sums) if s == 0})
+            if undetected:
+                _add("error", None, "Undetected 0bp control probe(s)",
+                     f"{len(undetected)} 0bp probe(s) had zero reads: {', '.join(undetected)}. "
+                     f"This likely indicates that too few transcripts were captured to genotype these regions.")
+
+    # WTA correlation (single-cell and pseudobulk) — worst of a low/negative rho
+    # or a high fraction of points where WTA sees expression but gapfill doesn't.
+    if wta_stats:
+        for key, label, plot_id in [("single_cell", "Single-cell correlation", "plot-wta-sc"),
+                                     ("pseudobulk", "Pseudobulk correlation", "plot-wta-pb")]:
+            s = wta_stats.get(key)
+            if not s:
+                continue
+            rho, zero_frac = s["rho"], s["zero_frac"]
+            level = None
+            if rho < 0 or zero_frac >= _CORR_ZERO_FRAC_ERROR:
+                level = "error"
+            elif rho < _CORR_RHO_WARN or zero_frac >= _CORR_ZERO_FRAC_WARN:
+                level = "warning"
+            if level:
+                _add(level, None, f"Weak {label.lower()}",
+                     f"Spearman ρ = {rho:.2f}; {zero_frac:.1%} of points have WTA expression but no "
+                     f"gapfill signal. Consider evaluating the probe sequences and panel design.",
+                     tab="wta", plot_id=plot_id)
+
+    return flags
+
+
+def _flag_cards_html(flags: list[dict]) -> str:
+    """Cards shown above the tab bar (so they're visible from every tab),
+    covering every flag — including the 4 that also color a hero stat box on
+    the Summary tab, since that box isn't visible from other tabs.
+
+    Falls back to the "all clear" banner when nothing was flagged.
+    """
+    if not flags:
+        return (
+            '<div class="alert-strip">'
+            '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">'
+            '<path d="M20 6L9 17l-5-5"/></svg>'
+            'All QC checks passed — no flagged statistics in this run.</div>'
+        )
+    flags = sorted(flags, key=lambda f: 0 if f["level"] == "error" else 1)
+    icon = {"error": "✕", "warning": "⚠"}
+    parts = []
+    for f in flags:
+        jump = ""
+        if f.get("tab") and f.get("plot_id"):
+            jump = (f'<button class="flag-jump" '
+                    f'onclick="jumpToPlot(\'{f["tab"]}\',\'{f["plot_id"]}\',\'{f["level"]}\')">View plot →</button>')
+        parts.append(
+            f'<div class="flag-card {f["level"]}"><span class="flag-icon">{icon[f["level"]]}</span>'
+            f'<div><div class="flag-title">{f["title"]}</div>'
+            f'<div class="flag-message">{f["message"]}</div>{jump}</div></div>'
+        )
+    return f'<div class="flags-section">{"".join(parts)}</div>'
+
+
+# ── Metrics tab: logical row order + good/bad group coloring ──
+_FASTQ_ORDER = [
+    "TOTAL_READS", "POSSIBLE_PROBES", "PROBES_ENCOUNTERED", "PROBE_CONTAINING_READS",
+    "EXACT", "CORRECTED_LHS", "CORRECTED_RHS", "CORRECTED_BARCODE",
+    "FILTERED_NO_LHS", "FILTERED_NO_RHS", "FILTERED_NO_CONSTANT",
+    "FILTERED_NO_CELL_BARCODE", "FILTERED_NO_PROBE_BARCODE",
+]
+_COUNTS_ORDER = [
+    "TOTAL_CELLS", "TOTAL_UMIS", "GAPFILL_CONTAINING_CELLS",
+    "UMIS_PER_CELL_MEAN", "UMIS_PER_CELL_MEDIAN", "UMIS_PER_CELL_STD",
+    "UMIS_PER_CELL_MIN", "UMIS_PER_CELL_MIN_EXCLUDING_ZERO", "UMIS_PER_CELL_MAX",
+    "CELLS_PER_GAPFILL_MEAN", "CELLS_PER_GAPFILL_MEDIAN", "CELLS_PER_GAPFILL_STD",
+    "CELLS_PER_GAPFILL_MIN", "CELLS_PER_GAPFILL_MAX", "SEQUENCING_SATURATION",
+]
+_FASTQ_GOOD_KEYS = ["EXACT", "CORRECTED_LHS", "CORRECTED_RHS", "CORRECTED_BARCODE"]
+_FASTQ_BAD_KEYS = ["FILTERED_NO_LHS", "FILTERED_NO_RHS", "FILTERED_NO_CONSTANT",
+                    "FILTERED_NO_CELL_BARCODE", "FILTERED_NO_PROBE_BARCODE"]
+
+
+def _fastq_row_style(key: str, value, fastq: dict) -> str:
+    if key in _FASTQ_GOOD_KEYS:
+        group_max = max(float(fastq.get(k, 0)) for k in _FASTQ_GOOD_KEYS)
+        return _magnitude_bg(float(value), group_max, _GREEN_RGB)
+    if key in _FASTQ_BAD_KEYS:
+        group_max = max(float(fastq.get(k, 0)) for k in _FASTQ_BAD_KEYS)
+        return _magnitude_bg(float(value), group_max, _RED_RGB)
+    return _INFO_BG
+
+
+def _counts_row_style(key: str, value, counts: dict) -> str:
+    if key == "GAPFILL_CONTAINING_CELLS":
+        total = float(counts.get("TOTAL_CELLS", 0))
+        return _ratio_bg(float(value) / total if total > 0 else 0.0)
+    if key == "SEQUENCING_SATURATION":
+        return _ratio_bg(float(value))
+    return _INFO_BG
+
+
+_COUNTS_HELP = {
+    "TOTAL_CELLS":                   "Number of barcodes called as real cells (at least 1 gapfill UMI).",
+    "TOTAL_UMIS":                    "Sum of all gapfill UMI counts across every cell.",
+    "GAPFILL_CONTAINING_CELLS":      "Cells with at least one detected gapfill variant. Equals TOTAL_CELLS unless a separate cell barcode list was provided.",
+    "UMIS_PER_CELL_MEAN":            "Average gapfill UMI count per cell.",
+    "UMIS_PER_CELL_MEDIAN":          "Median gapfill UMI count per cell. More robust than the mean for skewed distributions.",
+    "UMIS_PER_CELL_STD":             "Standard deviation of UMIs per cell. High values indicate uneven probe detection across the population.",
+    "UMIS_PER_CELL_MIN":             "Minimum UMIs seen in any called cell (can be 0 if the cell has no gapfill reads).",
+    "UMIS_PER_CELL_MIN_EXCLUDING_ZERO": "Minimum UMIs among cells that have at least 1 count. Useful when many cells have 0.",
+    "UMIS_PER_CELL_MAX":             "Maximum UMIs seen in any single cell.",
+    "CELLS_PER_GAPFILL_MEAN":        "Average number of cells that carry each distinct gapfill variant.",
+    "CELLS_PER_GAPFILL_MEDIAN":      "Median cells per gapfill. A high value suggests one dominant or clonal variant.",
+    "CELLS_PER_GAPFILL_STD":         "Spread in how widely gapfills are distributed across cells.",
+    "CELLS_PER_GAPFILL_MIN":         "The rarest gapfill — detected in this many cells.",
+    "CELLS_PER_GAPFILL_MAX":         "The most common gapfill — detected in this many cells.",
+    "SEQUENCING_SATURATION":         "Fraction of reads that are PCR duplicates (already-seen UMIs). 0 = no duplicates, 1 = fully saturated. Low values mean deeper sequencing would yield more unique UMIs.",
+}
+_FASTQ_HELP = {
+    "PROBE_CONTAINING_READS":        "Reads where a gapfill probe sequence was successfully identified and assigned to a cell barcode.",
+    "POSSIBLE_PROBES":               "Total number of distinct probe sequences in the reference panel file.",
+    "PROBES_ENCOUNTERED":            "Number of distinct probes actually detected in this dataset (out of all possible probes).",
+    "TOTAL_READS":                   "Total input read pairs before any filtering.",
+    "FILTERED_NO_CONSTANT":          "Reads discarded because the constant flanking sequence (spacer between barcode and probe) could not be found. Often indicates an adapter trimming or chemistry mismatch.",
+    "CORRECTED_BARCODE":             "Reads where the cell barcode had exactly 1 mismatch corrected against the 10x Flex whitelist.",
+    "CORRECTED_LHS":                 "Reads where the left-hand side anchor sequence had sequencing errors that were corrected.",
+    "FILTERED_NO_CELL_BARCODE":      "Reads discarded because the barcode did not match any known cell, even after correction attempts.",
+    "EXACT":                         "Reads that matched the reference exactly — no corrections needed for barcode or probe.",
+    "FILTERED_NO_RHS":               "Reads discarded because the right-hand side flanking sequence (downstream of the probe) was absent or unrecognizable.",
+    "CORRECTED_RHS":                 "Reads where the right-hand side anchor sequence had sequencing errors that were corrected.",
+    "FILTERED_NO_LHS":               "Reads discarded because the left-hand side anchor sequence was absent.",
+    "FILTERED_NO_PROBE_BARCODE":     "Reads discarded because the gapfill sequence was not found in the reference panel.",
+}
+
+
 _HTML_TEMPLATE = """\
 <!DOCTYPE html>
 <html lang="en">
@@ -539,6 +818,8 @@ _HTML_TEMPLATE = """\
   --success-lt: #D1FAE5;
   --warn:       #D97706;
   --warn-lt:    #FEF3C7;
+  --error:      #DC2626;
+  --error-lt:   #FEE2E2;
   --mono: "JetBrains Mono", "Fira Code", monospace;
   --sans: "Figtree", "Segoe UI", system-ui, sans-serif;
   --radius: 8px;
@@ -600,18 +881,81 @@ body {{
 .run-header .run-meta span {{ display: flex; gap: 5px; align-items: center; }}
 .run-header .run-meta b {{ color: var(--text2); font-weight: 500; }}
 
-/* ── Alert strip ── */
+/* ── QC flags bar: sits between the run header and the tab nav, so it's
+   visible no matter which tab is active ── */
+.flags-bar {{
+  background: var(--bg);
+  padding: 14px 32px 0;
+}}
+.flags-bar:empty {{ display: none; }}
+
+/* ── Alert strip (all-clear banner) ── */
 .alert-strip {{
   background: var(--success-lt);
-  border-bottom: 1px solid #A7F3D0;
-  padding: 10px 32px;
+  border: 1px solid #A7F3D0;
+  border-radius: var(--radius);
+  padding: 12px 18px;
   font-size: 13px;
   color: #065F46;
   display: flex;
   align-items: center;
   gap: 8px;
+  margin-bottom: 14px;
 }}
 .alert-strip svg {{ flex-shrink: 0; }}
+
+/* ── Flag cards ── */
+.flags-section {{
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
+}}
+.flag-card {{
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 16px;
+  border-radius: var(--radius);
+  font-size: 13px;
+}}
+.flag-card.warning {{ background: var(--warn-lt); border: 1px solid #FDE68A; color: #92400E; }}
+.flag-card.error   {{ background: var(--error-lt); border: 1px solid #FECACA; color: #991B1B; }}
+.flag-card .flag-icon {{
+  flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.4;
+}}
+.flag-card .flag-title {{ font-weight: 600; margin-bottom: 2px; }}
+.flag-card .flag-message {{ color: inherit; opacity: 0.9; }}
+.flag-card .flag-jump {{
+  display: block;
+  margin-top: 5px;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: var(--sans);
+}}
+.flag-card .flag-jump:hover {{ opacity: 0.7; }}
+
+/* ── Jump-to-plot highlight pulse ── */
+.card.flag-highlight-warning {{ animation: flagPulseWarn 2.2s ease-out; }}
+.card.flag-highlight-error   {{ animation: flagPulseError 2.2s ease-out; }}
+@keyframes flagPulseWarn {{
+  0%   {{ box-shadow: 0 0 0 4px rgba(217,119,6,0.35), var(--shadow); }}
+  100% {{ box-shadow: var(--shadow); }}
+}}
+@keyframes flagPulseError {{
+  0%   {{ box-shadow: 0 0 0 4px rgba(220,38,38,0.35), var(--shadow); }}
+  100% {{ box-shadow: var(--shadow); }}
+}}
 
 /* ── Nav tabs ── */
 nav {{
@@ -705,6 +1049,16 @@ main {{
   font-size: 11px;
   color: var(--text3);
 }}
+.hero-metric.flag-warning {{
+  background: var(--warn-lt);
+  box-shadow: inset 3px 0 0 var(--warn);
+}}
+.hero-metric.flag-warning:hover {{ background: #FDECC8; }}
+.hero-metric.flag-error {{
+  background: var(--error-lt);
+  box-shadow: inset 3px 0 0 var(--error);
+}}
+.hero-metric.flag-error:hover {{ background: #FDD5D5; }}
 
 /* ── Card ── */
 .card {{
@@ -780,7 +1134,7 @@ main {{
   color: var(--accent);
   text-align: right;
 }}
-.metrics-table tbody tr:hover td {{ background: var(--surface2); }}
+.metrics-table tbody tr:hover {{ filter: brightness(0.96); }}
 .metrics-table tbody tr:last-child td {{ border-bottom: none; }}
 
 /* ── Footer ── */
@@ -815,6 +1169,28 @@ footer .brand {{ font-family: var(--mono); font-weight: 500; color: var(--accent
   line-height: 1;
   flex-shrink: 0;
 }}
+.flag-badge {{
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  font-size: 9px;
+  font-weight: 700;
+  cursor: help;
+  margin-left: 5px;
+  vertical-align: middle;
+  line-height: 1;
+  flex-shrink: 0;
+}}
+.flag-badge.warning {{ background: var(--warn); color: #FFFFFF; }}
+.flag-badge.error   {{ background: var(--error); color: #FFFFFF; }}
+/* Text glyphs (?, ⚠, ✕) render off-center in these small circles — inconsistent
+   font ink-metrics for "?", and "⚠"/"✕" render as color emoji with baked-in
+   padding on some platforms. A tiny script swaps them for SVGs sized here,
+   which center exactly regardless of font/emoji rendering. */
+.help-btn svg, .flag-badge svg {{ width: 62%; height: 62%; display: block; }}
 #tooltip-box {{
   position: fixed;
   background: #1E293B;
@@ -857,13 +1233,16 @@ footer .brand {{ font-family: var(--mono); font-weight: 500; color: var(--accent
   </div>
 </div>
 
+<!-- QC flags: shown above the tab bar so they're visible no matter which tab is active -->
+<div class="flags-bar">{flags_html}</div>
+
 <!-- Nav -->
 <nav>
-  <button class="active" onclick="showTab('overview', this)">Summary</button>
-  <button onclick="showTab('cells', this)">Cell QC</button>
-  <button onclick="showTab('gapfills', this)">Gapfill Analysis</button>
+  <button class="active" data-tab="overview" onclick="showTab('overview', this)">Summary</button>
+  <button data-tab="cells" onclick="showTab('cells', this)">Cell QC</button>
+  <button data-tab="gapfills" onclick="showTab('gapfills', this)">Gapfill Analysis</button>
   {wta_tab_btn}
-  <button onclick="showTab('metrics', this)">Metrics</button>
+  <button data-tab="metrics" onclick="showTab('metrics', this)">Metrics</button>
 </nav>
 
 <main>
@@ -1001,6 +1380,25 @@ function showTab(id, btn) {{
   panel.querySelectorAll('.js-plotly-plot').forEach(el => Plotly.Plots.resize(el));
 }}
 
+// "View plot →" links on flag cards: switch to the plot's tab, scroll its
+// card into view, and pulse a highlight ring so it's obvious which card the
+// flag was about.
+function jumpToPlot(tabId, plotId, level) {{
+  const btn = document.querySelector('nav button[data-tab="' + tabId + '"]');
+  if (btn) showTab(tabId, btn);
+  requestAnimationFrame(() => {{
+    const target = document.getElementById(plotId);
+    const card = target ? target.closest('.card') : null;
+    if (!card) return;
+    card.scrollIntoView({{behavior: 'smooth', block: 'center'}});
+    const cls = 'flag-highlight-' + level;
+    card.classList.remove(cls);
+    void card.offsetWidth; // restart the animation if it's already running
+    card.classList.add(cls);
+    setTimeout(() => card.classList.remove(cls), 2200);
+  }});
+}}
+
 const cfg = {{
   responsive: true,
   displaylogo: false,
@@ -1040,6 +1438,18 @@ plot('plot-cells-per-gapfill', FIGS.cells_per_gapfill);
 plot('plot-probe-boxplot',   FIGS.probe_boxplot);
 plot('plot-reads-per-gapfill', FIGS.reads_per_gapfill);
 {wta_plot_js}
+
+// Badge icons (?, warning, error): swap the text glyph for an SVG that's
+// guaranteed to center exactly in its circle, regardless of font metrics or
+// emoji rendering (see the .help-btn svg / .flag-badge svg CSS comment).
+const _ICONS = {{
+  help: '<svg viewBox="0 0 16 16"><text x="8" y="8.6" text-anchor="middle" dominant-baseline="central" font-size="11" font-weight="700" fill="currentColor">?</text></svg>',
+  warning: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 22 20 2 20Z"/><line x1="12" y1="9" x2="12" y2="14"/><circle cx="12" cy="17.3" r="0.6" fill="currentColor" stroke="none"/></svg>',
+  error: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>',
+}};
+document.querySelectorAll('.help-btn').forEach(el => {{ el.innerHTML = _ICONS.help; }});
+document.querySelectorAll('.flag-badge.warning').forEach(el => {{ el.innerHTML = _ICONS.warning; }});
+document.querySelectorAll('.flag-badge.error').forEach(el => {{ el.innerHTML = _ICONS.error; }});
 
 // Help tooltips
 const _tt = document.createElement('div');
@@ -1098,7 +1508,8 @@ def make_html_report(
     cpg_fig             = _fig_cells_per_gapfill(gapfill_adata)
     probe_box_fig       = _fig_probe_boxplot(gapfill_adata)
     reads_gapfill_fig   = _fig_reads_per_gapfill(gapfill_adata)
-    wta_figs            = _fig_wta_correlation(gapfill_adata, adata)
+    wta_result          = _fig_wta_correlation(gapfill_adata, adata)
+    wta_figs, wta_stats = wta_result["figs"], wta_result["stats"]
 
     all_figs = {
         "sankey": sankey_fig, "barcode_rank": barcode_rank_fig,
@@ -1111,7 +1522,7 @@ def make_html_report(
         if len(wta_figs) > 1:
             all_figs["wta_pb"] = wta_figs[1]
 
-    wta_tab_btn  = '<button onclick="showTab(\'wta\', this)">WTA Correlation</button>' if wta_figs else ""
+    wta_tab_btn  = '<button data-tab="wta" onclick="showTab(\'wta\', this)">WTA Correlation</button>' if wta_figs else ""
     wta_tab_html = """
 <div id="tab-wta" class="tab-panel">
   <div class="plot-2col">
@@ -1134,55 +1545,36 @@ def make_html_report(
     wta_plot_js = "plot('plot-wta-sc', FIGS.wta_sc);\nplot('plot-wta-pb', FIGS.wta_pb);" if wta_figs else ""
 
     hero = _build_hero_metrics(fastq, counts, gapfill_adata)
+    flags = _evaluate_flags(fastq, counts, gapfill_adata, wta_stats)
+    flags_html = _flag_cards_html(flags)
+    box_flags = {f["hero_label"]: f for f in flags if f.get("hero_label")}
 
-    def _hero_lbl(m: dict) -> str:
+    def _hero_lbl(m: dict, flag: Optional[dict]) -> str:
         tip = m.get("tip", "").replace('"', "&quot;")
         help_html = f' <span class="help-btn" data-tip="{tip}">?</span>' if tip else ""
-        return f'{m["label"]}{help_html}'
+        flag_html = ""
+        if flag:
+            ftip = flag["message"].replace('"', "&quot;")
+            ficon = "✕" if flag["level"] == "error" else "⚠"
+            flag_html = f' <span class="flag-badge {flag["level"]}" data-tip="{ftip}">{ficon}</span>'
+        return f'{m["label"]}{flag_html}{help_html}'
 
-    hero_html = "".join(
-        f'<div class="hero-metric"><div class="val">{m["value"]}</div>'
-        f'<div class="lbl">{_hero_lbl(m)}</div>'
-        f'<div class="sub">{m["sub"]}</div></div>'
-        for m in hero
-    )
+    hero_parts = []
+    for m in hero:
+        flag = box_flags.get(m["label"])
+        cls = f' flag-{flag["level"]}' if flag else ""
+        hero_parts.append(
+            f'<div class="hero-metric{cls}"><div class="val">{m["value"]}</div>'
+            f'<div class="lbl">{_hero_lbl(m, flag)}</div>'
+            f'<div class="sub">{m["sub"]}</div></div>'
+        )
+    hero_html = "".join(hero_parts)
 
-    _counts_help = {
-        "TOTAL_CELLS":                   "Number of barcodes called as real cells (at least 1 gapfill UMI).",
-        "TOTAL_UMIS":                    "Sum of all gapfill UMI counts across every cell.",
-        "GAPFILL_CONTAINING_CELLS":      "Cells with at least one detected gapfill variant. Equals TOTAL_CELLS unless a separate cell barcode list was provided.",
-        "UMIS_PER_CELL_MEAN":            "Average gapfill UMI count per cell.",
-        "UMIS_PER_CELL_MEDIAN":          "Median gapfill UMI count per cell. More robust than the mean for skewed distributions.",
-        "UMIS_PER_CELL_STD":             "Standard deviation of UMIs per cell. High values indicate uneven probe detection across the population.",
-        "UMIS_PER_CELL_MIN":             "Minimum UMIs seen in any called cell (can be 0 if the cell has no gapfill reads).",
-        "UMIS_PER_CELL_MIN_EXCLUDING_ZERO": "Minimum UMIs among cells that have at least 1 count. Useful when many cells have 0.",
-        "UMIS_PER_CELL_MAX":             "Maximum UMIs seen in any single cell.",
-        "CELLS_PER_GAPFILL_MEAN":        "Average number of cells that carry each distinct gapfill variant.",
-        "CELLS_PER_GAPFILL_MEDIAN":      "Median cells per gapfill. A high value suggests one dominant or clonal variant.",
-        "CELLS_PER_GAPFILL_STD":         "Spread in how widely gapfills are distributed across cells.",
-        "CELLS_PER_GAPFILL_MIN":         "The rarest gapfill — detected in this many cells.",
-        "CELLS_PER_GAPFILL_MAX":         "The most common gapfill — detected in this many cells.",
-        "SEQUENCING_SATURATION":         "Fraction of reads that are PCR duplicates (already-seen UMIs). 0 = no duplicates, 1 = fully saturated. Low values mean deeper sequencing would yield more unique UMIs.",
-    }
-    _fastq_help = {
-        "PROBE_CONTAINING_READS":        "Reads where a gapfill probe sequence was successfully identified and assigned to a cell barcode.",
-        "POSSIBLE_PROBES":               "Total number of distinct probe sequences in the reference panel file.",
-        "PROBES_ENCOUNTERED":            "Number of distinct probes actually detected in this dataset (out of all possible probes).",
-        "TOTAL_READS":                   "Total input read pairs before any filtering.",
-        "FILTERED_NO_CONSTANT":          "Reads discarded because the constant flanking sequence (spacer between barcode and probe) could not be found. Often indicates an adapter trimming or chemistry mismatch.",
-        "CORRECTED_BARCODE":             "Reads where the cell barcode had exactly 1 mismatch corrected against the 10x Flex whitelist.",
-        "CORRECTED_LHS":                 "Reads where the left-hand side anchor sequence had sequencing errors that were corrected.",
-        "FILTERED_NO_CELL_BARCODE":      "Reads discarded because the barcode did not match any known cell, even after correction attempts.",
-        "EXACT":                         "Reads that matched the reference exactly — no corrections needed for barcode or probe.",
-        "FILTERED_NO_RHS":               "Reads discarded because the right-hand side flanking sequence (downstream of the probe) was absent or unrecognizable.",
-        "CORRECTED_RHS":                 "Reads where the right-hand side anchor sequence had sequencing errors that were corrected.",
-        "FILTERED_NO_LHS":               "Reads discarded because the left-hand side anchor sequence was absent.",
-        "FILTERED_NO_PROBE_BARCODE":     "Reads discarded because the gapfill sequence was not found in the reference panel.",
-    }
-
-    def _rows(d: dict, help_dict: dict = {}) -> str:
+    def _rows(d: dict, order: list, help_dict: dict = {}, style_fn=None) -> str:
+        keys = [k for k in order if k in d] + [k for k in d if k not in order]
         rows = []
-        for k, v in d.items():
+        for k in keys:
+            v = d[k]
             if isinstance(v, (float, np.floating)):
                 v_str = f"{v:.4f}" if abs(v) < 1 else f"{v:,.2f}"
             elif isinstance(v, (int, np.integer)) or (isinstance(v, str) and str(v).isdigit()):
@@ -1191,7 +1583,8 @@ def make_html_report(
                 v_str = str(v)
             tip = help_dict.get(k, "").replace('"', '&quot;')
             tip_html = f' <span class="help-btn" data-tip="{tip}">?</span>' if tip else ""
-            rows.append(f"<tr><td>{k}{tip_html}</td><td>{v_str}</td></tr>")
+            style = style_fn(k, v, d) if style_fn else ""
+            rows.append(f'<tr style="{style}"><td>{k}{tip_html}</td><td>{v_str}</td></tr>')
         return "\n".join(rows)
 
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -1263,8 +1656,9 @@ def make_html_report(
         ilab_meta_span=ilab_meta_span,
         metrics_download=metrics_download,
         hero_html=hero_html,
-        counts_rows=_rows(counts, _counts_help),
-        fastq_rows=_rows(fastq, _fastq_help),
+        flags_html=flags_html,
+        counts_rows=_rows(counts, _COUNTS_ORDER, _COUNTS_HELP, _counts_row_style),
+        fastq_rows=_rows(fastq, _FASTQ_ORDER, _FASTQ_HELP, _fastq_row_style),
         figs_json=json.dumps(all_figs, allow_nan=False, default=lambda x: None),
         wta_tab_btn=wta_tab_btn,
         wta_tab_html=wta_tab_html,

@@ -457,7 +457,10 @@ def summarize_counts(input: Path, summary_output: Path, summary_pdf_output: Path
     pd.DataFrame(stats).to_csv(summary_output, index=False, sep="\t")
 
     # Generate a PDF report
-    make_pdf_report(summary_pdf_output, gapfill_adata, adata, input.parent / "probe_reads.tsv.gz", reads_per_gapfill)
+    try:
+        make_pdf_report(summary_pdf_output, gapfill_adata, adata, input.parent / "probe_reads.tsv.gz", reads_per_gapfill)
+    except:
+        print("Failed to generate PDF report.")  # PDF will be deprecated with the nicer HTML report, so we will not fail the pipeline if this fails.
 
     # Generate an HTML report
     make_html_report(

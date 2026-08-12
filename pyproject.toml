@@ -1,6 +1,6 @@
 [project]
 name = "giftwrap-sc"
-version = "0.5.1-dev1"
+version = "0.5.1-dev2"
 description = "Tools to quantify GIFT-seq datasets."
 readme = "README.md"
 authors = [
@@ -38,8 +38,8 @@ dependencies = [
 [project.urls]
 Homepage = "https://clareaulab.github.io/giftwrap"
 Documentation = "https://clareaulab.github.io/giftwrap"
-Repository = "https://github.com/lareauc/giftwrap"
-Issues = "https://github.com/lareauc/giftwrap/issues"
+Repository = "https://github.com/clareaulab/giftwrap"
+Issues = "https://github.com/clareaulab/giftwrap/issues"
 
 [project.optional-dependencies]
 # Need protobuf for VisiumHD cell barcode parsing
