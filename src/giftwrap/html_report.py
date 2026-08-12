@@ -342,7 +342,7 @@ def _fig_reads_per_gapfill(gapfill_adata) -> dict:
     reads_sorted = reads[order]
     labels_sorted = [str(p) for p in probe_arr[order]]
     detected = reads_sorted[reads_sorted > 0]
-    mean_reads = float(detected.mean()) if detected.size else 0.0
+    median_reads = float(np.median(detected)) if detected.size else 0.0
     # One bar per gapfill variant; panels can have hundreds of thousands, so
     # subsample the rank curve (log-spaced to preserve the head) for display.
     n_total = len(reads_sorted)
@@ -360,9 +360,9 @@ def _fig_reads_per_gapfill(gapfill_adata) -> dict:
              "marker": {"color": "#0369A1"},
              "hovertemplate": "<b>%{customdata}</b><br>Gapfill rank %{x}<br>Reads: %{y:,}<extra></extra>"},
             {"type": "scatter", "mode": "lines",
-             "x": [0, n_total - 1], "y": [mean_reads, mean_reads],
+             "x": [0, n_total - 1], "y": [median_reads, median_reads],
              "line": {"color": "#DC2626", "dash": "dash", "width": 1.5},
-             "name": f"Mean ({mean_reads:,.0f}, detected only)"},
+             "name": f"Median ({median_reads:,.0f} reads)"},
         ],
         "layout": {
             "xaxis": {"title": "Gapfill Rank", "showticklabels": False},
