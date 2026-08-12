@@ -331,12 +331,18 @@ def _fig_reads_per_gapfill(gapfill_adata) -> dict:
         return {}
     gapfill_adata = gapfill_adata[:, real_gapfill_mask(gapfill_adata)]
     layer = gapfill_adata.layers["total_reads"]
-    reads = _to_list(
+    reads = np.asarray(_to_list(
         layer.todense().__array__().sum(0) if hasattr(layer, "todense") else np.asarray(layer).sum(0)
-    )
-    reads_sorted = sorted(reads, reverse=True)
-    detected = [r for r in reads if r > 0]
-    mean_reads = float(np.mean(detected)) if detected else 0.0
+    ))
+    probe_arr = (gapfill_adata.var["probe"].values if "probe" in gapfill_adata.var.columns
+                 else gapfill_adata.var_names.values)
+    # argsort (not sorted()) so each bar keeps the probe identity it came from,
+    # through both the descending sort and the log-spaced subsampling below.
+    order = np.argsort(reads)[::-1]
+    reads_sorted = reads[order]
+    labels_sorted = [str(p) for p in probe_arr[order]]
+    detected = reads_sorted[reads_sorted > 0]
+    mean_reads = float(detected.mean()) if detected.size else 0.0
     # One bar per gapfill variant; panels can have hundreds of thousands, so
     # subsample the rank curve (log-spaced to preserve the head) for display.
     n_total = len(reads_sorted)
@@ -344,13 +350,15 @@ def _fig_reads_per_gapfill(gapfill_adata) -> dict:
     if n_total > 2000:
         idx = np.unique(np.concatenate(([0], np.round(
             np.geomspace(1, n_total - 1, 1000)).astype(int))))
-        reads_sorted = [reads_sorted[i] for i in idx]
+        reads_sorted = reads_sorted[idx]
+        labels_sorted = [labels_sorted[i] for i in idx]
         ranks = [int(i) for i in idx]
     return {
         "data": [
-            {"type": "bar", "x": ranks, "y": reads_sorted,
+            {"type": "bar", "x": ranks, "y": reads_sorted.tolist(),
+             "customdata": labels_sorted,
              "marker": {"color": "#0369A1"},
-             "hovertemplate": "Gapfill rank %{x}<br>Reads: %{y:,}<extra></extra>"},
+             "hovertemplate": "<b>%{customdata}</b><br>Gapfill rank %{x}<br>Reads: %{y:,}<extra></extra>"},
             {"type": "scatter", "mode": "lines",
              "x": [0, n_total - 1], "y": [mean_reads, mean_reads],
              "line": {"color": "#DC2626", "dash": "dash", "width": 1.5},
@@ -395,30 +403,38 @@ def _fig_wta_correlation(gapfill_adata, adata) -> list[dict]:
     n = len(probes)
     wta_sc  = np.zeros((gapfill_adata.shape[0], n))
     gap_sc  = np.zeros((gapfill_adata.shape[0], n))
+    genes = []
     for i, probe in enumerate(probes):
         gene = gapfill_adata.var["gene"][gapfill_adata.var["probe"] == probe].values[0]
+        genes.append(str(gene))
         if gene in adata.var_names:
             wta_sc[:, i] = adata[:, adata.var_names == gene].X.toarray().flatten()
         gap_sc[:, i] = gapfill_adata[:, gapfill_adata.var["probe"] == probe].X.toarray().sum(axis=1).flatten()
     sc_rho, sc_p = spearmanr(gap_sc.flatten(), wta_sc.flatten())
+    # [probe, gene] per column i, for hover identity — aligned with column i of
+    # gap_sc/wta_sc so it can be tiled/indexed the same way as those matrices.
+    pair_labels = np.array([[str(probes[i]), genes[i]] for i in range(n)], dtype=object)
 
-    def _scatter(x, y, title, xlabel, ylabel, max_points: Optional[int] = None):
+    def _scatter(x, y, title, xlabel, ylabel, customdata, max_points: Optional[int] = None):
         # The correlation (title) is always computed on the full data by the
         # caller; here we only thin what gets embedded as scatter markers so the
         # report does not balloon to hundreds of MB. The all-zero (0,0) pairs are
         # overplotted and uninformative, so drop them first, then cap.
         x = np.asarray(x); y = np.asarray(y)
+        customdata = np.asarray(customdata, dtype=object)
         if max_points is not None:
             nz = (x > 0) | (y > 0)
-            x, y = x[nz], y[nz]
+            x, y, customdata = x[nz], y[nz], customdata[nz]
             if x.size > max_points:
                 sel = np.random.default_rng(42).choice(x.size, max_points, replace=False)
-                x, y = x[sel], y[sel]
+                x, y, customdata = x[sel], y[sel], customdata[sel]
         return {
             "data": [{"type": "scatter", "mode": "markers",
                       "x": x.tolist(), "y": y.tolist(),
+                      "customdata": customdata.tolist(),
                       "marker": {"size": 4, "color": "#2563EB", "opacity": 0.5},
-                      "hovertemplate": xlabel + ": %{x}<br>" + ylabel + ": %{y}<extra></extra>"}],
+                      "hovertemplate": ("<b>%{customdata[0]}</b> (%{customdata[1]})<br>" +
+                                        xlabel + ": %{x}<br>" + ylabel + ": %{y}<extra></extra>")}],
             "layout": {
                 "title": {"text": title, "font": {"size": 12}},
                 "xaxis": {"title": xlabel, "showgrid": True},
@@ -427,10 +443,15 @@ def _fig_wta_correlation(gapfill_adata, adata) -> list[dict]:
             }
         }
 
+    # Flattening (n_cells, n) matrices in C order visits column i (probe i) for
+    # every row before moving to the next row, so tiling pair_labels n_cells
+    # times lines each label up with the same flat index as gap_sc/wta_sc.
+    sc_customdata = np.tile(pair_labels, (gapfill_adata.shape[0], 1))
     figs = [_scatter(gap_sc.flatten(), wta_sc.flatten(),
                      f"Single-cell: Spearman ρ = {sc_rho:.2f} (p = {sc_p:.2e})",
                      "Gapfill probe UMIs (per cell)",
                      "WTA gene UMIs (per cell)",
+                     sc_customdata,
                      max_points=50_000)]
     pb_gap = gap_sc.sum(axis=0)
     pb_wta = wta_sc.sum(axis=0)
@@ -438,7 +459,8 @@ def _fig_wta_correlation(gapfill_adata, adata) -> list[dict]:
     figs.append(_scatter(pb_gap, pb_wta,
                          f"Pseudobulk: Spearman ρ = {pb_rho:.2f} (p = {pb_p:.2e})",
                          "Gapfill probe UMIs (summed across cells)",
-                         "WTA gene UMIs (summed across cells)"))
+                         "WTA gene UMIs (summed across cells)",
+                         pair_labels))
     return figs
 
 
