@@ -879,21 +879,32 @@ def _impute_within_cluster(adata: ad.AnnData,
 
     # Pre-compute neighbor indices for all cells to avoid repeated sorting
     neighbor_indices_all = np.argsort(distance_matrix, axis=1)
-    
+
+    # `all_genotype_vectors` concatenates the per-locus allele indicator rows (one row per allele)
+    # into a single (n_cells, n_features) matrix. To recover the block of columns belonging to a
+    # given genotype locus, compute the cumulative offsets of each locus's allele count.
+    locus_feature_offsets = np.cumsum([0] + [len(alleles) for alleles in genotype_allele])
+
     # Vectorize where possible
     cells_to_process = np.where(np.any(to_fill_mask, axis=1))[0]
-    
+
     for cell_idx in cells_to_process:
         genotypes_to_fill = to_fill_mask[cell_idx, :]
         neighbor_indices = neighbor_indices_all[cell_idx]
-        
+
         for genotype_idx in np.where(genotypes_to_fill)[0]:
-            genotype_vector = all_genotype_vectors[neighbor_indices, :][:, genotype_idx]
-            
+            feature_start = locus_feature_offsets[genotype_idx]
+            feature_end = locus_feature_offsets[genotype_idx + 1]
+            if feature_end == feature_start:
+                # No alleles observed for this locus
+                continue
+            # Shape: (n_alleles_for_locus, n_neighbors)
+            genotype_vector = all_genotype_vectors[neighbor_indices, feature_start:feature_end].T
+
             if np.all(np.isnan(genotype_vector)):
                 # If all neighbors have NaN genotype, skip this genotype
                 continue
-            
+
             # Get valid neighbors (skip self at index 0)
             valid_neighbors = ~np.isnan(genotype_vector).all(0)
             if not valid_neighbors[1:k+1].any():
