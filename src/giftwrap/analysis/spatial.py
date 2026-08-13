@@ -17,6 +17,7 @@ import scipy
 import scipy.sparse
 
 import giftwrap.analysis.tools as tl
+from giftwrap.utils import iter_layers
 try:
     import spatialdata as sd
     import geopandas as gpd
@@ -113,10 +114,9 @@ def bin(adata: ad.AnnData, resolution: int = 8) -> ad.AnnData:
 
     # Aggregate layers that start with the prefix 'X_'
     new_layers = {}
-    if adata.layers:
-        for layer_key, layer_val in adata.layers.items():
-            if layer_key.startswith("X_") or layer_key == 'total_counts':
-                new_layers[layer_key] = _aggregate_matrix(layer_val)
+    for layer_key, layer_val in iter_layers(adata):
+        if layer_key.startswith("X_") or layer_key == 'total_counts':
+            new_layers[layer_key] = _aggregate_matrix(layer_val)
 
     # Vectorized obs_names generation
     new_y_coords = unique_bins // new_ncol
@@ -229,12 +229,11 @@ def join_with_wta(wta: 'sd.SpatialData', gf_adata: ad.AnnData) -> 'sd.SpatialDat
 
             # Optimized layers creation using comprehension
             missing_layers = {}
-            if _gf.layers:
-                for k, layer in _gf.layers.items():
-                    if scipy.sparse.issparse(layer):
-                        missing_layers[k] = scipy.sparse.csr_matrix((n_missing, n_genes), dtype=layer.dtype)
-                    else:
-                        missing_layers[k] = np.zeros((n_missing, n_genes), dtype=layer.dtype)
+            for k, layer in iter_layers(_gf):
+                if scipy.sparse.issparse(layer):
+                    missing_layers[k] = scipy.sparse.csr_matrix((n_missing, n_genes), dtype=layer.dtype)
+                else:
+                    missing_layers[k] = np.zeros((n_missing, n_genes), dtype=layer.dtype)
 
             # Preserve obsp (pairwise obs annotations) if present - leave empty for missing cells
             missing_obsp = {}

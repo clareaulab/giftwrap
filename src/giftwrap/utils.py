@@ -19,7 +19,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 import itertools
 import contextlib
-from typing import Literal, Optional, Union, Iterable
+from typing import Any, Literal, Optional, Union, Iterable, Iterator
 import multiprocessing
 
 import math
@@ -1989,6 +1989,24 @@ def read_sparse_matrix(grp: h5py.Group, name: str) -> scipy.sparse.csr_matrix:
     matrix_grp = grp[name]
     shape = matrix_grp.attrs['shape']
     return scipy.sparse.csr_matrix((matrix_grp['data'], matrix_grp['indices'], matrix_grp['indptr']), shape=shape)
+
+
+def iter_layers(adata: ad.AnnData) -> Iterator[tuple[str, Any]]:
+    """
+    Iterate over the (name, matrix) pairs of the real layers of an AnnData object.
+
+    anndata >= 0.13 stores X as ``layers[None]``, so ``adata.layers`` always yields an extra
+    ``None`` key aliasing X. Copying that key into a new ``AnnData(X=..., layers=...)`` raises
+    "If you provide `layers[None]` and `X`, they must be identical". Always iterate layers
+    through this helper instead of ``adata.layers.items()``.
+
+    :param adata: The AnnData object.
+    :return: An iterator over the (layer name, layer matrix) pairs, excluding the X alias.
+    """
+    for name, matrix in adata.layers.items():
+        if name is None:
+            continue
+        yield name, matrix
 
 
 def read_h5_file(filename: str | Path) -> ad.AnnData:

@@ -14,7 +14,7 @@ import anndata as ad
 import numpy as np
 import scipy
 
-from giftwrap.utils import maybe_multiprocess
+from giftwrap.utils import maybe_multiprocess, iter_layers
 from tqdm.auto import tqdm
 
 # Numba-compiled metric for genotype connectivity (must be at module level)
@@ -86,9 +86,7 @@ def collapse_gapfills(adata: ad.AnnData) -> ad.AnnData:
 
     # Do the same for layers using vectorized operations
     new_layers = dict()
-    for layer_name, layer_data in adata.layers.items():
-        if layer_name is None:
-            continue
+    for layer_name, layer_data in iter_layers(adata):
         new_layer = np.zeros((n_cells, n_probes))
         if scipy.sparse.issparse(layer_data):
             layer_csc = layer_data.tocsc()
