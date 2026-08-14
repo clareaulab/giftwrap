@@ -1254,8 +1254,8 @@ footer .brand {{ font-family: var(--mono); font-weight: 500; color: var(--accent
   <h1>{plex_display}</h1>
   <div class="run-meta">
     <span><b>Generated</b> {timestamp}</span>
-    <span><b>Pipeline</b> <a href="https://doi.org/10.64898/2026.04.11.717967" target="_blank" rel="noopener">GIFTwrap</a></span>
-    <span><b>Chemistry</b> 10x Flex</span>
+    <span><b>Pipeline</b> <a href="https://clareaulab.github.io/giftwrap/" target="_blank" rel="noopener">GIFTwrap</a></span>
+  {chemistry_span}
     {ilab_meta_span}
     {sample_meta_span}
     {metrics_download}
@@ -1676,6 +1676,23 @@ def make_html_report(
             '&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">'
         )
 
+    # Determine chemistry label based on whether spatial data was provided
+    chemistry = "10x Flex"
+    try:
+        is_spatial = False
+        if adata is not None:
+            # Look for common spatial indicators in AnnData obsm/uns
+            if hasattr(adata, 'obsm') and any('spatial' in str(k).lower() for k in getattr(adata, 'obsm').keys()):
+                is_spatial = True
+            if not is_spatial and hasattr(adata, 'uns') and any('spatial' in str(k).lower() for k in getattr(adata, 'uns').keys()):
+                is_spatial = True
+        if is_spatial:
+            chemistry = "Visium HD"
+    except Exception:
+        chemistry = "10x Flex"
+
+    chemistry_span = f"<span><b>Chemistry</b> {chemistry}</span>"
+
     html = _HTML_TEMPLATE.format(
         plex=plex_id,
         fonts_tag=fonts_tag,
@@ -1684,6 +1701,7 @@ def make_html_report(
         sample_meta_span=sample_meta_span,
         ilab_meta_span=ilab_meta_span,
         metrics_download=metrics_download,
+        chemistry_span=chemistry_span,
         hero_html=hero_html,
         flags_html=flags_html,
         counts_rows=_rows(counts, _COUNTS_ORDER, _COUNTS_HELP, _counts_row_style),
