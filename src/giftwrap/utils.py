@@ -1721,43 +1721,49 @@ def sort_tsv_file(file: Path, columns: list[int], cores: int, use_pandas: bool =
         # Check for the sort command
         sort_avail = shutil.which("sort")
         if sort_avail:
-            # Use the unix sort command
-            # First move to a temporary file
-            os.rename(file, file.with_suffix(".tmp"))
-            # Then sort (Ignore locale for all commands for speed)
-            sort_command = "export LC_ALL=C; "
-            # First open the file
-            if 'gz' in file.suffix:
-                sort_command += f"zcat {file.with_suffix('.tmp')} | "
-            else:
-                sort_command += f"cat {file.with_suffix('.tmp')} | "
-            # Note that we need to skip the first line: https://unix.stackexchange.com/a/11857
-            sort_command += '(IFS= read -r REPLY; printf "%s\\n" "$REPLY"; '
-            # Then sort
-            sort_command += f"sort -t \"$(printf '\\t')\" --parallel={cores} --numeric-sort"
-            # Note that sort doesn't parallelize piped input since it assumes its a small file so we will give it a
-            # large buffer size (1 GB per core)
-            sort_command += f" --buffer-size={cores}G"
-            # Note that we need to add 1 to the column index since sort is 1-indexed
-            for col in columns:
-                sort_command += f" -k{col + 1},{col + 1}"
-            # Close the parenthesis
-            sort_command += ")"
+            try:
+                # Use the unix sort command
+                # First move to a temporary file
+                os.rename(file, file.with_suffix(".tmp"))
+                # Then sort (Ignore locale for all commands for speed)
+                sort_command = "export LC_ALL=C; "
+                # First open the file
+                if 'gz' in file.suffix:
+                    sort_command += f"zcat {file.with_suffix('.tmp')} | "
+                else:
+                    sort_command += f"cat {file.with_suffix('.tmp')} | "
+                # Note that we need to skip the first line: https://unix.stackexchange.com/a/11857
+                sort_command += '(IFS= read -r REPLY; printf "%s\\n" "$REPLY"; '
+                # Then sort
+                sort_command += f"sort -t \"$(printf '\\t')\" --parallel={cores} --numeric-sort"
+                # Note that sort doesn't parallelize piped input since it assumes its a small file so we will give it a
+                # large buffer size (1 GB per core)
+                sort_command += f" --buffer-size={cores}G"
+                # Note that we need to add 1 to the column index since sort is 1-indexed
+                for col in columns:
+                    sort_command += f" -k{col + 1},{col + 1}"
+                # Close the parenthesis
+                sort_command += ")"
 
-            # if the file is gzipped, then we need to gzip the output
-            if ".gz" in file.suffix:
-                sort_command += f" | gzip > {file}"
-            else:
-                sort_command += f" > {file}"
+                # if the file is gzipped, then we need to gzip the output
+                if ".gz" in file.suffix:
+                    sort_command += f" | gzip > {file}"
+                else:
+                    sort_command += f" > {file}"
 
-            result = subprocess.run(sort_command, shell=True)
-            if result.returncode != 0:
+                result = subprocess.run(sort_command, shell=True)
+                if result.returncode != 0:
+                    raise RuntimeError("Failed to sort the file.")
+                return
+            except Exception as e:
                 # Move the file back
-                os.rename(file.with_suffix(".tmp"), file)
-                raise RuntimeError("Failed to sort the file.")
-            # Delete the backup file
-            os.remove(file.with_suffix(".tmp"))
-            return
+                try:
+                    os.rename(file.with_suffix(".tmp"), file)
+                except:
+                    raise e  # Could not recover the original file, so raise the original exception
+            finally:
+                # Delete the backup file
+                file.with_suffix(".tmp").unlink(missing_ok=True)
 
     # Not able to use the sort command so fallback to python
     df = pd.read_table(file, sep="\t", compression="gzip" if "gz" in file.suffix else None)
