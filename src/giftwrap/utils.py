@@ -1597,20 +1597,38 @@ def read_wta(
         if input_path.is_dir():
             # Check if square_002um appears in the directory structure
             if "square_002um" in str(input_path):  # Pointing to the binned output
-                if "filtered_feature_bc_matrix" in str(input_path):
+                if "sample_filtered_feature_bc_matrix" in str(input_path):
                     return _parse_barcodes_tsv(input_path / "barcodes.tsv.gz")
+                elif "filtered_feature_bc_matrix" in str(input_path):
+                    return _parse_barcodes_tsv(input_path / "barcodes.tsv.gz")
+                elif (input_path / "sample_filtered_feature_bc_matrix").exists():
+                    return _parse_barcodes_tsv(input_path / "sample_filtered_feature_bc_matrix" / "barcodes.tsv.gz")
                 else:
                     return _parse_barcodes_tsv(input_path / "filtered_feature_bc_matrix" / "barcodes.tsv.gz")
-            elif (input_path / "spatial").exists():  # Pointing to the spatial output base directory
-                return _parse_barcodes_tsv(input_path / "binned_outputs" / "square_002um" / "filtered_feature_bc_matrix" / "barcodes.tsv.gz")
-            elif (input_path / "outs" / "binned_outputs" / "square_002um").exists():
-                return _parse_barcodes_tsv(input_path / "outs" / "binned_outputs" / "square_002um" / "filtered_feature_bc_matrix" / "barcodes.tsv.gz")
-            elif (input_path / "binned_outputs" / "square_002um").exists():
-                return _parse_barcodes_tsv(input_path / "binned_outputs" / "square_002um" / "filtered_feature_bc_matrix" / "barcodes.tsv.gz")
-            elif (input_path / "square_002um").exists():
-                return _parse_barcodes_tsv(input_path / "square_002um" / "filtered_feature_bc_matrix" / "barcodes.tsv.gz")
+            elif (input_path / "sample_filtered_feature_bc_matrix").exists():
+                return _parse_barcodes_tsv(input_path / "sample_filtered_feature_bc_matrix" / "barcodes.tsv.gz")
             elif (input_path / "filtered_feature_bc_matrix").exists():
                 return _parse_barcodes_tsv(input_path / "filtered_feature_bc_matrix" / "barcodes.tsv.gz")
+            elif (input_path / "spatial").exists():  # Pointing to the spatial output base directory
+                if (input_path / "binned_outputs" / "square_002um" / "sample_filtered_feature_bc_matrix").exists():
+                    return _parse_barcodes_tsv(input_path / "binned_outputs" / "square_002um" / "sample_filtered_feature_bc_matrix" / "barcodes.tsv.gz")
+                return _parse_barcodes_tsv(input_path / "binned_outputs" / "square_002um" / "filtered_feature_bc_matrix" / "barcodes.tsv.gz")
+            elif (input_path / "outs" / "sample_filtered_feature_bc_matrix").exists():
+                return _parse_barcodes_tsv(input_path / "outs" / "sample_filtered_feature_bc_matrix" / "barcodes.tsv.gz")
+            elif (input_path / "outs" / "filtered_feature_bc_matrix").exists():
+                return _parse_barcodes_tsv(input_path / "outs" / "filtered_feature_bc_matrix" / "barcodes.tsv.gz")
+            elif (input_path / "outs" / "binned_outputs" / "square_002um" / "sample_filtered_feature_bc_matrix").exists():
+                return _parse_barcodes_tsv(input_path / "outs" / "binned_outputs" / "square_002um" / "sample_filtered_feature_bc_matrix" / "barcodes.tsv.gz")
+            elif (input_path / "outs" / "binned_outputs" / "square_002um" / "filtered_feature_bc_matrix").exists():
+                return _parse_barcodes_tsv(input_path / "outs" / "binned_outputs" / "square_002um" / "filtered_feature_bc_matrix" / "barcodes.tsv.gz")
+            elif (input_path / "binned_outputs" / "square_002um" / "sample_filtered_feature_bc_matrix").exists():
+                return _parse_barcodes_tsv(input_path / "binned_outputs" / "square_002um" / "sample_filtered_feature_bc_matrix" / "barcodes.tsv.gz")
+            elif (input_path / "binned_outputs" / "square_002um" / "filtered_feature_bc_matrix").exists():
+                return _parse_barcodes_tsv(input_path / "binned_outputs" / "square_002um" / "filtered_feature_bc_matrix" / "barcodes.tsv.gz")
+            elif (input_path / "square_002um" / "sample_filtered_feature_bc_matrix").exists():
+                return _parse_barcodes_tsv(input_path / "square_002um" / "sample_filtered_feature_bc_matrix" / "barcodes.tsv.gz")
+            elif (input_path / "square_002um" / "filtered_feature_bc_matrix").exists():
+                return _parse_barcodes_tsv(input_path / "square_002um" / "filtered_feature_bc_matrix" / "barcodes.tsv.gz")
             elif (input_path / "barcodes.tsv.gz").exists():
                 return _parse_barcodes_tsv(input_path / "barcodes.tsv.gz")
             else: # Assume cell ranger output
@@ -1648,9 +1666,39 @@ def read_wta(
 
     try:
         if input_path.is_dir():
-            adata = sc.read_10x_mtx(input_path)
+            if (input_path / "filtered_feature_bc_matrix").exists():
+                adata = sc.read_10x_mtx(input_path / "filtered_feature_bc_matrix")
+            elif (input_path / "sample_filtered_feature_bc_matrix").exists():
+                adata = sc.read_10x_mtx(input_path / "sample_filtered_feature_bc_matrix")
+            elif (input_path / "outs" / "filtered_feature_bc_matrix").exists():
+                adata = sc.read_10x_mtx(input_path / "outs" / "filtered_feature_bc_matrix")
+            elif (input_path / "outs" / "sample_filtered_feature_bc_matrix").exists():
+                adata = sc.read_10x_mtx(input_path / "outs" / "sample_filtered_feature_bc_matrix")
+            elif (input_path / "outs" / "binned_outputs" / "square_002um" / "filtered_feature_bc_matrix").exists():
+                adata = sc.read_10x_mtx(input_path / "outs" / "binned_outputs" / "square_002um" / "filtered_feature_bc_matrix")
+            elif (input_path / "outs" / "binned_outputs" / "square_002um" / "sample_filtered_feature_bc_matrix").exists():
+                adata = sc.read_10x_mtx(input_path / "outs" / "binned_outputs" / "square_002um" / "sample_filtered_feature_bc_matrix")
+            elif (input_path / "binned_outputs" / "square_002um" / "filtered_feature_bc_matrix").exists():
+                adata = sc.read_10x_mtx(input_path / "binned_outputs" / "square_002um" / "filtered_feature_bc_matrix")
+            elif (input_path / "binned_outputs" / "square_002um" / "sample_filtered_feature_bc_matrix").exists():
+                adata = sc.read_10x_mtx(input_path / "binned_outputs" / "square_002um" / "sample_filtered_feature_bc_matrix")
+            elif (input_path / "square_002um" / "filtered_feature_bc_matrix").exists():
+                adata = sc.read_10x_mtx(input_path / "square_002um" / "filtered_feature_bc_matrix")
+            elif (input_path / "square_002um" / "sample_filtered_feature_bc_matrix").exists():
+                adata = sc.read_10x_mtx(input_path / "square_002um" / "sample_filtered_feature_bc_matrix")
+            elif (input_path / "filtered_feature_bc_matrix.h5").exists():
+                adata = sc.read_10x_h5(input_path / "filtered_feature_bc_matrix.h5")
+            elif (input_path / "sample_filtered_feature_bc_matrix.h5").exists():
+                adata = sc.read_10x_h5(input_path / "sample_filtered_feature_bc_matrix.h5")
+            else:
+                return None
         else:
-            adata = sc.read_10x_h5(input_path)
+            if input_path.suffix == ".h5ad":
+                adata = sc.read_h5ad(input_path)
+            elif input_path.suffix == ".h5":
+                adata = sc.read_10x_h5(input_path)
+            else:
+                return None
     except:
         return None
 
