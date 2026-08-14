@@ -1,4 +1,4 @@
-from giftwrap import analysis_utilsfrom giftwrap import analysis_utilsGIFT-wrap
+GIFT-wrap
 =========
 [![python](https://img.shields.io/badge/Python-3.11-3776AB.svg?style=flat&logo=python&logoColor=white)](https://www.python.org) [![PyPI](https://img.shields.io/pypi/v/giftwrap-sc.svg)](https://pypi.org/project/giftwrap-sc/) 
 
