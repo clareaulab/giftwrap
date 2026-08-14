@@ -402,6 +402,27 @@ def _fig_reads_per_gapfill(gapfill_adata) -> dict:
     }
 
 
+def _fit_line(x, y):
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    mask = np.isfinite(x) & np.isfinite(y)
+    x, y = x[mask], y[mask]
+    if x.size < 2:
+        return [], [], 0.0
+    if np.allclose(x, x[0]):
+        line_x = np.asarray([float(x.min()), float(x.max())])
+        line_y = np.asarray([float(np.mean(y)), float(np.mean(y))])
+        r2 = 1.0 if np.allclose(y, y[0]) else 0.0
+        return line_x.tolist(), line_y.tolist(), r2
+    coeffs = np.polyfit(x, y, 1)
+    line_x = np.unique(x)
+    line_y = np.polyval(coeffs, line_x)
+    ss_res = float(np.sum((y - np.polyval(coeffs, x)) ** 2))
+    ss_tot = float(np.sum((y - np.mean(y)) ** 2))
+    r2 = 1.0 if ss_tot == 0 else (1.0 - ss_res / ss_tot)
+    return line_x.tolist(), line_y.tolist(), max(0.0, min(1.0, r2))
+
+
 def _fig_wta_correlation(gapfill_adata, adata) -> dict:
     """Build the WTA correlation scatter plots, plus the rho/zero-fraction
     stats they're computed from — the caller needs those same stats for QC
@@ -464,13 +485,21 @@ def _fig_wta_correlation(gapfill_adata, adata) -> dict:
             if x.size > max_points:
                 sel = np.random.default_rng(42).choice(x.size, max_points, replace=False)
                 x, y, customdata = x[sel], y[sel], customdata[sel]
+        fit_x, fit_y, r2 = _fit_line(x, y)
+        trace_list = [{"type": "scatter", "mode": "markers",
+                       "x": x.tolist(), "y": y.tolist(),
+                       "customdata": customdata.tolist(),
+                       "marker": {"size": 4, "color": "#2563EB", "opacity": 0.5},
+                       "hovertemplate": ("<b>%{customdata[0]}</b> (%{customdata[1]})<br>" +
+                                         xlabel + ": %{x}<br>" + ylabel + ": %{y}<extra></extra>")},
+                      {"type": "scatter", "mode": "lines",
+                       "x": fit_x, "y": fit_y,
+                       "customdata": [r2] * len(fit_x),
+                       "line": {"color": "#111827", "dash": "dash", "width": 1.5},
+                       "hovertemplate": "Best-fit line<br>R² = %{customdata:.2f}<extra></extra>",
+                       "showlegend": False}]
         return {
-            "data": [{"type": "scatter", "mode": "markers",
-                      "x": x.tolist(), "y": y.tolist(),
-                      "customdata": customdata.tolist(),
-                      "marker": {"size": 4, "color": "#2563EB", "opacity": 0.5},
-                      "hovertemplate": ("<b>%{customdata[0]}</b> (%{customdata[1]})<br>" +
-                                        xlabel + ": %{x}<br>" + ylabel + ": %{y}<extra></extra>")}],
+            "data": trace_list,
             "layout": {
                 "title": {"text": title, "font": {"size": 12}},
                 "xaxis": {"title": xlabel, "showgrid": True},
