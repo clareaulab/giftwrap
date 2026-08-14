@@ -17,7 +17,7 @@ import scipy
 import scipy.sparse
 
 from giftwrap.analysis_utils import iter_layers
-from giftwrap import tl
+from . import tools as tl
 
 try:
     import spatialdata as sd

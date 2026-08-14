@@ -347,7 +347,10 @@ def call_genotypes(adata: ad.AnnData,
     with mp as pool:
         for probe in (pbar := tqdm(probes, desc="Genotyping ")):
             pbar.set_postfix_str(f"Probe {probe}")
-            probe_genotypes = adata.var["gapfill"][adata.var["probe"] == probe].values
+            probe_genotypes = np.asarray(
+                adata.var["gapfill"][adata.var["probe"] == probe].to_numpy(dtype=object),
+                dtype=object,
+            )
             if scipy.sparse.issparse(adata.X):
                 gapfill_counts = adata[:, adata.var["probe"] == probe].X.toarray()
             else:
@@ -403,6 +406,8 @@ def _genotype_call_job(genotypes: np.array, counts: np.array, threshold: float) 
     :param threshold: The cumulative fraction of UMIs to call a genotype.
     :return: Returns a tuple of the genotype call, number of umis supporting the genotype, and the cumulative fraction of UMIs for the called genotype.
     """
+    genotypes = np.asarray(genotypes, dtype=object)
+    counts = np.asarray(counts)
     N_cells, N_genotypes = counts.shape
     calls = np.full(N_cells, np.nan, dtype=object)
     n_umis = np.zeros(N_cells, dtype=int)
