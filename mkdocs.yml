@@ -59,7 +59,7 @@ plugins:
               - griffe_inherited_docstrings
   - mkdocs-jupyter:
       execute: false
-      no_input: true
+      no_input: false
 #      theme: dark
       remove_tag_config:
         remove_input_tags:
