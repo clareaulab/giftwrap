@@ -31,6 +31,8 @@ import scipy
 from Bio.SeqIO.QualityIO import FastqGeneralIterator
 from prefixtrie import PrefixTrie, load_shared_trie, create_shared_trie
 
+from .analysis_utils import read_sparse_matrix
+
 
 class ReadProcessState(Enum):
     FILTERED_NO_CONSTANT = 0
@@ -88,46 +90,8 @@ class lru_cached_method:
 
         return bound
 
-class DummyResult:
-
-    def __init__(self, res):
-        self.res = res
-
-    def get(self, *args, **kwargs):
-        return self.res
-
-    def wait(self, *args, **kwargs):
-        pass
-
-    def ready(self, *args, **kwargs):
-        return True
-
-    def successful(self, *args, **kwargs):
-        return True
-
 
 # Inject starmap_async
-class ItertoolsWrapper:
-
-    def starmap(self, *args, **kwargs):
-        return itertools.starmap(*args, **kwargs)
-
-    def starmap_async(self, *args, **kwargs):
-        return DummyResult(itertools.starmap(*args, **kwargs))
-
-
-def maybe_multiprocess(cores: int) -> multiprocessing.Pool:
-    """
-    Return a context manager that will either return the multiprocessing module or a dummy module depending on if there
-    are more than 1 core reqeusted.
-    :param cores: The number of cores.
-    :return: The multiprocessing module or a dummy module.
-    """
-    if cores > 1:
-        mp = multiprocessing.Pool(cores)
-    else:
-        mp = contextlib.nullcontext(ItertoolsWrapper())  # No multiprocessing
-    return mp
 
 
 def read_manifest(output_dir: Path) -> pd.DataFrame:
@@ -2031,36 +1995,6 @@ def write_sparse_matrix(grp: h5py.Group, name: str, sp_matrix):
     matrix_grp.create_dataset("indptr", data=sp_matrix.indptr, compression='gzip', shuffle=True)
     # Shape
     matrix_grp.attrs['shape'] = sp_matrix.shape
-
-
-def read_sparse_matrix(grp: h5py.Group, name: str) -> scipy.sparse.csr_matrix:
-    """
-    Read a sparse matrix from a group.
-    :param grp: The group.
-    :param name: The name of the dataset.
-    :return: The sparse matrix.
-    """
-    matrix_grp = grp[name]
-    shape = matrix_grp.attrs['shape']
-    return scipy.sparse.csr_matrix((matrix_grp['data'], matrix_grp['indices'], matrix_grp['indptr']), shape=shape)
-
-
-def iter_layers(adata: ad.AnnData) -> Iterator[tuple[str, Any]]:
-    """
-    Iterate over the (name, matrix) pairs of the real layers of an AnnData object.
-
-    anndata >= 0.13 stores X as ``layers[None]``, so ``adata.layers`` always yields an extra
-    ``None`` key aliasing X. Copying that key into a new ``AnnData(X=..., layers=...)`` raises
-    "If you provide `layers[None]` and `X`, they must be identical". Always iterate layers
-    through this helper instead of ``adata.layers.items()``.
-
-    :param adata: The AnnData object.
-    :return: An iterator over the (layer name, layer matrix) pairs, excluding the X alias.
-    """
-    for name, matrix in adata.layers.items():
-        if name is None:
-            continue
-        yield name, matrix
 
 
 def read_h5_file(filename: str | Path) -> ad.AnnData:

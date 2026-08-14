@@ -14,8 +14,9 @@ import pandas as pd
 import scipy
 from rich_argparse import RichHelpFormatter
 
-from .utils import read_manifest, read_barcodes, maybe_multiprocess, maybe_gzip, write_sparse_matrix, \
+from .pipeline_utils import read_manifest, read_barcodes, maybe_gzip, write_sparse_matrix, \
     compile_flatfile
+from .analysis_utils import maybe_multiprocess
 
 
 def collect_counts(input: Path, output: Path, manifest: pd.DataFrame, barcodes_df: pd.DataFrame, overwrite: bool, plex: str = "1", multiplex: bool = False, flatten: bool = False, max_pcr_thresholds: int = 10):

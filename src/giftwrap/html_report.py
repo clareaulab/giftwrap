@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import spearmanr
 
-from .utils import real_gapfill_mask
+from .pipeline_utils import real_gapfill_mask
 
 # Third-party web assets are vendored under giftwrap/assets/ and inlined into the
 # report so it renders with no network access — these reports are routinely opened
@@ -230,7 +230,7 @@ def _fig_saturation_curve(gapfill_adata) -> dict:
 
 
 def _fig_pcr_histogram(probe_reads_file, filter_cutoff: int) -> dict:
-    from .utils import maybe_gzip
+    from .pipeline_utils import maybe_gzip
     duplicates = []
     try:
         with maybe_gzip(probe_reads_file, "r") as f:

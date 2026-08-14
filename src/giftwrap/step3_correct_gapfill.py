@@ -14,7 +14,8 @@ from pathlib import Path
 from tqdm import tqdm
 from rich_argparse import RichHelpFormatter
 
-from .utils import maybe_multiprocess, batched, maybe_gzip, GzipNamedTemporaryFile, phred_string_to_probs
+from .pipeline_utils import batched, maybe_gzip, GzipNamedTemporaryFile, phred_string_to_probs
+from .analysis_utils import maybe_multiprocess
 
 
 def process_lines(lines: list[str]) -> tuple[str, bool]:

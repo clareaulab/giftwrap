@@ -5,6 +5,7 @@ from glob import glob
 import matplotlib.pyplot as plt
 
 import giftwrap as gw
+import giftwrap.pipeline_utils
 
 
 def main(dirs):
@@ -26,10 +27,10 @@ def main(dirs):
             # Collapse
             adata = gw.tl.collapse_gapfills(adata)
             # Compute current saturation
-            sat = gw.sequencing_saturation(adata.layers['total_reads'])
+            sat = pipeline_utils.sequencing_saturation(adata.layers['total_reads'])
             exp2sats[exp] = sat
             # Compute the curve
-            curve = gw.sequence_saturation_curve(adata.layers['total_reads'])
+            curve = pipeline_utils.sequence_saturation_curve(adata.layers['total_reads'])
             # Plot the curve
             axes[0].plot(curve[:,0], curve[:,1], label=exp)
 

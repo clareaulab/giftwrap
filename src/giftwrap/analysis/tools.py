@@ -14,7 +14,7 @@ import anndata as ad
 import numpy as np
 import scipy
 
-from giftwrap.utils import maybe_multiprocess, iter_layers
+from giftwrap.analysis_utils import maybe_multiprocess, iter_layers
 from tqdm.auto import tqdm
 
 # Numba-compiled metric for genotype connectivity (must be at module level)

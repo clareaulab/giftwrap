@@ -13,7 +13,7 @@ import inspect
 import pandas as pd
 from rich_argparse import RichHelpFormatter
 
-from .utils import FlexFormatInfo
+from .pipeline_utils import FlexFormatInfo
 
 
 def print_R():

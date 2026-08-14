@@ -16,8 +16,9 @@ from matplotlib.patches import Patch
 import scipy
 import scipy.sparse
 
-import giftwrap.analysis.tools as tl
-from giftwrap.utils import iter_layers
+from giftwrap.analysis_utils import iter_layers
+from giftwrap import tl
+
 try:
     import spatialdata as sd
     import geopandas as gpd

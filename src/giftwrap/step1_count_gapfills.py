@@ -17,9 +17,10 @@ import pandas as pd
 from tqdm import tqdm
 from rich_argparse import RichHelpFormatter
 
-from .utils import maybe_multiprocess, batched, read_manifest, sort_tsv_file, FlexFormatInfo, VisiumHDFormatInfo, \
+from .pipeline_utils import batched, read_manifest, sort_tsv_file, FlexFormatInfo, VisiumHDFormatInfo, \
     VisiumFormatInfo, TechnologyFormatInfo, compute_max_distance, read_probes_input, read_fastqs, \
     ReadProcessState, ProbeParser, FlexV2FormatInfo
+from .analysis_utils import maybe_multiprocess
 
 ReadData = namedtuple("ReadData", ["probe_id", "probe_barcode", "gapfill", "gapfill_quality", "cell_barcode", "umi", "umi_quality", "coordinate_x", "coordinate_y"])
 

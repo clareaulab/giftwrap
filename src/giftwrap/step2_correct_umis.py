@@ -16,7 +16,8 @@ from tqdm import tqdm
 from rich_argparse import RichHelpFormatter
 from prefixtrie import PrefixTrie
 
-from .utils import maybe_multiprocess, batched, maybe_gzip, GzipNamedTemporaryFile, compute_max_distance
+from .pipeline_utils import batched, maybe_gzip, GzipNamedTemporaryFile, compute_max_distance
+from .analysis_utils import maybe_multiprocess
 
 
 def process_lines(lines: list[str], threshold: int, allow_chimeras: bool) -> tuple[list[str], int, int]:

@@ -17,7 +17,7 @@ from scipy.stats import gaussian_kde, spearmanr
 
 from .analysis.tools import collapse_gapfills
 from .html_report import make_html_report
-from .utils import (
+from .pipeline_utils import (
     filter_h5_file_by_barcodes,
     filter_h5_file_by_pcr_dups,
     maybe_gzip,

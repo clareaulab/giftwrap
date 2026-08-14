@@ -1,4 +1,4 @@
-GIFT-wrap
+from giftwrap import analysis_utilsfrom giftwrap import analysis_utilsGIFT-wrap
 =========
 [![python](https://img.shields.io/badge/Python-3.11-3776AB.svg?style=flat&logo=python&logoColor=white)](https://www.python.org) [![PyPI](https://img.shields.io/pypi/v/giftwrap-sc.svg)](https://pypi.org/project/giftwrap-sc/) 
 
@@ -132,6 +132,7 @@ in python, we provide utilities to deal with these files. But we do provide samp
 
 ### Python
 The giftwrap module may be directly imported into python to read the data into a scanpy/AnnData object:
+
 ```python
 import giftwrap as gw
 
