@@ -1233,6 +1233,29 @@
   
   
     <li class="md-nav__item">
+      <a href="../../reference/giftwrap/analysis_utils/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    <code class="doc-symbol doc-symbol-nav doc-symbol-module"></code>analysis_utils
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../reference/giftwrap/html_report/" class="md-nav__link">
         
   
@@ -1285,6 +1308,29 @@
   
   <span class="md-ellipsis">
     <code class="doc-symbol doc-symbol-nav doc-symbol-module"></code>pipeline
+    
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/giftwrap/pipeline_utils/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    <code class="doc-symbol doc-symbol-nav doc-symbol-module"></code>pipeline_utils
     
   </span>
   
@@ -1410,29 +1456,6 @@
 
               
             
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../reference/giftwrap/utils/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    <code class="doc-symbol doc-symbol-nav doc-symbol-module"></code>utils
-    
-  </span>
-  
-
-      </a>
-    </li>
-  
-
-              
-            
           </ul>
         </nav>
       
@@ -1500,7 +1523,25 @@
 <li><a href="../giftwrap_summarize/"><code>giftwrap-summarize</code></a>: Performs basic quality control on GIFT-seq data after collection.</li>
 </ol>
 <p>See the <a href="../../tutorials/processing_giftseq_data/">GIFTwrap tutorial</a> for a walkthrough of using <code>giftwrap</code> to process GIFT-seq data.</p>
-<div class="termy" data-termynal data-ty-macos data-ty-title="bash"><span data-ty="input" data-ty-prompt="$">giftwrap --help</span><span data-ty>Usage: giftwrap [-h] [--version] --probes PROBES [--trim_probes TRIM_PROBES]<br>                [-r1 READ1] [-r2 READ2] [--project PROJECT]<br>                [--multiplex MULTIPLEX] [--barcode BARCODE]<br>                [--unmapped_reads UNMAPPED_READS] --output OUTPUT [-c CORES]<br>                [--technology {Flex,Flex-v2,Flex-v2-R1,VisiumHD,Visium-v1,Visium-v2,Visium-v3,Visium-v4,Visium-v5,Custom}]<br>                [--tech_def TECH_DEF] [--cellranger_output CELLRANGER_OUTPUT]<br>                [--overwrite] [--skip_constant_seq] [--allow_any_combination]<br>                [--flatten] [--allow_chimeras] [--r1_length R1_LENGTH]<br>                [--r2_length R2_LENGTH] [--flexible_start_mapping]<br>                [--expected_gap_length EXPECTED_GAP_LENGTH]<br>                [--reads_per_gapfill READS_PER_GAPFILL]<br>                [--max_pcr_thresholds MAX_PCR_THRESHOLDS]<br><br>Run the complete pipeline to generate gapfill counts data. Note that this is<br>slightly opinionated for simplicity. For more control, run the individual<br>scripts one by one (giftwrap-count, giftwrap-correct-umis,<br>giftwrap-correct-gapfill, giftwrap-collect, giftwrap-summarize).<br><br>Options:<br>  -h, --help            show this help message and exit<br>  --version, -v         Show the version of the GIFTwrap pipeline.<br>  --probes, -p PROBES   Path to the generated gap-filling probe set file.<br>  --trim_probes TRIM_PROBES<br>                        If &gt; 0, trim the probes to the given length before<br>                        mapping. This can be useful if the probes have a<br>                        common sequence at the end that is not expected to be<br>                        sequenced. If the probe file contains expected<br>                        gapfills, this will be used to inform the trimming.<br>  -r1, --read1 READ1    Path to the R1 file. Either the fastq/fastq.gz file,<br>                        or a file prefix to find a set of files.<br>  -r2, --read2 READ2    Path to the R2 file. Either the fastq/fastq.gz file,<br>                        or a file prefix to find a set of files.<br>  --project PROJECT     The generic name for the project. Used to<br>                        automatically find R1 and R2 fastq files. Mutually<br>                        exclusive with -r1 and -r2 arguments.<br>  --multiplex, -m MULTIPLEX<br>                        The number of probes to be multiplexed in the Flex run<br>                        with the same probe set. Mutually exclusive with<br>                        --barcode. Defaults to single plex.<br>  --barcode, -b BARCODE<br>                        The barcode(s) to use for the Flex run. Can be<br>                        provided multiple times. Mutually exclusive with<br>                        --multiplex. Defaults to BC01 in FlexV1 or A01 in<br>                        Flex-v2 when omitted.<br>  --unmapped_reads UNMAPPED_READS<br>                        If provided, unmapped reads are written to the file<br>                        prefix given.<br>  --output, -o OUTPUT   The name of the output directory.<br>  -c, --cores CORES     The number of cores to use. Less than 1 defaults to<br>                        the number of available cores.<br>  --technology, -e {Flex,Flex-v2,Flex-v2-R1,VisiumHD,Visium-v1,Visium-v2,Visium-v3,Visium-v4,Visium-v5,Custom}<br>                        The technology used to generate the gap-filling<br>                        probes. Default is Flex.<br>  --tech_def TECH_DEF   The path to the technology definition python file to<br>                        import. Must include a single class definition that<br>                        inherits from TechnologyFormatInfo.<br>  --cellranger_output, -wta CELLRANGER_OUTPUT<br>                        Path to either the filtered_feature_bc_matrix.h5 or<br>                        the sample_filtered_feature_bc_matrix folder from<br>                        CellRanger. Can be specified multiple times to merge<br>                        multiple samples if multiplex (in order of the<br>                        counts.N.h5 files is sorted by N).<br>  --overwrite, -f       Overwrite the output directory if it already exists.<br>  --skip_constant_seq   If the technology (i.e. Flex) has a constant sequence<br>                        in the probe design, do not filter reads for missing<br>                        it. This is useful for reads that are too short to<br>                        capture the full probes.<br>  --allow_any_combination<br>                        Allow any combination of probes to be counted. By<br>                        default, only the probes that are in the gapfill set<br>                        are counted.<br>  --flatten             After processing, save a processed, flattened version<br>                        of the data as a gzipped tsv file. Note that this is<br>                        an inefficient storage format for large datasets.<br>  --allow_chimeras, -ac<br>                        Allow chimeric gapfills. If unset, umis that occur<br>                        multiple times per cell will be dropped except for the<br>                        most common probe. If set, there is no collapsing.<br>  --r1_length R1_LENGTH<br>                        The length of the R1 read. Can optimize the probe<br>                        mapping speed and accuracy.<br>  --r2_length R2_LENGTH<br>                        The length of the R2 read. Can optimize the probe<br>                        mapping speed and accuracy.<br>  --flexible_start_mapping<br>                        If set, we no longer assume that the R2 read starts<br>                        with the LHS probe and that there may be an insertion<br>                        that would need to be trimmed.<br>  --expected_gap_length EXPECTED_GAP_LENGTH<br>                        Override the computed expected gap length. If not<br>                        provided, the gap length will attempt to be inferred<br>                        from the expected gap sequence in the probe inputs<br>                        file. This value is used to allow for more lenient<br>                        parsing when the R2 length is not enough to fully<br>                        sequence the RHS of all probes.<br>  --reads_per_gapfill READS_PER_GAPFILL<br>                        The minimum number of reads supporting a gapfill to<br>                        include it in the final counts. Default is 0 (no<br>                        filtering).<br>  --max_pcr_thresholds MAX_PCR_THRESHOLDS<br>                        The maximum number of PCR duplicate thresholds to<br>                        consider when storing various layers when collecting<br>                        counts. Default is 10.<br><br></span></div>
+<div class="language-python highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">Traceback</span> <span class="p">(</span><span class="n">most</span> <span class="n">recent</span> <span class="n">call</span> <span class="n">last</span><span class="p">):</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>  <span class="n">File</span> <span class="s2">&quot;/home/runner/work/giftwrap/giftwrap/.venv/lib/python3.13/site-packages/markdown_exec/_internal/formatters/python.py&quot;</span><span class="p">,</span> <span class="n">line</span> <span class="mi">71</span><span class="p">,</span> <span class="ow">in</span> <span class="n">_run_python</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    <span class="n">exec_python</span><span class="p">(</span><span class="n">code</span><span class="p">,</span> <span class="n">code_block_id</span><span class="p">,</span> <span class="n">exec_globals</span><span class="p">)</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    <span class="o">~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>  <span class="n">File</span> <span class="s2">&quot;/home/runner/work/giftwrap/giftwrap/.venv/lib/python3.13/site-packages/markdown_exec/_internal/formatters/_exec_python.py&quot;</span><span class="p">,</span> <span class="n">line</span> <span class="mi">8</span><span class="p">,</span> <span class="ow">in</span> <span class="n">exec_python</span>
+</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    <span class="n">exec</span><span class="p">(</span><span class="n">compiled</span><span class="p">,</span> <span class="n">exec_globals</span><span class="p">)</span>  <span class="c1"># noqa: S102</span>
+</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    <span class="o">~~~~^^^^^^^^^^^^^^^^^^^^^^^^</span>
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>  <span class="n">File</span> <span class="s2">&quot;&lt;code block: n1&gt;&quot;</span><span class="p">,</span> <span class="n">line</span> <span class="mi">3</span><span class="p">,</span> <span class="ow">in</span> <span class="o">&lt;</span><span class="n">module</span><span class="o">&gt;</span>
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>    <span class="n">out</span> <span class="o">=</span> <span class="n">subprocess</span><span class="o">.</span><span class="n">check_output</span><span class="p">(</span><span class="n">cmd</span><span class="o">.</span><span class="n">split</span><span class="p">(),</span> <span class="n">text</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">env</span><span class="o">=</span><span class="p">{</span><span class="o">**</span><span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="p">,</span> <span class="s2">&quot;TERM&quot;</span><span class="p">:</span> <span class="s2">&quot;xterm-256color&quot;</span><span class="p">})</span>
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>  <span class="n">File</span> <span class="s2">&quot;/opt/hostedtoolcache/Python/3.13.15/x64/lib/python3.13/subprocess.py&quot;</span><span class="p">,</span> <span class="n">line</span> <span class="mi">472</span><span class="p">,</span> <span class="ow">in</span> <span class="n">check_output</span>
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    <span class="k">return</span> <span class="n">run</span><span class="p">(</span><span class="o">*</span><span class="n">popenargs</span><span class="p">,</span> <span class="n">stdout</span><span class="o">=</span><span class="n">PIPE</span><span class="p">,</span> <span class="n">timeout</span><span class="o">=</span><span class="n">timeout</span><span class="p">,</span> <span class="n">check</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>           <span class="o">~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^</span>
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>               <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span><span class="o">.</span><span class="n">stdout</span>
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>               <span class="o">^^^^^^^^^</span>
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>  <span class="n">File</span> <span class="s2">&quot;/opt/hostedtoolcache/Python/3.13.15/x64/lib/python3.13/subprocess.py&quot;</span><span class="p">,</span> <span class="n">line</span> <span class="mi">577</span><span class="p">,</span> <span class="ow">in</span> <span class="n">run</span>
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>    <span class="k">raise</span> <span class="n">CalledProcessError</span><span class="p">(</span><span class="n">retcode</span><span class="p">,</span> <span class="n">process</span><span class="o">.</span><span class="n">args</span><span class="p">,</span>
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>                             <span class="n">output</span><span class="o">=</span><span class="n">stdout</span><span class="p">,</span> <span class="n">stderr</span><span class="o">=</span><span class="n">stderr</span><span class="p">)</span>
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="n">subprocess</span><span class="o">.</span><span class="n">CalledProcessError</span><span class="p">:</span> <span class="n">Command</span> <span class="s1">&#39;[&#39;</span><span class="n">giftwrap</span><span class="s1">&#39;, &#39;</span><span class="o">--</span><span class="n">help</span><span class="s1">&#39;]&#39;</span> <span class="n">returned</span> <span class="n">non</span><span class="o">-</span><span class="n">zero</span> <span class="n">exit</span> <span class="n">status</span> <span class="mf">1.</span>
+</span></code></pre></div>
 
 
 
