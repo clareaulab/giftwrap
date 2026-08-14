@@ -1319,6 +1319,29 @@ def _compute_alignments(
     :param threads: The number of threads to use for alignment.
     :return: A tuple containing the aligned reference frequencies and the aligned alternative frequencies (if provided).
     """
+
+    def _filter_valid_motifs(frequencies: dict[str, float] | None) -> dict[str, float] | None:
+        if frequencies is None:
+            return None
+
+        filtered = {}
+        for motif, freq in frequencies.items():
+            if motif is None:
+                continue
+            motif_str = str(motif)
+            if motif_str == '' or motif_str == 'nan' or motif_str != motif_str:
+                continue
+            filtered[motif_str] = float(freq)
+        return filtered
+
+    ref_frequencies = _filter_valid_motifs(ref_frequencies)
+    alt_frequencies = _filter_valid_motifs(alt_frequencies)
+
+    if not ref_frequencies:
+        return {}, alt_frequencies if alt_frequencies is not None else None
+    if alt_frequencies is not None and not alt_frequencies:
+        return ref_frequencies, {}
+
     if align:
         try:
             import pyfamsa
