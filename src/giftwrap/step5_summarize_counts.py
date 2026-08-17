@@ -21,6 +21,8 @@ from .pipeline_utils import (
     filter_h5_file_by_barcodes,
     filter_h5_file_by_pcr_dups,
     maybe_gzip,
+    normalize_barcode_to_target,
+    normalize_barcodes_to_target,
     read_h5_file,
     read_wta,
     real_gapfill_mask,
@@ -290,8 +292,10 @@ def make_pdf_report(output_file, gapfill_adata, adata, probe_reads, filter_cutof
 
         # If we have cellranger data, compare psuedobulk counts of gapfill vs WTA.
         if adata is not None:
-            # Re-order cells in adata to match gapfill adata
-            adata = adata[gapfill_adata.obs.index, :]
+            # Re-order cells in adata to match gapfill adata. GIFTwrap barcodes may embed a
+            # plex sequence before the suffix (CELLBC{plex_seq}-1) while CellRanger barcodes
+            # are plain (CELLBC-1), so normalize before indexing.
+            adata = adata[normalize_barcodes_to_target(gapfill_adata.obs.index.to_numpy(), adata.obs_names[0]), :]
             # Get the gene names
             if 'gene' not in gapfill_adata.var.columns:  # No gene name included in manifest, we will try to guess the gene name
                 print("Warning: Gene names not present in metadata, guessing gene names...")
@@ -359,7 +363,8 @@ def summarize_counts(input: Path, summary_output: Path, summary_pdf_output: Path
     if cellranger_output is not None:
         obj = read_wta(
             cellranger_output,
-            fallback_to_barcodes=True
+            fallback_to_barcodes=True,
+            strip_suffix=False,  # Keep the -N suffix so barcodes match the GIFTwrap counts h5
         )
         # If an array was returned, we only have barcodes, else we have an anndata object
         if obj is None:
@@ -398,13 +403,20 @@ def summarize_counts(input: Path, summary_output: Path, summary_pdf_output: Path
         pcr_dup_filtered = True
 
     if (cr_filtered or pcr_dup_filtered) and flatten:  # We need to filter the flattened counts as well
+        if cr_filtered:
+            barcode_set = set(barcodes)
+            cr_example = barcodes[0] if len(barcodes) > 0 else None
         with maybe_gzip(input.parent / input.name.replace(".h5", ".tsv.gz").replace('counts.', 'flat_counts.'), 'r') as f_in:
             with maybe_gzip(flattened_counts_output, 'w') as f_out:
                 first = True
                 for line in f_in:
                     line_passes = True
                     if cr_filtered:
-                        line_passes = line.split("\t")[0] in barcodes or first
+                        # Flat-file barcodes are GIFTwrap-format; normalize when they don't match directly
+                        bc = line.split("\t", 1)[0]
+                        line_passes = (bc in barcode_set
+                                       or (cr_example is not None and normalize_barcode_to_target(bc, cr_example) in barcode_set)
+                                       or first)
                     if pcr_dup_filtered:
                         line_passes = line_passes and int(line.split("\t")[5]) > reads_per_gapfill or first  # Filter by N pcr duplicates
                     if line_passes:

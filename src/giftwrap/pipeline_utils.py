@@ -1506,51 +1506,64 @@ def compile_flatfile(manifest_df: pd.DataFrame, probe_reads_file: str, barcode_l
             output_file.write(f"{cell_barcode}\t{lhs_probe}\t{rhs_probe}\t{probe_bc_idx}\t{gapfill}\t{umi_count}\t{percent_supporting}\t{umi}\n")
 
 
-def _parse_barcodes_tsv(filepath: Path) -> np.ndarray[str]:
+def _parse_barcodes_tsv(filepath: Path, strip_suffix: bool = True) -> np.ndarray[str]:
     """
     Parse a barcodes.tsv file.
     :param filepath: The path to the barcodes.tsv(.gz) file.
+    :param strip_suffix: If true, remove the trailing -N GEM well suffix from the barcodes.
     :return: A list of barcodes.
     """
-    return pd.read_csv(filepath, sep="\t", header=None, compression='gzip' if filepath.suffix == '.gz' else None).iloc[:, 0].str.split("-").str[0].to_numpy(dtype=str)
+    barcodes = pd.read_csv(filepath, sep="\t", header=None, compression='gzip' if filepath.suffix == '.gz' else None).iloc[:, 0]
+    if strip_suffix:
+        barcodes = barcodes.str.rsplit("-", n=1).str[0]
+    return barcodes.to_numpy(dtype=str)
 
 
-def _parse_molecule_info_h5(filepath: Path) -> np.ndarray[str]:
+def _parse_molecule_info_h5(filepath: Path, strip_suffix: bool = True) -> np.ndarray[str]:
     """
     Parse a VisiumHD molecule_info.h5 file.
     :param filepath: The path to the molecule_info.h5 file.
+    :param strip_suffix: If true, remove the trailing -N GEM well suffix from the barcodes.
     :return: A list of barcodes.
     """
     with h5py.File(filepath, "r") as f:
         barcodes = pd.Series(f['barcodes'].asstr()[()], dtype=str)
 
-    # Remove -1 from the barcodes
-    return barcodes.str.split("-").str[0].to_numpy(dtype=str)
+    if strip_suffix:
+        # Remove -1 from the barcodes
+        barcodes = barcodes.str.rsplit("-", n=1).str[0]
+    return barcodes.to_numpy(dtype=str)
 
 
-def _parse_filtered_feature_bc_matrix_h5(filepath: Path) -> np.ndarray[str]:
+def _parse_filtered_feature_bc_matrix_h5(filepath: Path, strip_suffix: bool = True) -> np.ndarray[str]:
     """
     Parse a filtered_feature_bc_matrix.h5 file.
     :param filepath: The path to the filtered_feature_bc_matrix.h5 file.
+    :param strip_suffix: If true, remove the trailing -N GEM well suffix from the barcodes.
     :return: A list of barcodes.
     """
     with h5py.File(filepath, "r") as f:
         barcodes = pd.Series(f['matrix']['barcodes'].asstr()[()], dtype=str)
 
-    # Remove -1 from the barcodes
-    return barcodes.str.split("-").str[0].to_numpy(dtype=str)
+    if strip_suffix:
+        # Remove -1 from the barcodes
+        barcodes = barcodes.str.rsplit("-", n=1).str[0]
+    return barcodes.to_numpy(dtype=str)
 
 
 def read_wta(
         input_path: Path,
         barcodes_only: bool = False,
         fallback_to_barcodes: bool = False,
+        strip_suffix: bool = True,
 ) -> Optional[Union[ad.AnnData, np.ndarray[str]]]:
     """
     Read a WTA file and return the cells processed by cellranger or spaceranger.
     :param input_path: The path to the WTA file.
     :param barcodes_only: If true, return only the barcodes.
     :param fallback_to_barcodes: If true, fallback to barcodes if scanpy is not available regardless.
+    :param strip_suffix: If true, remove the trailing -N GEM well suffix from barcodes when only
+        barcodes are parsed (the AnnData path always keeps barcodes verbatim).
     :return: The cells processed by cellranger. An AnnData object if barcodes_only is False, otherwise a DataFrame.
 
     Note that this prefers to parse outputs using scanpy as it will be the most robust, but if scanpy is not available,
@@ -1562,60 +1575,60 @@ def read_wta(
             # Check if square_002um appears in the directory structure
             if "square_002um" in str(input_path):  # Pointing to the binned output
                 if "sample_filtered_feature_bc_matrix" in str(input_path):
-                    return _parse_barcodes_tsv(input_path / "barcodes.tsv.gz")
+                    return _parse_barcodes_tsv(input_path / "barcodes.tsv.gz", strip_suffix=strip_suffix)
                 elif "filtered_feature_bc_matrix" in str(input_path):
-                    return _parse_barcodes_tsv(input_path / "barcodes.tsv.gz")
+                    return _parse_barcodes_tsv(input_path / "barcodes.tsv.gz", strip_suffix=strip_suffix)
                 elif (input_path / "sample_filtered_feature_bc_matrix").exists():
-                    return _parse_barcodes_tsv(input_path / "sample_filtered_feature_bc_matrix" / "barcodes.tsv.gz")
+                    return _parse_barcodes_tsv(input_path / "sample_filtered_feature_bc_matrix" / "barcodes.tsv.gz", strip_suffix=strip_suffix)
                 else:
-                    return _parse_barcodes_tsv(input_path / "filtered_feature_bc_matrix" / "barcodes.tsv.gz")
+                    return _parse_barcodes_tsv(input_path / "filtered_feature_bc_matrix" / "barcodes.tsv.gz", strip_suffix=strip_suffix)
             elif (input_path / "sample_filtered_feature_bc_matrix").exists():
-                return _parse_barcodes_tsv(input_path / "sample_filtered_feature_bc_matrix" / "barcodes.tsv.gz")
+                return _parse_barcodes_tsv(input_path / "sample_filtered_feature_bc_matrix" / "barcodes.tsv.gz", strip_suffix=strip_suffix)
             elif (input_path / "filtered_feature_bc_matrix").exists():
-                return _parse_barcodes_tsv(input_path / "filtered_feature_bc_matrix" / "barcodes.tsv.gz")
+                return _parse_barcodes_tsv(input_path / "filtered_feature_bc_matrix" / "barcodes.tsv.gz", strip_suffix=strip_suffix)
             elif (input_path / "spatial").exists():  # Pointing to the spatial output base directory
                 if (input_path / "binned_outputs" / "square_002um" / "sample_filtered_feature_bc_matrix").exists():
-                    return _parse_barcodes_tsv(input_path / "binned_outputs" / "square_002um" / "sample_filtered_feature_bc_matrix" / "barcodes.tsv.gz")
-                return _parse_barcodes_tsv(input_path / "binned_outputs" / "square_002um" / "filtered_feature_bc_matrix" / "barcodes.tsv.gz")
+                    return _parse_barcodes_tsv(input_path / "binned_outputs" / "square_002um" / "sample_filtered_feature_bc_matrix" / "barcodes.tsv.gz", strip_suffix=strip_suffix)
+                return _parse_barcodes_tsv(input_path / "binned_outputs" / "square_002um" / "filtered_feature_bc_matrix" / "barcodes.tsv.gz", strip_suffix=strip_suffix)
             elif (input_path / "outs" / "sample_filtered_feature_bc_matrix").exists():
-                return _parse_barcodes_tsv(input_path / "outs" / "sample_filtered_feature_bc_matrix" / "barcodes.tsv.gz")
+                return _parse_barcodes_tsv(input_path / "outs" / "sample_filtered_feature_bc_matrix" / "barcodes.tsv.gz", strip_suffix=strip_suffix)
             elif (input_path / "outs" / "filtered_feature_bc_matrix").exists():
-                return _parse_barcodes_tsv(input_path / "outs" / "filtered_feature_bc_matrix" / "barcodes.tsv.gz")
+                return _parse_barcodes_tsv(input_path / "outs" / "filtered_feature_bc_matrix" / "barcodes.tsv.gz", strip_suffix=strip_suffix)
             elif (input_path / "outs" / "binned_outputs" / "square_002um" / "sample_filtered_feature_bc_matrix").exists():
-                return _parse_barcodes_tsv(input_path / "outs" / "binned_outputs" / "square_002um" / "sample_filtered_feature_bc_matrix" / "barcodes.tsv.gz")
+                return _parse_barcodes_tsv(input_path / "outs" / "binned_outputs" / "square_002um" / "sample_filtered_feature_bc_matrix" / "barcodes.tsv.gz", strip_suffix=strip_suffix)
             elif (input_path / "outs" / "binned_outputs" / "square_002um" / "filtered_feature_bc_matrix").exists():
-                return _parse_barcodes_tsv(input_path / "outs" / "binned_outputs" / "square_002um" / "filtered_feature_bc_matrix" / "barcodes.tsv.gz")
+                return _parse_barcodes_tsv(input_path / "outs" / "binned_outputs" / "square_002um" / "filtered_feature_bc_matrix" / "barcodes.tsv.gz", strip_suffix=strip_suffix)
             elif (input_path / "binned_outputs" / "square_002um" / "sample_filtered_feature_bc_matrix").exists():
-                return _parse_barcodes_tsv(input_path / "binned_outputs" / "square_002um" / "sample_filtered_feature_bc_matrix" / "barcodes.tsv.gz")
+                return _parse_barcodes_tsv(input_path / "binned_outputs" / "square_002um" / "sample_filtered_feature_bc_matrix" / "barcodes.tsv.gz", strip_suffix=strip_suffix)
             elif (input_path / "binned_outputs" / "square_002um" / "filtered_feature_bc_matrix").exists():
-                return _parse_barcodes_tsv(input_path / "binned_outputs" / "square_002um" / "filtered_feature_bc_matrix" / "barcodes.tsv.gz")
+                return _parse_barcodes_tsv(input_path / "binned_outputs" / "square_002um" / "filtered_feature_bc_matrix" / "barcodes.tsv.gz", strip_suffix=strip_suffix)
             elif (input_path / "square_002um" / "sample_filtered_feature_bc_matrix").exists():
-                return _parse_barcodes_tsv(input_path / "square_002um" / "sample_filtered_feature_bc_matrix" / "barcodes.tsv.gz")
+                return _parse_barcodes_tsv(input_path / "square_002um" / "sample_filtered_feature_bc_matrix" / "barcodes.tsv.gz", strip_suffix=strip_suffix)
             elif (input_path / "square_002um" / "filtered_feature_bc_matrix").exists():
-                return _parse_barcodes_tsv(input_path / "square_002um" / "filtered_feature_bc_matrix" / "barcodes.tsv.gz")
+                return _parse_barcodes_tsv(input_path / "square_002um" / "filtered_feature_bc_matrix" / "barcodes.tsv.gz", strip_suffix=strip_suffix)
             elif (input_path / "barcodes.tsv.gz").exists():
-                return _parse_barcodes_tsv(input_path / "barcodes.tsv.gz")
+                return _parse_barcodes_tsv(input_path / "barcodes.tsv.gz", strip_suffix=strip_suffix)
             else: # Assume cell ranger output
                 return None
         else:
             base_filename = input_path.name
             if (base_filename == 'molecule_info.h5' and (input_path.parent / 'spatial').exists()):  # Given a molecule_info.h5 file in a spatial directory
-                return _parse_molecule_info_h5(input_path)
+                return _parse_molecule_info_h5(input_path, strip_suffix=strip_suffix)
             elif (base_filename == "filtered_feature_bc_matrix.h5" and (input_path.parent / 'spatial').exists()):
-                return _parse_filtered_feature_bc_matrix_h5(input_path)
+                return _parse_filtered_feature_bc_matrix_h5(input_path, strip_suffix=strip_suffix)
             elif base_filename == "sample_filtered_feature_bc_matrix.h5":
-                return _parse_filtered_feature_bc_matrix_h5(input_path)
+                return _parse_filtered_feature_bc_matrix_h5(input_path, strip_suffix=strip_suffix)
             elif base_filename == "sample_molecule_info.h5":
-                return _parse_molecule_info_h5(input_path)
+                return _parse_molecule_info_h5(input_path, strip_suffix=strip_suffix)
             else:  # Try parsing successively
                 try:
-                    return _parse_barcodes_tsv(input_path)
+                    return _parse_barcodes_tsv(input_path, strip_suffix=strip_suffix)
                 except:
                     try:
-                        return _parse_filtered_feature_bc_matrix_h5(input_path)
+                        return _parse_filtered_feature_bc_matrix_h5(input_path, strip_suffix=strip_suffix)
                     except:
                         try:
-                            return _parse_molecule_info_h5(input_path)
+                            return _parse_molecule_info_h5(input_path, strip_suffix=strip_suffix)
                         except:
                             return None
 
@@ -1626,7 +1639,7 @@ def read_wta(
             print("Scanpy not found. Please install it to use the cellranger output.")
             return None
         elif fallback_to_barcodes:
-            return read_wta(input_path, barcodes_only=True)
+            return read_wta(input_path, barcodes_only=True, strip_suffix=strip_suffix)
 
     try:
         if input_path.is_dir():
@@ -1735,6 +1748,47 @@ def sort_tsv_file(file: Path, columns: list[int], cores: int, use_pandas: bool =
     df.to_csv(file, sep="\t", index=False, compression="gzip" if "gz" in file.suffix else None)
 
 
+def normalize_barcode_to_target(barcode: str, target_example: str) -> str:
+    """
+    Map a single GIFTwrap-format barcode ({barcode}{optional plex_seq}-{plex}) to the format of
+    target_example (typically a CellRanger barcode, e.g. {barcode}-1). If the barcode's prefix is
+    longer than the target's, the excess (the embedded plex sequence) is trimmed; the -{plex}
+    suffix is kept only if the target has one. Barcodes already in the target format are
+    returned unchanged.
+    """
+    prefix, dash, suffix = barcode.rpartition("-")
+    if not dash:
+        prefix = barcode
+    target_prefix_len = len(target_example.rsplit("-", 1)[0])
+    if len(prefix) > target_prefix_len:
+        prefix = prefix[:target_prefix_len]
+    if dash and "-" in target_example:
+        return prefix + "-" + suffix
+    return prefix
+
+
+def normalize_barcodes_to_target(barcodes: ArrayLike, target_example: str) -> np.ndarray:
+    """
+    Vectorized version of normalize_barcode_to_target: map GIFTwrap-format barcodes to the format
+    of target_example (typically a CellRanger barcode). Handles mixed inputs (e.g. a filtered file
+    whose kept rows are GIFTwrap-format and whose padded rows are already CellRanger-format) by
+    only trimming barcodes whose prefix is longer than the target's.
+    """
+    series = pd.Series(np.asarray(barcodes, dtype=str))
+    if len(series) == 0 or not target_example:
+        return series.to_numpy(dtype=str)
+    target_prefix_len = len(target_example.rsplit("-", 1)[0])
+    has_suffix = series.str.contains("-")
+    split = series.str.rsplit("-", n=1)
+    prefixes = split.str[0]
+    prefixes = prefixes.where(prefixes.str.len() <= target_prefix_len, prefixes.str[:target_prefix_len])
+    if "-" in target_example:
+        result = (prefixes + "-" + split.str[-1]).where(has_suffix, prefixes)
+    else:
+        result = prefixes
+    return result.to_numpy(dtype=str)
+
+
 def filter_h5_file_by_barcodes(input_file: Path, output_file: Path, barcodes_list: ArrayLike, pad_matrix: bool = True):
     """
     Given a counts h5 file and a list of barcodes, filter the barcodes to only include the ones in the list.
@@ -1746,8 +1800,7 @@ def filter_h5_file_by_barcodes(input_file: Path, output_file: Path, barcodes_lis
     # First, copy the file
     shutil.copy(input_file, output_file)
 
-    # Convert barcodes_list to a set for O(1) lookups
-    barcodes_set = set(barcodes_list)
+    requested_barcodes = np.asarray(list(barcodes_list), dtype=str)
 
     # Then open the file
     with h5py.File(output_file, 'r+') as f:
@@ -1755,9 +1808,21 @@ def filter_h5_file_by_barcodes(input_file: Path, output_file: Path, barcodes_lis
         barcodes_array = f['matrix']['barcode'][:]
         barcodes = np.char.decode(barcodes_array, 'utf-8') if barcodes_array.dtype.kind == 'S' else barcodes_array.astype(str)
 
-        # Use vectorized numpy operations for finding indices
-        # Create a boolean mask for matching barcodes
-        mask = np.isin(barcodes, list(barcodes_set))
+        # Tiered matching: the file stores GIFTwrap-format barcodes ({barcode}{optional plex_seq}-{plex}),
+        # while the requested barcodes may be CellRanger-format (no plex sequence and/or no -N suffix).
+        # 1. Exact match
+        file_keys = barcodes
+        requested_keys = requested_barcodes
+        mask = np.isin(file_keys, requested_keys)
+        if not mask.any() and len(barcodes) > 0 and len(requested_barcodes) > 0:
+            # 2. Trim the file barcodes down to the requested format (drops the embedded plex sequence)
+            file_keys = normalize_barcodes_to_target(barcodes, requested_barcodes[0])
+            mask = np.isin(file_keys, requested_keys)
+        if not mask.any() and len(barcodes) > 0 and len(requested_barcodes) > 0:
+            # 3. Ignore the -N suffix on both sides
+            file_keys = pd.Series(barcodes).str.rsplit("-", n=1).str[0].to_numpy(dtype=str)
+            requested_keys = pd.Series(requested_barcodes).str.rsplit("-", n=1).str[0].to_numpy(dtype=str)
+            mask = np.isin(file_keys, requested_keys)
         barcode_indices = np.where(mask)[0]
 
         # Check if we need to filter the data
@@ -1765,13 +1830,16 @@ def filter_h5_file_by_barcodes(input_file: Path, output_file: Path, barcodes_lis
             return  # Equal size, no point in filtering
 
         if len(barcode_indices) == 0:
-            raise ValueError("No barcodes found in the file.")
+            file_example = str(barcodes[0]) if len(barcodes) > 0 else "<no barcodes in file>"
+            requested_example = str(requested_barcodes[0]) if len(requested_barcodes) > 0 else "<no barcodes requested>"
+            raise ValueError(f"No barcodes found in the file. "
+                             f"Example file barcode: {file_example!r}; example requested barcode: {requested_example!r}")
 
         # Calculate padded barcodes only if needed
         padded_barcodes = []
-        if pad_matrix and len(barcodes_set) > len(barcode_indices):
-            existing_barcodes = set(barcodes)
-            padded_barcodes = np.array([bc for bc in barcodes_list if bc not in existing_barcodes], dtype='S')
+        if pad_matrix and len(set(requested_keys)) > len(barcode_indices):
+            existing_keys = set(file_keys)
+            padded_barcodes = np.array([bc for bc, key in zip(requested_barcodes, requested_keys) if key not in existing_keys], dtype='S')
             print(f"Padding {len(padded_barcodes)} unseen cells with zeroes.")
 
         # Filter the data

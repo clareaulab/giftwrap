@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import spearmanr
 
-from .pipeline_utils import real_gapfill_mask
+from .pipeline_utils import normalize_barcodes_to_target, real_gapfill_mask
 
 # Third-party web assets are vendored under giftwrap/assets/ and inlined into the
 # report so it renders with no network access — these reports are routinely opened
@@ -441,14 +441,7 @@ def _fig_wta_correlation(gapfill_adata, adata) -> dict:
     gw_bcs = gapfill_adata.obs.index
     cr_bcs = gw_bcs
     if len(gw_bcs) > 0 and len(adata.obs_names) > 0:
-        gw_plen = len(gw_bcs[0].rsplit("-", 1)[0])
-        cr_plen = len(adata.obs_names[0].rsplit("-", 1)[0])
-        if gw_plen > cr_plen:
-            plex_len = gw_plen - cr_plen
-            cr_bcs = pd.Index([
-                bc.rsplit("-", 1)[0][:-plex_len] + "-" + bc.rsplit("-", 1)[1]
-                for bc in gw_bcs
-            ])
+        cr_bcs = pd.Index(normalize_barcodes_to_target(gw_bcs.to_numpy(), adata.obs_names[0]))
     adata = adata[cr_bcs, :]
     if "gene" not in gapfill_adata.var.columns:
         gapfill_adata.var["gene"] = [p.replace(" ", "_").split("_")[0] for p in gapfill_adata.var["probe"]]
