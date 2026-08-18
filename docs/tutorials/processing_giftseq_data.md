@@ -143,12 +143,32 @@ When running GIFTwrap with atypical experimental designs (for example, dealing w
     There may be additional options not included in the `giftwrap` pipeline wrapper, but may be included in each individual step. To run them individually and see their options, refer to the [GIFTwrap CLI documentation](../cli/index.md).
 
 #### Scenario 1: Extremely Long Gapfill Sequences 
-GIFTwrap can typically handle long gapfill sequences, however, you may run into issues with library sequencing when using standard 10X Flex-based protocols. Specifically, the R2 length may not be sufficient to cover the expected constant sequence in each probe when the gapfill+probe sequence is longer than 60 bases. GIFTwrap normally requires the constant sequence to be present when possible in order to improve data quality. However, this can be disabled with a limited expected reduction of data quality by specifying the `--skip_constant_seq` flag. This is because the constant sequence is typically at the end of the R2 read. 
+GIFTwrap can typically handle long gapfill sequences, however, you may run into issues with library sequencing when using standard 10X Flex-based protocols. Specifically, the R2 length may not be sufficient to cover the expected constant sequence in each probe when the gapfill+probe sequence is longer than 60 bases. 
+
+In singleplex scenarios, GIFTwrap normally requires the constant sequence to be present when possible in order to improve data quality. However, this can be disabled with a limited expected reduction of data quality by specifying the `--skip_constant_seq` flag. This is because the constant sequence is typically at the end of the R2 read. 
 
 <!-- termynal -->
 ```console
 $ giftwrap --skip_constant_seq ...
 ```
+
+If this doesn't help, particularly in cases where the RHS probe itself gets cutoff, you can inform GIFTwrap to trim probe pairs (including gapfill sequences) to a particular length, 
+allowing for parsing to not require the full-length RHS probe sequence to successfully map
+
+<!-- termynal -->
+```console
+$ giftwrap --trim_probes 60 ... # Probes trimmed such that LHS + expected gapfill + RHS are 60bp
+```
+
+However, in multiplexed samples, we often can't trim reads or skip the constant sequence since the probe barcode that distinguishes samples appears after the constant sequence and may still be cutoff. 
+In such cases, it is recommended to use the R1 barcoding strategy in Flex-V2 kits, by passing:
+
+<!-- termynal -->
+```console
+$ giftwrap --technology Flex-v2-R1 ...
+```
+
+Unfortunately, if the sequencing was not configured for R1-based demultiplexing this will fail. 
 
 #### Scenario 2: Intentionally Non-Specific Probe Pairings
 Normally, GIFTwrap requires that probes are paired according to the provided probeset file explicitly. GIFTwrap also supports allowing multiple components to be paired to different probes. However, if you have a complex probe design where it is unclear which probes may be paired with each other (i.e. due to high sequence similarity), you can pass the `--allow_any_combination` flag. This will make GIFTwrap fill in all possible combinations of probe pairs in its final output, and allow any pairing when mapping. The final output will contain an additional feature metadata column, `was_defined` indicating whether the probe pair was defined in the original probeset file or not. 

@@ -268,7 +268,12 @@ def search_files(read1s, read2s, output_dir, tech_info,
                         probe_ids_encountered.add(data.probe_id)
 
                         if probe_bc_provided and tech_info.has_probe_barcode:
-                            probe_bc_id = tech_info.probe_barcode_index(data.probe_barcode)
+                            if data.probe_barcode:
+                                probe_bc_id = tech_info.probe_barcode_index(data.probe_barcode)
+                            else:
+                                # The probe barcode could not be parsed (only possible with --skip_constant_seq,
+                                # which is restricted to singleplex runs), so assume the single expected barcode
+                                probe_bc_id = str(probe_bcs[0])
                             probe_bc_label = probe_bc_id
                             if hasattr(tech_info, "probe_barcode_name"):
                                 try:
