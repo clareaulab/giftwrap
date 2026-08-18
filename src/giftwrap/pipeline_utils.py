@@ -612,7 +612,10 @@ class FlexV2FormatInfo(TechnologyFormatInfo):
 
     @property
     def probe_barcode_start(self) -> int:
-        return -1 if self._r1_demultiplex else 0
+        # When demultiplexing from R1, the probe barcode sits at offset 40 on R1 (in
+        # reverse-complement orientation, see the Flex-v2-R1 chemistry definition).
+        # Otherwise it is on R2, immediately after the constant sequence (offset 0).
+        return 40 if self._r1_demultiplex else 0
 
     @property
     def probe_barcode_length(self) -> int:
@@ -1385,13 +1388,18 @@ class ProbeParser:
 
     @lru_cached_method(maxsize=100)
     def parse_probe_bc_R1(self, read1: str, max_mismatches: int) -> tuple[Optional[str], list[ReadProcessState]]:
-        possible_probe_bc = read1[self.probe_bc_start:self.probe_bc_start-self.probe_bc_length]
+        # The probe barcode is reverse-complemented on R1 and its position can shift slightly
+        # around probe_bc_start (-1 to +3, per the chemistry definition's variable_multiplexing_barcode),
+        # so search a window around the expected position
+        window_start = max(self.probe_bc_start - 1, 0)
+        window_end = self.probe_bc_start + self.probe_bc_length + 3
+        possible_probe_bc = read1[window_start:window_end]
         state = []
         if len(possible_probe_bc) == 0:
             state.append(ReadProcessState.FILTERED_NO_PROBE_BARCODE)
             return None, state
         possible_probe_bc = reverse_complement(possible_probe_bc)
-        probe_bc, probe_bc_corrections = self.probe_bc_trie.search(possible_probe_bc, self._compute_max_distance(len(possible_probe_bc), max_mismatches=max_mismatches))
+        probe_bc, probe_bc_corrections, _, _ = self.probe_bc_trie.search_substring(possible_probe_bc, self._compute_max_distance(self.probe_bc_length, max_mismatches=max_mismatches))
         if probe_bc is None:
             if len(possible_probe_bc) < self.probe_bc_length:  # Try prefix search
                 probe_bc, probe_bc_start, match_len = self.probe_bc_trie.longest_prefix_match(possible_probe_bc, min_match_length=self.probe_bc_length//2, correction_budget=self._compute_max_distance(len(possible_probe_bc), max_mismatches=max_mismatches))
