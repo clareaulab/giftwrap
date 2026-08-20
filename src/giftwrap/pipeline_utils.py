@@ -811,6 +811,10 @@ class VisiumHDFormatInfo(TechnologyFormatInfo):
         chem_defs = Path(str(spaceranger_path.parent.parent / "lib" / "python" / "cellranger" / "chemistry_defs.json"))
         if not chem_defs.exists():
             chem_defs = self._barcode_dir / "chemistry_defs.json"
+            if not chem_defs.exists():
+                chem_defs = self._barcode_dir.parent / "chemistry_defs.json"
+                if not chem_defs.exists():
+                    raise FileNotFoundError("chemistry_defs.json not found in the expected locations.")
 
         chem_defs = json.loads(chem_defs.read_text())
         hd_def = chem_defs["SPATIAL-HD-v1"]
