@@ -82,6 +82,26 @@ def iter_layers(adata: ad.AnnData) -> Iterator[tuple[str, Any]]:
         yield name, matrix
 
 
+def repair_array_axis(
+    values: pd.Series, parsed: pd.Series, mask: pd.Series
+) -> np.ndarray:
+    """
+    Build a clean integer ``array_row``/``array_col`` column, taking ``parsed`` (coordinates
+    recovered from the barcode) wherever ``mask`` is True.
+
+    The column is always rebuilt from scratch rather than patched in place: padded cells are
+    written to the h5 as ``"<NA>"`` strings, so the stored column is read back as a string dtype
+    and pandas' arrow-backed ``str`` dtype rejects partial assignment of integers.
+    :param values: The stored column.
+    :param parsed: The barcode-derived coordinates.
+    :param mask: True where the stored value must be replaced.
+    :return: An integer array with -1 where no coordinate could be recovered.
+    """
+    if not pd.api.types.is_integer_dtype(values.dtype):
+        return parsed.to_numpy(dtype=int)  # mask is all True in this case
+    return values.where(~mask, parsed).fillna(-1).to_numpy(dtype=int)
+
+
 def read_h5_file(filename: str | Path) -> ad.AnnData:
     """
     Read a generated h5 file and return an AnnData object.

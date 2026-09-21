@@ -34,7 +34,7 @@ import scipy
 from Bio.SeqIO.QualityIO import FastqGeneralIterator
 from prefixtrie import PrefixTrie, load_shared_trie, create_shared_trie
 
-from .analysis_utils import read_sparse_matrix
+from .analysis_utils import read_sparse_matrix, repair_array_axis
 
 
 class ReadProcessState(Enum):
@@ -2412,16 +2412,16 @@ def read_h5_file(filename: str | Path) -> ad.AnnData:
                 array_row_parsed = pd.to_numeric(parts.iloc[:, -2], errors='coerce').fillna(-1).astype(int)
                 array_col_parsed = pd.to_numeric(parts.iloc[:, -1], errors='coerce').fillna(-1).astype(int)
 
-                need_col = problematic_mask & col_mask
-                need_row = problematic_mask & row_mask
-
-                if need_col.any():
-                    adata.obs.loc[need_col, 'array_col'] = array_col_parsed.loc[need_col].to_numpy()
-                if need_row.any():
-                    adata.obs.loc[need_row, 'array_row'] = array_row_parsed.loc[need_row].to_numpy()
-            # Ensure columns are integer type
-            adata.obs['array_col'] = adata.obs['array_col'].astype(int)
-            adata.obs['array_row'] = adata.obs['array_row'].astype(int)
+                adata.obs["array_col"] = repair_array_axis(
+                    adata.obs["array_col"],
+                    array_col_parsed,
+                    problematic_mask & col_mask,
+                )
+                adata.obs["array_row"] = repair_array_axis(
+                    adata.obs["array_row"],
+                    array_row_parsed,
+                    problematic_mask & row_mask,
+                )
 
     return adata
 
