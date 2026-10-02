@@ -195,8 +195,8 @@ def read_h5_file(filename: str | Path) -> ad.AnnData:
     # Check if array_col and array_row exist in obs
     # If present, verify that all are integers
     if 'array_col' in adata.obs.columns and 'array_row' in adata.obs.columns:
-        col_mask = adata.obs['array_col'].isnull() | (~pd.api.types.is_integer_dtype(adata.obs['array_col'].dtype))
-        row_mask = adata.obs['array_row'].isnull() | (~pd.api.types.is_integer_dtype(adata.obs['array_row'].dtype))
+        col_mask = adata.obs['array_col'].isnull() | (not pd.api.types.is_integer_dtype(adata.obs['array_col'].dtype))
+        row_mask = adata.obs['array_row'].isnull() | (not pd.api.types.is_integer_dtype(adata.obs['array_row'].dtype))
         if col_mask.any() or row_mask.any():
             # We will need to regenerate only the problematic array_col and array_row values
             print("Warning: 'array_col' and 'array_row' in obs contain non-integer or null values. Regenerating problematic values.")
