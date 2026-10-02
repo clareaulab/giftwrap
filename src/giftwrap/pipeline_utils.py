@@ -34,7 +34,7 @@ import scipy
 from Bio.SeqIO.QualityIO import FastqGeneralIterator
 from prefixtrie import PrefixTrie, load_shared_trie, create_shared_trie
 
-from .analysis_utils import read_sparse_matrix, repair_array_axis
+from .analysis_utils import read_sparse_matrix, repair_array_axis, parse_array_coords
 
 
 class ReadProcessState(Enum):
@@ -2023,6 +2023,24 @@ def normalize_barcodes_to_target(barcodes: ArrayLike, target_example: str) -> np
     return result.to_numpy(dtype=str)
 
 
+def pad_metadata_values(values: pd.Series, n: int) -> np.ndarray:
+    """
+    Build ``n`` filler entries for a cell-metadata column that keep the column's dtype intact.
+
+    Padding with ``pd.NA`` would demote numeric columns to ``object``, which the h5 writer then
+    stores as byte strings (``b"<NA>"``), so the whole column reads back as strings.
+    :param values: The existing column being padded.
+    :param n: The number of filler entries to produce.
+    :return: The filler values, dtype-compatible with ``values``.
+    """
+    if pd.api.types.is_integer_dtype(values.dtype):
+        return np.full(n, -1, dtype=values.dtype)
+    if pd.api.types.is_float_dtype(values.dtype):
+        return np.full(n, np.nan, dtype=values.dtype)
+    fill = b"" if len(values) and isinstance(values.iloc[0], bytes) else ""
+    return np.full(n, fill, dtype=object)
+
+
 def filter_h5_file_by_barcodes(input_file: Path, output_file: Path, barcodes_list: ArrayLike, pad_matrix: bool = True):
     """
     Given a counts h5 file and a list of barcodes, filter the barcodes to only include the ones in the list.
@@ -2169,9 +2187,20 @@ def filter_h5_file_by_barcodes(input_file: Path, output_file: Path, barcodes_lis
 
             # Add padding if needed
             if len(padded_barcodes) > 0:
-                pad_dict = {col: ([pd.NA] * len(padded_barcodes)) for col in filtered_meta.columns if col != 'barcode'}
-                if 'barcode' in filtered_meta.columns:
-                    pad_dict['barcode'] = padded_barcodes
+                pad_barcodes = np.char.decode(padded_barcodes, "utf-8")
+                pad_row, pad_col = parse_array_coords(pad_barcodes)
+                pad_dict = {}
+                for col in filtered_meta.columns:
+                    if col == "barcode":
+                        pad_dict[col] = pad_barcodes
+                    elif col == "array_row":
+                        pad_dict[col] = pad_row.to_numpy()
+                    elif col == "array_col":
+                        pad_dict[col] = pad_col.to_numpy()
+                    else:
+                        pad_dict[col] = pad_metadata_values(
+                            filtered_meta[col], len(padded_barcodes)
+                        )
                 pad_df = pd.DataFrame(pad_dict)
                 filtered_meta = pd.concat([filtered_meta, pad_df], ignore_index=True)
 

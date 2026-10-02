@@ -82,6 +82,27 @@ def iter_layers(adata: ad.AnnData) -> Iterator[tuple[str, Any]]:
         yield name, matrix
 
 
+def parse_array_coords(barcodes) -> tuple[pd.Series, pd.Series]:
+    """
+    Recover the ``(array_row, array_col)`` coordinates encoded in spatial barcodes of the form
+    ``s_002um_<row>_<col>-<plex>`` (see ``VisiumHDFormatInfo.make_barcode_string``). Classic
+    Visium barcodes carry no coordinates and therefore always yield -1.
+    :param barcodes: The barcodes, as a Series or anything that can be turned into one. A Series
+        index is preserved so the result can be aligned against ``adata.obs``.
+    :return: The parsed row and column Series, -1 where the barcode carries no coordinates.
+    """
+    if not isinstance(barcodes, pd.Series):
+        barcodes = pd.Series(np.asarray(barcodes, dtype=str))
+    base = barcodes.astype(str).str.split("-", n=1).str[0]
+    parts = base.str.rsplit("_", n=2, expand=True)
+    if parts.shape[1] < 3:
+        parts = parts.reindex(columns=range(3))
+
+    array_row = pd.to_numeric(parts.iloc[:, -2], errors="coerce").fillna(-1).astype(int)
+    array_col = pd.to_numeric(parts.iloc[:, -1], errors="coerce").fillna(-1).astype(int)
+    return array_row, array_col
+
+
 def repair_array_axis(
     values: pd.Series, parsed: pd.Series, mask: pd.Series
 ) -> np.ndarray:
@@ -194,36 +215,27 @@ def read_h5_file(filename: str | Path) -> ad.AnnData:
 
     # Check if array_col and array_row exist in obs
     # If present, verify that all are integers
-    if 'array_col' in adata.obs.columns and 'array_row' in adata.obs.columns:
-        col_mask = adata.obs['array_col'].isnull() | (not pd.api.types.is_integer_dtype(adata.obs['array_col'].dtype))
-        row_mask = adata.obs['array_row'].isnull() | (not pd.api.types.is_integer_dtype(adata.obs['array_row'].dtype))
+    if "array_col" in adata.obs.columns and "array_row" in adata.obs.columns:
+        col_mask = adata.obs["array_col"].isnull() | (
+            not pd.api.types.is_integer_dtype(adata.obs["array_col"].dtype)
+        )
+        row_mask = adata.obs["array_row"].isnull() | (
+            not pd.api.types.is_integer_dtype(adata.obs["array_row"].dtype)
+        )
         if col_mask.any() or row_mask.any():
-            # We will need to regenerate only the problematic array_col and array_row values
-            print("Warning: 'array_col' and 'array_row' in obs contain non-integer or null values. Regenerating problematic values.")
-            # Create masks for problematic values
-            problematic_mask = col_mask | row_mask
+            # Fallback for files written before the padding fix, which stored "<NA>" strings
+            print(
+                "Warning: 'array_col' and 'array_row' in obs contain non-integer or null values. Regenerating problematic values."
+            )
+            array_row_parsed, array_col_parsed = parse_array_coords(
+                pd.Series(adata.obs.index.astype(str), index=adata.obs.index)
+            )
 
-            if problematic_mask.any():
-                # Vectorized parse from index -> base part before '-'
-                idx_series = pd.Series(adata.obs.index.astype(str), index=adata.obs.index)
-                base = idx_series.str.split('-', n=1).str[0]
-                # Extract last two underscore-delimited tokens
-                parts = base.str.rsplit('_', n=2, expand=True)
-                if parts.shape[1] < 3:
-                    parts = parts.reindex(columns=range(3))
-
-                array_row_parsed = pd.to_numeric(parts.iloc[:, -2], errors='coerce').fillna(-1).astype(int)
-                array_col_parsed = pd.to_numeric(parts.iloc[:, -1], errors='coerce').fillna(-1).astype(int)
-
-                need_col = problematic_mask & col_mask
-                need_row = problematic_mask & row_mask
-
-                if need_col.any():
-                    adata.obs.loc[need_col, 'array_col'] = array_col_parsed.loc[need_col].to_numpy()
-                if need_row.any():
-                    adata.obs.loc[need_row, 'array_row'] = array_row_parsed.loc[need_row].to_numpy()
-            # Ensure columns are integer type
-            adata.obs['array_col'] = adata.obs['array_col'].astype(int)
-            adata.obs['array_row'] = adata.obs['array_row'].astype(int)
+            adata.obs["array_col"] = repair_array_axis(
+                adata.obs["array_col"], array_col_parsed, col_mask
+            )
+            adata.obs["array_row"] = repair_array_axis(
+                adata.obs["array_row"], array_row_parsed, row_mask
+            )
 
     return adata
