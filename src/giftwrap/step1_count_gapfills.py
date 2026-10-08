@@ -268,103 +268,103 @@ def search_files(read1s, read2s, output_dir, tech_info,
     if unmapped_reads_prefix:
         unmapped_reads_prefix = os.path.join(output_dir, unmapped_reads_prefix)
 
-    read1_iterator, read2_iterator = read_fastqs(read1s, read2s)
+    with read_fastqs(read1s, read2s) as (read1_iterator, read2_iterator):
 
-    # Observed raw sequencing lengths, recorded in the main process as batches are read
-    read_lengths = {"R1_CYCLES": 0, "R2_CYCLES": 0}
-    read_pairs = track_read_lengths(zip(read1_iterator, read2_iterator), read_lengths)
+        # Observed raw sequencing lengths, recorded in the main process as batches are read
+        read_lengths = {"R1_CYCLES": 0, "R2_CYCLES": 0}
+        read_pairs = track_read_lengths(zip(read1_iterator, read2_iterator), read_lengths)
 
-    # Note we have to map to tuple because starmap expects tuple inputs
-    n_jobs = max(cores, 1)
-    batched_reads = batched(map(lambda x: (x,), batched(read_pairs, n_reads_per_batch // n_jobs)), n_jobs)
+        # Note we have to map to tuple because starmap expects tuple inputs
+        n_jobs = max(cores, 1)
+        batched_reads = batched(map(lambda x: (x,), batched(read_pairs, n_reads_per_batch // n_jobs)), n_jobs)
 
-    mp = maybe_multiprocess(cores)
+        mp = maybe_multiprocess(cores)
 
-    result_reason_counter = Counter()
+        result_reason_counter = Counter()
 
-    barcodes_encountered = dict()
+        barcodes_encountered = dict()
 
-    # Metrics
-    total = 0  # Total number of probes
-    probe_ids_encountered = set()
-    with mp as pool:
-        with gzip.open(output_dir / "probe_reads.tsv.gz", 'wt') as f, gzip.open(output_dir / "barcodes.tsv.gz", 'wt') as f2:
-            f.write("cell_idx\tprobe_idx\tprobe_barcode\tgapfill\tgapfill_quality\tumi\tumi_quality\n")
-            f2.write("barcode\tplex_id\tplex_seq")
-            if tech_info.is_spatial:
-                f2.write("\tin_tissue\tarray_col\tarray_row")
-            f2.write("\n")
+        # Metrics
+        total = 0  # Total number of probes
+        probe_ids_encountered = set()
+        with mp as pool:
+            with gzip.open(output_dir / "probe_reads.tsv.gz", 'wt') as f, gzip.open(output_dir / "barcodes.tsv.gz", 'wt') as f2:
+                f.write("cell_idx\tprobe_idx\tprobe_barcode\tgapfill\tgapfill_quality\tumi\tumi_quality\n")
+                f2.write("barcode\tplex_id\tplex_seq")
+                if tech_info.is_spatial:
+                    f2.write("\tin_tissue\tarray_col\tarray_row")
+                f2.write("\n")
 
-            job = None
-            last_job = None
+                job = None
+                last_job = None
 
-            def process_data(results):
-                nonlocal total
-                # Returns a tuple of outputs to write
-                for results_batch in results:
-                    for (states, data) in results_batch:
-                        result_reason_counter.update(states)
-                        if data is None:
-                            continue
-                        total += 1
+                def process_data(results):
+                    nonlocal total
+                    # Returns a tuple of outputs to write
+                    for results_batch in results:
+                        for (states, data) in results_batch:
+                            result_reason_counter.update(states)
+                            if data is None:
+                                continue
+                            total += 1
 
-                        probe_ids_encountered.add(data.probe_id)
+                            probe_ids_encountered.add(data.probe_id)
 
-                        if probe_bc_provided and tech_info.has_probe_barcode:
-                            if data.probe_barcode:
-                                probe_bc_id = tech_info.probe_barcode_index(data.probe_barcode)
+                            if probe_bc_provided and tech_info.has_probe_barcode:
+                                if data.probe_barcode:
+                                    probe_bc_id = tech_info.probe_barcode_index(data.probe_barcode)
+                                else:
+                                    # The probe barcode could not be parsed (only possible with --skip_constant_seq,
+                                    # which is restricted to singleplex runs), so assume the single expected barcode
+                                    probe_bc_id = str(probe_bcs[0])
+                                probe_bc_label = probe_bc_id
+                                if hasattr(tech_info, "probe_barcode_name"):
+                                    try:
+                                        probe_bc_label = tech_info.probe_barcode_name(probe_bc_id)
+                                    except Exception:
+                                        probe_bc_label = probe_bc_id
+                                probe_bc_seq = data.probe_barcode or ""
                             else:
-                                # The probe barcode could not be parsed (only possible with --skip_constant_seq,
-                                # which is restricted to singleplex runs), so assume the single expected barcode
-                                probe_bc_id = str(probe_bcs[0])
-                            probe_bc_label = probe_bc_id
-                            if hasattr(tech_info, "probe_barcode_name"):
-                                try:
-                                    probe_bc_label = tech_info.probe_barcode_name(probe_bc_id)
-                                except Exception:
-                                    probe_bc_label = probe_bc_id
-                            probe_bc_seq = data.probe_barcode or ""
-                        else:
-                            probe_bc_id = "1"
-                            probe_bc_label = "1"
-                            probe_bc_seq = ""
-                        complete_cell_barcode = tech_info.make_barcode_string(
-                            data.cell_barcode, str(probe_bc_label), data.coordinate_x, data.coordinate_y,
-                            tech_info.has_probe_barcode and (multiplex > 1 or (barcodes and len(barcodes) > 0))
-                        )
-                        if complete_cell_barcode not in barcodes_encountered:
-                            barcode_id = len(barcodes_encountered)
-                            barcodes_encountered[complete_cell_barcode] = barcode_id
-                            f2.write(f"{complete_cell_barcode}\t{probe_bc_label}\t{probe_bc_seq}")
-                            if tech_info.is_spatial:
-                                f2.write(f"\t1\t{data.coordinate_x}\t{data.coordinate_y}")
-                            f2.write("\n")
-                        cell_id = barcodes_encountered[complete_cell_barcode]
-                        f.write(f"{cell_id}\t{data.probe_id}\t{probe_bc_label}\t{data.gapfill}\t{data.gapfill_quality}\t{data.umi}\t{data.umi_quality}\n")
+                                probe_bc_id = "1"
+                                probe_bc_label = "1"
+                                probe_bc_seq = ""
+                            complete_cell_barcode = tech_info.make_barcode_string(
+                                data.cell_barcode, str(probe_bc_label), data.coordinate_x, data.coordinate_y,
+                                tech_info.has_probe_barcode and (multiplex > 1 or (barcodes and len(barcodes) > 0))
+                            )
+                            if complete_cell_barcode not in barcodes_encountered:
+                                barcode_id = len(barcodes_encountered)
+                                barcodes_encountered[complete_cell_barcode] = barcode_id
+                                f2.write(f"{complete_cell_barcode}\t{probe_bc_label}\t{probe_bc_seq}")
+                                if tech_info.is_spatial:
+                                    f2.write(f"\t1\t{data.coordinate_x}\t{data.coordinate_y}")
+                                f2.write("\n")
+                            cell_id = barcodes_encountered[complete_cell_barcode]
+                            f.write(f"{cell_id}\t{data.probe_id}\t{probe_bc_label}\t{data.gapfill}\t{data.gapfill_quality}\t{data.umi}\t{data.umi_quality}\n")
 
-            # Note we parallelize the processing of reads
-            # We first process a batch of reads while the next batch is being read
-            for i, batch in (pbar := tqdm(enumerate(batched_reads), desc="Processing reads", unit="batches")):
-                if job is not None:
-                    last_job = job
-                job = pool.starmap_async(
-                    functools.partial(process_reads,
-                                      tech_info=tech_info,
-                                      probe_parser=probe_parser,
-                                      max_distance=max_distance,
-                                      skip_constant_seq=skip_constant_seq,
-                                      unmapped_reads_prefix=unmapped_reads_prefix,
-                                      flexible_start=flexible_start,
-                                      max_expected_gap=max_expected_gap),
-                    batch
-                )
-                if last_job is not None:  # Output the previous run, then continue reading the file while the next batch is being processed
-                    process_data(last_job.get())
-                pbar.set_postfix({name.name: f"{count:,}" for name, count in result_reason_counter.items()})
+                # Note we parallelize the processing of reads
+                # We first process a batch of reads while the next batch is being read
+                for i, batch in (pbar := tqdm(enumerate(batched_reads), desc="Processing reads", unit="batches")):
+                    if job is not None:
+                        last_job = job
+                    job = pool.starmap_async(
+                        functools.partial(process_reads,
+                                          tech_info=tech_info,
+                                          probe_parser=probe_parser,
+                                          max_distance=max_distance,
+                                          skip_constant_seq=skip_constant_seq,
+                                          unmapped_reads_prefix=unmapped_reads_prefix,
+                                          flexible_start=flexible_start,
+                                          max_expected_gap=max_expected_gap),
+                        batch
+                    )
+                    if last_job is not None:  # Output the previous run, then continue reading the file while the next batch is being processed
+                        process_data(last_job.get())
+                    pbar.set_postfix({name.name: f"{count:,}" for name, count in result_reason_counter.items()})
 
-            if job is not None:  # Process the final batch
-                process_data(job.get())
-                pbar.set_postfix({name.name: f"{count:,}" for name, count in result_reason_counter.items()})
+                if job is not None:  # Process the final batch
+                    process_data(job.get())
+                    pbar.set_postfix({name.name: f"{count:,}" for name, count in result_reason_counter.items()})
 
     # If we were writing unmapped reads, we need to collect them
     collect_unmapped_fastq(unmapped_reads_prefix)
