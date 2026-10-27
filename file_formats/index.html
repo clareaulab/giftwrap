@@ -63,7 +63,7 @@
     
     
   <meta name="panzoom-theme" content="material">
-<meta name="panzoom-data" content='{"selectors": [".d2", ".mermaid"], "initial_zoom_level": 1.0}'> </head>
+<meta name="panzoom-data" content='{"selectors": [".mermaid", ".d2"], "initial_zoom_level": 1.0}'> </head>
   
   
     <body dir="ltr">
@@ -1699,17 +1699,18 @@
 </span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>├── counts.1.summary.pdf
 </span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>├── fastq_metrics.tsv
 </span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>├── manifest.tsv
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>├── barcodes.tsv.gz
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>├── probe_reads.tsv.gz
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>├── probe_reads.tsv.bak.gapfill
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>├── probe_reads.tsv.bak.umi
-</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>├── unmapped_reads_R1.fastq.gz  (if applicable)
-</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>├── unmapped_reads_R2.fastq.gz  (if applicable)
-</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>└── steps/
-</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>    ├── COUNT_GAPFILLS
-</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>    ├── CORRECT_UMIS
-</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>    ├── CORRECT_GAPFILLS
-</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>    └── COLLECT_COUNTS
+</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>├── pipeline_invocation.json  (only when run via `giftwrap`)
+</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>├── barcodes.tsv.gz
+</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>├── probe_reads.tsv.gz
+</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>├── probe_reads.tsv.bak.gapfill
+</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>├── probe_reads.tsv.bak.umi
+</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>├── unmapped_reads_R1.fastq.gz  (if applicable)
+</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>├── unmapped_reads_R2.fastq.gz  (if applicable)
+</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>└── steps/
+</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>    ├── COUNT_GAPFILLS
+</span><span id="__span-0-17"><a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>    ├── CORRECT_UMIS
+</span><span id="__span-0-18"><a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a>    ├── CORRECT_GAPFILLS
+</span><span id="__span-0-19"><a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a>    └── COLLECT_COUNTS
 </span></code></pre></div></p>
 <h3 id="commonly-used-output-files">Commonly Used Output Files</h3>
 <p>The final collected output is a counts file which is a custom HDF5 file format inspired by the 10X Genomics <code>sample_filtered_feature_bc_matrix.h5</code> file. There are two versions of this file, filtered (if the WTA was passed) and unfiltered. Additionally, if the sample was multiplexed, you will notice that the file names have a suffix indicating the sample number (e.g. <code>counts.N.filtered.h5</code> where <code>N</code> is the probe barcode number).</p>
@@ -1764,6 +1765,9 @@
 <li>
 <p><strong>manifest.tsv</strong>: A manifest file containing the list of probes and their associated metadata. This file is used to track the probes that were processed in the run. This also defines the index of each probe represented in the raw flat reads files generated while processing.
     The TSV is preceded by header lines of the form <code># key=&lt;json&gt;</code> recording the run configuration from <code>giftwrap-count</code>, which the step 5 QC report uses for technology-aware checks. Keys include <code>technology</code>, <code>multiplex</code>, <code>barcodes</code> (canonical ids), <code>multiplexed</code>, <code>skip_constant_seq</code>, <code>trim_probes</code>, <code>expected_gap_length</code>, <code>max_expected_gap</code>, <code>r1_length</code>/<code>r2_length</code> (explicit caps, or null), <code>max_probe_extent</code> (longest lhs + gapfill + rhs), and <code>min_r1_for_probe_barcode</code>/<code>min_r2_for_probe_barcode</code> (cycles needed to fully read the sample barcode). Read the file with <code>giftwrap.pipeline_utils.read_manifest</code> (table) and <code>read_manifest_config</code> (header), or skip lines starting with <code>#</code> in your own code.</p>
+</li>
+<li>
+<p><strong>pipeline_invocation.json</strong>: Written only by the <code>giftwrap</code> end-to-end command, never by the individual <code>giftwrap-*</code> step commands. A JSON list (oldest first) with one record per <code>giftwrap</code> invocation of this output directory, each holding the <code>command</code> line, raw <code>argv</code>, <code>cwd</code>, <code>timestamp</code>, <code>giftwrap_version</code> and <code>platform</code>. Resuming an interrupted run appends a record. The step 5 HTML report shows the most recent command at the bottom of its Summary tab; when the file is absent (steps run by hand) the report omits it. Read it with <code>giftwrap.pipeline_utils.read_pipeline_invocations</code>.</p>
 </li>
 <li>
 <p><strong>barcodes.tsv.gz</strong>: A gzipped file containing the list of cell barcodes that were encountered in the run. The barcodes are used to collapse the strings into integer indices for efficient storage and processing.</p>
@@ -1836,7 +1840,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="October 27, 2026 17:31:56 UTC">October 27, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="October 27, 2026 18:37:30 UTC">October 27, 2026</span>
   </span>
 
     
