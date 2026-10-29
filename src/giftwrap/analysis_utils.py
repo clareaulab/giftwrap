@@ -103,24 +103,20 @@ def parse_array_coords(barcodes) -> tuple[pd.Series, pd.Series]:
     return array_row, array_col
 
 
-def repair_array_axis(
-    values: pd.Series, parsed: pd.Series, mask: pd.Series
-) -> np.ndarray:
+def repair_array_axis(values: pd.Series, parsed: pd.Series) -> np.ndarray:
     """
     Build a clean integer ``array_row``/``array_col`` column, taking ``parsed`` (coordinates
-    recovered from the barcode) wherever ``mask`` is True.
+    recovered from the barcode) wherever ``values`` is not a valid integer. If no valid coordinate
+    can be recovered, -1 is used.
 
-    The column is always rebuilt from scratch rather than patched in place: padded cells are
-    written to the h5 as ``"<NA>"`` strings, so the stored column is read back as a string dtype
-    and pandas' arrow-backed ``str`` dtype rejects partial assignment of integers.
+    Padded cells are written to the h5 as ``"<NA>"`` strings, so the stored column is read back as a
+    string dtype and pandas' arrow-backed ``str`` dtype rejects partial assignment of integers.
     :param values: The stored column.
     :param parsed: The barcode-derived coordinates.
-    :param mask: True where the stored value must be replaced.
     :return: An integer array with -1 where no coordinate could be recovered.
     """
-    if not pd.api.types.is_integer_dtype(values.dtype):
-        return parsed.to_numpy(dtype=int)  # mask is all True in this case
-    return values.where(~mask, parsed).fillna(-1).to_numpy(dtype=int)
+    coerced = pd.to_numeric(values, errors="coerce")
+    return coerced.fillna(parsed).fillna(-1).astype(int).to_numpy()
 
 
 def read_h5_file(filename: str | Path) -> ad.AnnData:
