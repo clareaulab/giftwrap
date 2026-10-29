@@ -2321,138 +2321,17 @@ def write_sparse_matrix(grp: h5py.Group, name: str, sp_matrix):
         sp_matrix = sp_matrix.tocsr()
 
     matrix_grp = grp.create_group(name)
-    matrix_grp.create_dataset("data", data=sp_matrix.data, compression='gzip', shuffle=True)
-    matrix_grp.create_dataset("indices", data=sp_matrix.indices, compression='gzip', shuffle=True)
-    matrix_grp.create_dataset("indptr", data=sp_matrix.indptr, compression='gzip', shuffle=True)
+    matrix_grp.create_dataset(
+        "data", data=sp_matrix.data, compression="gzip", shuffle=True
+    )
+    matrix_grp.create_dataset(
+        "indices", data=sp_matrix.indices, compression="gzip", shuffle=True
+    )
+    matrix_grp.create_dataset(
+        "indptr", data=sp_matrix.indptr, compression="gzip", shuffle=True
+    )
     # Shape
-    matrix_grp.attrs['shape'] = sp_matrix.shape
-
-
-def read_h5_file(filename: str | Path) -> ad.AnnData:
-    """
-    Read a generated h5 file and return an AnnData object.
-    :param filename: The filename.
-    :return: The AnnData object.
-    """
-    with h5py.File(filename, 'r') as f:
-        X = read_sparse_matrix(f['matrix'], 'data')
-        layers = {
-            'total_reads': read_sparse_matrix(f['matrix'], 'total_reads'),  # Total umis encountered
-            'percent_supporting': read_sparse_matrix(f['matrix'], 'percent_supporting'),  # Avg percent of umis supporting the gapfill call
-        }
-        var_df = pd.DataFrame({
-            'probe': f['matrix']['probe'][:, 0].astype(str),
-            'gapfill': f['matrix']['probe'][:, 1].astype(str),
-        })
-
-        # Add original probe indices if available
-        if 'probe_index' in f['matrix']:
-            var_df['probe_index'] = f['matrix']['probe_index'][:].astype(int)
-
-        obs_df = pd.DataFrame({
-            'barcode': f['matrix']['barcode'][:].astype(str),
-        }).set_index('barcode')
-
-        # Add original cell indices if available
-        if 'cell_index' in f['matrix']:
-            obs_df['cell_index'] = f['matrix']['cell_index'][:].astype(int)
-
-        # Read the obs metadata
-        obs_meta_columns = f['cell_metadata']['columns'][:].astype(str)
-        obs_meta_df = dict()
-        for column in obs_meta_columns:
-            values = f['cell_metadata'][column][:]
-            if column == 'barcode':
-                values = values.astype(str)
-            else:
-                try:
-                    values = values.astype(int)  # Most metadata are ints
-                except:  # If that doesn't work, try string
-                    try:
-                        values = values.astype(str)
-                    except:
-                        values = np.zeros_like(values, dtype=int)  # Give up
-            obs_meta_df[column] = values
-        obs_meta_df = pd.DataFrame(obs_meta_df).set_index("barcode")
-
-        obs_df = obs_df.merge(obs_meta_df, on='barcode', how='left')
-
-        manifest = pd.DataFrame({
-            'probe': f['probe_metadata']['name'][:].astype(str),
-            'lhs_probe': f['probe_metadata']['lhs_probe'][:].astype(str),
-            'rhs_probe': f['probe_metadata']['rhs_probe'][:].astype(str),
-            'gap_probe_sequence': f['probe_metadata']['gap_probe_sequence'][:].astype(str),
-            'original_gap_probe_sequence': f['probe_metadata']['original_sequence'][:].astype(str),
-        })
-        if 'gene' in f['probe_metadata']:
-            manifest['gene'] = f['probe_metadata']['gene'][:].astype(str)
-
-        # Check if probe names are unique on the manifest
-        if len(manifest['probe'].unique()) != len(manifest):
-            raise ValueError("Probe names are not unique.")
-
-        # Add reference to var_df
-        var_df = var_df.merge(manifest, on='probe', how='left')
-        var_df = var_df.rename(columns={'gap_probe_sequence': 'expected_gapfill', 'original_gap_probe_sequence': 'reference_gapfill'})
-        var_df['probe_gapfill'] = var_df['probe'].str.cat(var_df['gapfill'], sep='|')
-        var_df = var_df.set_index('probe_gapfill', drop=True)
-
-        adata = ad.AnnData(X,
-                           layers=layers,
-                           obs=obs_df,
-                           var=var_df,
-                           uns={
-                                "probe_metadata": manifest,
-                                "plex": f.attrs['plex'],
-                                "project": f.attrs['project'],
-                                "created_date": f.attrs['created_date'], #pd.Timestamp(f.attrs['created_date']),
-                                "n_cells": f.attrs['n_cells'],
-                                "n_probes": f.attrs['n_probes'],
-                                "n_probe_gapfill_combinations": f.attrs['n_probe_gapfill_combinations'],
-                                "max_pcr_duplicates": f.attrs['max_pcr_duplicates'] if 'max_pcr_duplicates' in f.attrs else -1,
-                           })
-
-        if 'max_pcr_duplicates' in f.attrs and int(f.attrs['max_pcr_duplicates']) > 1:
-            # We must read the pcr thresholds save the counts matrices for each threshold to the layers
-            dup_grp = f['pcr_thresholded_counts']
-            for threshold in range(1, f.attrs['max_pcr_duplicates']):
-                adata.layers[f'X_pcr_threshold_{threshold}'] = read_sparse_matrix(dup_grp, f'pcr{threshold}')
-
-    # Check if array_col and array_row exist in obs
-    # If present, verify that all are integers
-    if 'array_col' in adata.obs.columns and 'array_row' in adata.obs.columns:
-        col_mask = adata.obs['array_col'].isnull() | (not pd.api.types.is_integer_dtype(adata.obs['array_col'].dtype))
-        row_mask = adata.obs['array_row'].isnull() | (not pd.api.types.is_integer_dtype(adata.obs['array_row'].dtype))
-        if col_mask.any() or row_mask.any():
-            # We will need to regenerate only the problematic array_col and array_row values
-            print("Warning: 'array_col' and 'array_row' in obs contain non-integer or null values. Regenerating problematic values.")
-            # Create masks for problematic values
-            problematic_mask = col_mask | row_mask
-
-            if problematic_mask.any():
-                # Vectorized parse from index -> base part before '-'
-                idx_series = pd.Series(adata.obs.index.astype(str), index=adata.obs.index)
-                base = idx_series.str.split('-', n=1).str[0]
-                # Extract last two underscore-delimited tokens
-                parts = base.str.rsplit('_', n=2, expand=True)
-                if parts.shape[1] < 3:
-                    parts = parts.reindex(columns=range(3))
-
-                array_row_parsed = pd.to_numeric(parts.iloc[:, -2], errors='coerce').fillna(-1).astype(int)
-                array_col_parsed = pd.to_numeric(parts.iloc[:, -1], errors='coerce').fillna(-1).astype(int)
-
-                adata.obs["array_col"] = repair_array_axis(
-                    adata.obs["array_col"],
-                    array_col_parsed,
-                    problematic_mask & col_mask,
-                )
-                adata.obs["array_row"] = repair_array_axis(
-                    adata.obs["array_row"],
-                    array_row_parsed,
-                    problematic_mask & row_mask,
-                )
-
-    return adata
+    matrix_grp.attrs["shape"] = sp_matrix.shape
 
 
 def real_gapfill_mask(adata: ad.AnnData) -> np.ndarray:

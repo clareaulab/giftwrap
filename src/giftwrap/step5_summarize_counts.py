@@ -16,6 +16,7 @@ from sankeyflow import Sankey
 from scipy.stats import gaussian_kde, spearmanr
 
 from .analysis.tools import collapse_gapfills
+from .analysis_utils import read_h5_file
 from .html_report import make_html_report
 from .pipeline_utils import (
     filter_h5_file_by_barcodes,
@@ -23,7 +24,6 @@ from .pipeline_utils import (
     maybe_gzip,
     normalize_barcode_to_target,
     normalize_barcodes_to_target,
-    read_h5_file,
     read_wta,
     real_gapfill_mask,
     sequence_saturation_curve,
