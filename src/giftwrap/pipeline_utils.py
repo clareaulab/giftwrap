@@ -34,7 +34,7 @@ import scipy
 from Bio.SeqIO.QualityIO import FastqGeneralIterator
 from prefixtrie import PrefixTrie, load_shared_trie, create_shared_trie
 
-from .analysis_utils import read_sparse_matrix
+from .analysis_utils import read_sparse_matrix, repair_array_axis, parse_array_coords
 
 
 class ReadProcessState(Enum):
@@ -2023,6 +2023,24 @@ def normalize_barcodes_to_target(barcodes: ArrayLike, target_example: str) -> np
     return result.to_numpy(dtype=str)
 
 
+def pad_metadata_values(values: pd.Series, n: int) -> np.ndarray:
+    """
+    Build ``n`` filler entries for a cell-metadata column that keep the column's dtype intact.
+
+    Padding with ``pd.NA`` would demote numeric columns to ``object``, which the h5 writer then
+    stores as byte strings (``b"<NA>"``), so the whole column reads back as strings.
+    :param values: The existing column being padded.
+    :param n: The number of filler entries to produce.
+    :return: The filler values, dtype-compatible with ``values``.
+    """
+    if pd.api.types.is_integer_dtype(values.dtype):
+        return np.full(n, -1, dtype=values.dtype)
+    if pd.api.types.is_float_dtype(values.dtype):
+        return np.full(n, np.nan, dtype=values.dtype)
+    fill = b"" if len(values) and isinstance(values.iloc[0], bytes) else ""
+    return np.full(n, fill, dtype=object)
+
+
 def filter_h5_file_by_barcodes(input_file: Path, output_file: Path, barcodes_list: ArrayLike, pad_matrix: bool = True):
     """
     Given a counts h5 file and a list of barcodes, filter the barcodes to only include the ones in the list.
@@ -2169,9 +2187,20 @@ def filter_h5_file_by_barcodes(input_file: Path, output_file: Path, barcodes_lis
 
             # Add padding if needed
             if len(padded_barcodes) > 0:
-                pad_dict = {col: ([pd.NA] * len(padded_barcodes)) for col in filtered_meta.columns if col != 'barcode'}
-                if 'barcode' in filtered_meta.columns:
-                    pad_dict['barcode'] = padded_barcodes
+                pad_barcodes = np.char.decode(padded_barcodes, "utf-8")
+                pad_row, pad_col = parse_array_coords(pad_barcodes)
+                pad_dict = {}
+                for col in filtered_meta.columns:
+                    if col == "barcode":
+                        pad_dict[col] = pad_barcodes
+                    elif col == "array_row":
+                        pad_dict[col] = pad_row.to_numpy()
+                    elif col == "array_col":
+                        pad_dict[col] = pad_col.to_numpy()
+                    else:
+                        pad_dict[col] = pad_metadata_values(
+                            filtered_meta[col], len(padded_barcodes)
+                        )
                 pad_df = pd.DataFrame(pad_dict)
                 filtered_meta = pd.concat([filtered_meta, pad_df], ignore_index=True)
 
@@ -2292,138 +2321,17 @@ def write_sparse_matrix(grp: h5py.Group, name: str, sp_matrix):
         sp_matrix = sp_matrix.tocsr()
 
     matrix_grp = grp.create_group(name)
-    matrix_grp.create_dataset("data", data=sp_matrix.data, compression='gzip', shuffle=True)
-    matrix_grp.create_dataset("indices", data=sp_matrix.indices, compression='gzip', shuffle=True)
-    matrix_grp.create_dataset("indptr", data=sp_matrix.indptr, compression='gzip', shuffle=True)
+    matrix_grp.create_dataset(
+        "data", data=sp_matrix.data, compression="gzip", shuffle=True
+    )
+    matrix_grp.create_dataset(
+        "indices", data=sp_matrix.indices, compression="gzip", shuffle=True
+    )
+    matrix_grp.create_dataset(
+        "indptr", data=sp_matrix.indptr, compression="gzip", shuffle=True
+    )
     # Shape
-    matrix_grp.attrs['shape'] = sp_matrix.shape
-
-
-def read_h5_file(filename: str | Path) -> ad.AnnData:
-    """
-    Read a generated h5 file and return an AnnData object.
-    :param filename: The filename.
-    :return: The AnnData object.
-    """
-    with h5py.File(filename, 'r') as f:
-        X = read_sparse_matrix(f['matrix'], 'data')
-        layers = {
-            'total_reads': read_sparse_matrix(f['matrix'], 'total_reads'),  # Total umis encountered
-            'percent_supporting': read_sparse_matrix(f['matrix'], 'percent_supporting'),  # Avg percent of umis supporting the gapfill call
-        }
-        var_df = pd.DataFrame({
-            'probe': f['matrix']['probe'][:, 0].astype(str),
-            'gapfill': f['matrix']['probe'][:, 1].astype(str),
-        })
-
-        # Add original probe indices if available
-        if 'probe_index' in f['matrix']:
-            var_df['probe_index'] = f['matrix']['probe_index'][:].astype(int)
-
-        obs_df = pd.DataFrame({
-            'barcode': f['matrix']['barcode'][:].astype(str),
-        }).set_index('barcode')
-
-        # Add original cell indices if available
-        if 'cell_index' in f['matrix']:
-            obs_df['cell_index'] = f['matrix']['cell_index'][:].astype(int)
-
-        # Read the obs metadata
-        obs_meta_columns = f['cell_metadata']['columns'][:].astype(str)
-        obs_meta_df = dict()
-        for column in obs_meta_columns:
-            values = f['cell_metadata'][column][:]
-            if column == 'barcode':
-                values = values.astype(str)
-            else:
-                try:
-                    values = values.astype(int)  # Most metadata are ints
-                except:  # If that doesn't work, try string
-                    try:
-                        values = values.astype(str)
-                    except:
-                        values = np.zeros_like(values, dtype=int)  # Give up
-            obs_meta_df[column] = values
-        obs_meta_df = pd.DataFrame(obs_meta_df).set_index("barcode")
-
-        obs_df = obs_df.merge(obs_meta_df, on='barcode', how='left')
-
-        manifest = pd.DataFrame({
-            'probe': f['probe_metadata']['name'][:].astype(str),
-            'lhs_probe': f['probe_metadata']['lhs_probe'][:].astype(str),
-            'rhs_probe': f['probe_metadata']['rhs_probe'][:].astype(str),
-            'gap_probe_sequence': f['probe_metadata']['gap_probe_sequence'][:].astype(str),
-            'original_gap_probe_sequence': f['probe_metadata']['original_sequence'][:].astype(str),
-        })
-        if 'gene' in f['probe_metadata']:
-            manifest['gene'] = f['probe_metadata']['gene'][:].astype(str)
-
-        # Check if probe names are unique on the manifest
-        if len(manifest['probe'].unique()) != len(manifest):
-            raise ValueError("Probe names are not unique.")
-
-        # Add reference to var_df
-        var_df = var_df.merge(manifest, on='probe', how='left')
-        var_df = var_df.rename(columns={'gap_probe_sequence': 'expected_gapfill', 'original_gap_probe_sequence': 'reference_gapfill'})
-        var_df['probe_gapfill'] = var_df['probe'].str.cat(var_df['gapfill'], sep='|')
-        var_df = var_df.set_index('probe_gapfill', drop=True)
-
-        adata = ad.AnnData(X,
-                           layers=layers,
-                           obs=obs_df,
-                           var=var_df,
-                           uns={
-                                "probe_metadata": manifest,
-                                "plex": f.attrs['plex'],
-                                "project": f.attrs['project'],
-                                "created_date": f.attrs['created_date'], #pd.Timestamp(f.attrs['created_date']),
-                                "n_cells": f.attrs['n_cells'],
-                                "n_probes": f.attrs['n_probes'],
-                                "n_probe_gapfill_combinations": f.attrs['n_probe_gapfill_combinations'],
-                                "max_pcr_duplicates": f.attrs['max_pcr_duplicates'] if 'max_pcr_duplicates' in f.attrs else -1,
-                           })
-
-        if 'max_pcr_duplicates' in f.attrs and int(f.attrs['max_pcr_duplicates']) > 1:
-            # We must read the pcr thresholds save the counts matrices for each threshold to the layers
-            dup_grp = f['pcr_thresholded_counts']
-            for threshold in range(1, f.attrs['max_pcr_duplicates']):
-                adata.layers[f'X_pcr_threshold_{threshold}'] = read_sparse_matrix(dup_grp, f'pcr{threshold}')
-
-    # Check if array_col and array_row exist in obs
-    # If present, verify that all are integers
-    if 'array_col' in adata.obs.columns and 'array_row' in adata.obs.columns:
-        col_mask = adata.obs['array_col'].isnull() | (~pd.api.types.is_integer_dtype(adata.obs['array_col'].dtype))
-        row_mask = adata.obs['array_row'].isnull() | (~pd.api.types.is_integer_dtype(adata.obs['array_row'].dtype))
-        if col_mask.any() or row_mask.any():
-            # We will need to regenerate only the problematic array_col and array_row values
-            print("Warning: 'array_col' and 'array_row' in obs contain non-integer or null values. Regenerating problematic values.")
-            # Create masks for problematic values
-            problematic_mask = col_mask | row_mask
-
-            if problematic_mask.any():
-                # Vectorized parse from index -> base part before '-'
-                idx_series = pd.Series(adata.obs.index.astype(str), index=adata.obs.index)
-                base = idx_series.str.split('-', n=1).str[0]
-                # Extract last two underscore-delimited tokens
-                parts = base.str.rsplit('_', n=2, expand=True)
-                if parts.shape[1] < 3:
-                    parts = parts.reindex(columns=range(3))
-
-                array_row_parsed = pd.to_numeric(parts.iloc[:, -2], errors='coerce').fillna(-1).astype(int)
-                array_col_parsed = pd.to_numeric(parts.iloc[:, -1], errors='coerce').fillna(-1).astype(int)
-
-                need_col = problematic_mask & col_mask
-                need_row = problematic_mask & row_mask
-
-                if need_col.any():
-                    adata.obs.loc[need_col, 'array_col'] = array_col_parsed.loc[need_col].to_numpy()
-                if need_row.any():
-                    adata.obs.loc[need_row, 'array_row'] = array_row_parsed.loc[need_row].to_numpy()
-            # Ensure columns are integer type
-            adata.obs['array_col'] = adata.obs['array_col'].astype(int)
-            adata.obs['array_row'] = adata.obs['array_row'].astype(int)
-
-    return adata
+    matrix_grp.attrs["shape"] = sp_matrix.shape
 
 
 def real_gapfill_mask(adata: ad.AnnData) -> np.ndarray:
