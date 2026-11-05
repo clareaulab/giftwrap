@@ -2568,20 +2568,23 @@ def read_probes_input(probes: str) -> pd.DataFrame:
     return df
 
 
+@contextlib.contextmanager
 def read_fastqs(read1s, read2s):
-    r1_to_chain = []
-    r2_to_chain = []
-    for r1, r2 in zip(read1s, read2s):
-        if r1.endswith(".gz"):
-            read1_iterator = FastqGeneralIterator(gzip.open(r1, 'rt'))
-        else:
-            read1_iterator = FastqGeneralIterator(open(r1, 'r'))
-        if r2.endswith(".gz"):
-            read2_iterator = FastqGeneralIterator(gzip.open(r2, 'rt'))
-        else:
-            read2_iterator = FastqGeneralIterator(open(r2, 'r'))
-        r1_to_chain.append(read1_iterator)
-        r2_to_chain.append(read2_iterator)
-    read1_iterator = itertools.chain(*r1_to_chain)
-    read2_iterator = itertools.chain(*r2_to_chain)
-    return read1_iterator, read2_iterator
+    """
+    Yield chained R1/R2 record iterators over the paired fastq files.
+
+    Handles are registered on an ExitStack so they close on exit even if iteration stops early.
+    """
+    with contextlib.ExitStack() as stack:
+
+        def _records(path):
+            opener = gzip.open if path.endswith(".gz") else open
+            return FastqGeneralIterator(stack.enter_context(opener(path, "rt")))
+
+        r1_iters = []
+        r2_iters = []
+        for r1, r2 in zip(read1s, read2s, strict=True):
+            r1_iters.append(_records(r1))
+            r2_iters.append(_records(r2))
+
+        yield itertools.chain(*r1_iters), itertools.chain(*r2_iters)
